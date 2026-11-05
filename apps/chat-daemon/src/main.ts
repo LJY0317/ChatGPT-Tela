@@ -1,4 +1,4 @@
-import { diagnosticSourcePaths, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticSourcePaths, emitDiagnosticEvent, observeDaemonUncaughtFailures, reportDaemonFailure } from "@chatgpt-tela/core";
 import { waitForChatShutdown } from "./shutdown";
 import { runProcessOwnerWorker } from "../../../packages/chat-service/src/process-owner-worker";
 import { randomBytes } from "node:crypto";
@@ -131,6 +131,7 @@ async function main(): Promise<void> {
   });
 }
 
+if (!process.argv.includes("--tela-operation-owner-v1")) observeDaemonUncaughtFailures("chat");
 const running = process.argv.includes("--tela-operation-owner-v1")
   ? runProcessOwnerWorker()
   : main();
@@ -140,6 +141,7 @@ void running.catch(error => {
     process.exitCode = 1;
     return;
   }
+  reportDaemonFailure("chat", error);
   console.error(error);
   process.exitCode = 1;
 });

@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { readServiceRuntimeDescriptor, writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { LocalServiceSupervisor } from "./index";
+import { listDiagnosticIncidents, readDiagnosticIncident } from "@chatgpt-tela/core";
 
 const repoRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 
@@ -34,6 +35,86 @@ function isolatedProductEnvironment(home: string, installId: string): Record<str
 }
 
 describe("local service supervisor", () => {
+  test("detached noisy startup has no unbounded stdout log and retains classified failure evidence", async () => {
+    const root=mkdtempSync(join(tmpdir(),"tela-noisy-service-"));
+    const logPath=join(root,"gateway.log"),descriptorPath=join(root,"descriptor.json");
+    const diagnosticModule=new URL("../../core/src/diagnostic-events.ts",import.meta.url).href;
+    const script=`import { reportDaemonFailure } from ${JSON.stringify(diagnosticModule)};
+      console.log('noisy'.repeat(200000));
+      reportDaemonFailure('gateway',Object.assign(Error('private startup details'),{code:'ENOENT'}));
+      process.exitCode=1;`;
+    try {
+      await expect(new LocalServiceSupervisor({installId:"fixture"}).ensure({
+        service:"gateway",descriptorPath,command:[process.execPath,"--eval",script],cwd:repoRoot,
+        environment:{},logPath,startTimeoutMs:3000,
+      })).rejects.toThrow("inspect its structural diagnostics");
+      expect(existsSync(logPath)).toBe(false);
+      const records=listDiagnosticIncidents(join(root,"diagnostics"));
+      expect(records.some(record=>record.stage==="daemon_startup_failed")).toBe(true);
+      const record=records.find(record=>record.stage==="daemon_startup_failed")!;
+      const incident=JSON.stringify(readDiagnosticIncident(join(root,"diagnostics"),record.ref));
+      expect(incident).toContain("not_found");
+      expect(incident).not.toContain("private startup details");
+      expect(readdirSync(root).filter(name=>name.endsWith(".log"))).toEqual([]);
+    } finally {rmSync(root,{recursive:true,force:true});}
+  });
+
+  test("uncaught daemon exception keeps a bounded incident without a raw stderr append file", async () => {
+    const root=mkdtempSync(join(tmpdir(),"tela-uncaught-service-"));
+    const logPath=join(root,"codex.log"),descriptorPath=join(root,"descriptor.json");
+    const diagnosticModule=new URL("../../core/src/diagnostic-events.ts",import.meta.url).href;
+    const script=`import { observeDaemonUncaughtFailures } from ${JSON.stringify(diagnosticModule)};
+      observeDaemonUncaughtFailures('codex');
+      setImmediate(()=>{throw new TypeError('private crash details')});`;
+    try {
+      await expect(new LocalServiceSupervisor({installId:"fixture"}).ensure({
+        service:"codex",descriptorPath,command:[process.execPath,"--eval",script],cwd:repoRoot,
+        environment:{},logPath,startTimeoutMs:3000,
+      })).rejects.toThrow("inspect its structural diagnostics");
+      expect(existsSync(logPath)).toBe(false);
+      const records=listDiagnosticIncidents(join(root,"diagnostics"));
+      const record=records.find(record=>record.stage==="daemon_uncaught_failed");
+      expect(record).toBeDefined();
+      const incident=JSON.stringify(readDiagnosticIncident(join(root,"diagnostics"),record!.ref));
+      expect(incident).toContain("type_error");
+      expect(incident).not.toContain("private crash details");
+    } finally {rmSync(root,{recursive:true,force:true});}
+  });
+
+  test("detached service can become ready, shut down and restart without an append log", async () => {
+    const root=mkdtempSync(join(tmpdir(),"tela-detached-recovery-"));
+    const descriptorPath=join(root,"descriptor.json"),logPath=join(root,"chat.log");
+    const token="x".repeat(48),instance="fixture-instance",installId="fixture";
+    const script=`const fs=require('node:fs'); const path=require('node:path');
+      const file=process.env.TELA_TEST_DESCRIPTOR;
+      const server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(req){
+        if(req.headers.get('authorization')!==${JSON.stringify(`Bearer ${token}`)})return new Response(null,{status:401});
+        if(new URL(req.url).pathname==='/v1/status')return Response.json({contractVersion:1,service:'chat',instanceId:${JSON.stringify(instance)},state:'ready'});
+        if(req.method==='POST'){fs.rmSync(file,{force:true});setTimeout(()=>{server.stop(true);process.exit(0)},10);return Response.json({});}
+        return new Response(null,{status:404});}});
+      fs.mkdirSync(path.dirname(file),{recursive:true});
+      fs.writeFileSync(file,JSON.stringify({version:1,service:'chat',installId:${JSON.stringify(installId)},instanceId:${JSON.stringify(instance)},pid:process.pid,endpoint:'http://127.0.0.1:'+server.port+'/',bearerToken:${JSON.stringify(token)},startedAt:new Date().toISOString()}));
+      console.log('noise'.repeat(30000));`;
+    const supervisor=new LocalServiceSupervisor({installId});
+    const input={service:"chat" as const,descriptorPath,logPath,cwd:repoRoot,
+      command:[process.execPath,"--eval",script] as const,
+      environment:{TELA_TEST_DESCRIPTOR:descriptorPath},startTimeoutMs:3000};
+    try {
+      const first=await supervisor.ensure(input);
+      expect(first.status.state).toBe("ready");
+      expect((await supervisor.ensure(input)).descriptor.pid).toBe(first.descriptor.pid);
+      expect(await supervisor.shutdown({service:"chat",descriptorPath})).toBe(true);
+      const second=await supervisor.ensure(input);
+      expect(second.status.state).toBe("ready");
+      expect(second.descriptor.pid).not.toBe(first.descriptor.pid);
+      expect(await supervisor.shutdown({service:"chat",descriptorPath})).toBe(true);
+      expect(existsSync(logPath)).toBe(false);
+    } finally {
+      await supervisor.shutdown({service:"chat",descriptorPath}).catch(()=>{});
+      rmSync(root,{recursive:true,force:true});
+    }
+  });
+
   async function drainFixture(delayMs: number, replacement: boolean | number = false, acknowledgmentDelayMs = 0) {
     const root=mkdtempSync(join(tmpdir(),"tela-owned-drain-")), descriptorPath=join(root,"descriptor.json");
     const installId="drain-install", instanceId="drain-instance", token="d".repeat(48);

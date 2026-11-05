@@ -15,6 +15,20 @@ afterEach(() => {
 });
 
 describe("privacy-safe diagnostic events", () => {
+  test("configured rotating JSONL does not duplicate every event to stderr; manual output remains", () => {
+    const root=mkdtempSync(join(tmpdir(),"tela-single-diagnostic-sink-"));
+    const path=join(root,"events.jsonl"), module=new URL("./diagnostic-events.ts",import.meta.url).href;
+    const script=`import { emitDiagnosticEvent } from ${JSON.stringify(module)}; emitDiagnosticEvent('chatgpt_tela_test','single_record');`;
+    try {
+      const stored=spawnSync(process.execPath,["--eval",script],{env:{...process.env,CHATGPT_TELA_DIAGNOSTIC_FILE:path}});
+      expect(stored.status).toBe(0);
+      expect(stored.stderr.toString()).toBe("");
+      expect(JSON.parse(readFileSync(path,"utf8").trim()).stage).toBe("single_record");
+      const manual=spawnSync(process.execPath,["--eval",script],{env:{...process.env,CHATGPT_TELA_DIAGNOSTIC_FILE:""}});
+      expect(manual.status).toBe(0);
+      expect(manual.stderr.toString()).toContain('"stage":"single_record"');
+    } finally {rmSync(root,{recursive:true,force:true});}
+  });
   test("a short-lived worker rotates an oversized sink on its first event", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-short-lived-diagnostics-"));
     const path = join(root, "update.diagnostics.jsonl");

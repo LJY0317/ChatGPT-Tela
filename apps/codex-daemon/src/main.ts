@@ -11,7 +11,7 @@ import { startWebDelegationRetention } from "../../../packages/codex-service/src
 import { WebDelegationStore, reconcileWebDelegationCapacity } from "../../../packages/codex-service/src/web-delegation";
 import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductPreferences, setWorkProfileConnection, webDelegationLimit } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
-import { diagnosticFailureClass, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFailureClass, emitDiagnosticEvent, observeDaemonUncaughtFailures, reportDaemonFailure } from "@chatgpt-tela/core";
 import {
   removeServiceRuntimeDescriptor,
   writeServiceRuntimeDescriptor,
@@ -124,7 +124,9 @@ async function main(): Promise<void> {
   await stop();
 }
 
+observeDaemonUncaughtFailures("codex");
 void main().catch(error => {
+  reportDaemonFailure("codex", error);
   console.error(error);
   process.exitCode = 1;
 });

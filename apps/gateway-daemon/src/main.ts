@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { observeDaemonUncaughtFailures, reportDaemonFailure } from "@chatgpt-tela/core";
 import {
   DynamicChatBackend,
   DynamicCodexTurnBridge,
@@ -262,7 +263,9 @@ async function main(): Promise<void> {
   await stop();
 }
 
+observeDaemonUncaughtFailures("gateway");
 void main().catch(error => {
+  reportDaemonFailure("gateway", error);
   console.error(error);
   process.exitCode = 1;
 });

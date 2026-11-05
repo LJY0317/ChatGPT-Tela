@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { diagnosticContext, DIAGNOSTIC_INSTANCE } from "./diagnostic-context";
+import { diagnosticFailureFields } from "./diagnostic-failure";
 import { structuralDiagnosticEvent, writeDiagnosticIncident, readDiagnosticIncident, diagnosticFailureIncidentRef, DIAGNOSTIC_LIMITS, pruneDiagnosticLogs, type StructuralDiagnosticEvent } from "./diagnostic-store";
 
 export type DiagnosticScalar = string | number | boolean;
@@ -74,7 +75,7 @@ function safeFieldValue(value: DiagnosticScalar, field: string): DiagnosticScala
 }
 
 /**
- * Emit one bounded, payload-free structural diagnostic event to stderr.
+ * Emit one bounded, payload-free structural diagnostic event.
  *
  * Field names that commonly carry user data, credentials, local paths, request bodies, tool arguments,
  * or turn capability material are rejected up front. Callers should log only stage/status/count/duration/
@@ -105,13 +106,12 @@ function emitDiagnosticEventResult(
     };
     const line = `${JSON.stringify(record)}\n`;
     if (Buffer.byteLength(line) > 8192) return;
-    // stderr can be a pipe owned by the supervising Codex service. If that
-    // supervisor disappears unexpectedly, stream-backed writes may surface an
-    // asynchronous EPIPE outside this try/catch and crash Electron's main
-    // process. Diagnostics are never correctness authority, so write the
-    // underlying fd synchronously and ignore a closed/broken sink.
-    try { writeSync(2, line); } catch { /* Best-effort stderr only. */ }
-    appendConfiguredDiagnosticFile(line);
+    // File-backed diagnostics are canonical for supervised daemons. Avoid
+    // duplicating every record to their inherited stderr. Manual invocations
+    // and failed file writes still retain best-effort stderr visibility.
+    if (!appendConfiguredDiagnosticFile(line)) {
+      try { writeSync(2, line); } catch { /* Closed diagnostic stderr. */ }
+    }
     const safe = structuralDiagnosticEvent(record);
     if (safe) {
       Object.freeze(safe);
@@ -165,6 +165,20 @@ export function emitDiagnosticIncident(
   }
 }
 
+type DaemonService = "gateway" | "chat" | "codex";
+
+/** Record a classified fatal failure in the existing bounded incident store. */
+export function reportDaemonFailure(service: DaemonService, error: unknown, uncaught = false): void {
+  emitDiagnosticIncident("chatgpt_tela_service", uncaught ? "daemon_uncaught_failed" : "daemon_startup_failed", {
+    service, ...diagnosticFailureFields(error),
+  });
+}
+
+/** Observe crashes without suppressing the runtime's normal fatal exit. */
+export function observeDaemonUncaughtFailures(service: DaemonService): void {
+  process.on("uncaughtExceptionMonitor", error => { reportDaemonFailure(service, error, true); });
+}
+
 function diagnosticFilePath(): string | undefined {
   const value = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE?.trim();
   if (!value || !isAbsolute(value) || /[\u0000\r\n]/.test(value)) return undefined;
@@ -182,9 +196,9 @@ function diagnosticMaxFileBytes(): number {
   return Math.min(parsed, DEFAULT_MAX_FILE_BYTES);
 }
 
-function appendConfiguredDiagnosticFile(line: string): void {
+function appendConfiguredDiagnosticFile(line: string): boolean {
   const path = diagnosticFilePath();
-  if (!path) return;
+  if (!path) return false;
   try {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     emittedSinceRotationCheck += 1;
@@ -192,26 +206,28 @@ function appendConfiguredDiagnosticFile(line: string): void {
       emittedSinceRotationCheck = 0;
       try {
         const stat = lstatSync(path);
-        if (!stat.isFile() || stat.isSymbolicLink()) return;
+        if (!stat.isFile() || stat.isSymbolicLink()) return false;
         if (stat.size > diagnosticMaxFileBytes()) {
           renameSync(path, `${path}.${Date.now()}-${randomUUID()}`);
         }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
       }
       pruneDiagnosticLogs(path);
     }
     try {
       const stat = lstatSync(path);
-      if (!stat.isFile() || stat.isSymbolicLink()) return;
+      if (!stat.isFile() || stat.isSymbolicLink()) return false;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
     }
     appendFileSync(path, line, { encoding: "utf8", mode: 0o600 });
     try { chmodSync(path, 0o600); } catch { /* Windows ACLs own permissions there. */ }
+    return true;
   } catch {
     // File diagnostics are optional and never affect the product operation.
   }
+  return false;
 }
 
 /** Return a bounded pseudonymous fingerprint suitable for local diagnostic correlation. */

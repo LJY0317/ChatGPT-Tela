@@ -1,11 +1,4 @@
 import { spawn } from "node:child_process";
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-} from "node:fs";
 import { mkdir, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { diagnosticDurationMs, emitDiagnosticEvent } from "@chatgpt-tela/core";
@@ -191,27 +184,23 @@ export class LocalServiceSupervisor {
         });
         return existing;
       }
-      mkdirSync(dirname(input.logPath), { recursive: true, mode: 0o700 });
-      const logFd = openSync(input.logPath, "a", 0o600);
       let child;
-      try {
-        const diagnosticLogPath = `${input.logPath}.diagnostics.jsonl`;
-        child = spawn(input.command[0], input.command.slice(1), {
-          cwd: input.cwd,
-          detached: true,
-          stdio: ["ignore", logFd, logFd],
-          windowsHide: true,
-          env: {
-            ...process.env,
-            ...input.environment,
-            CHATGPT_TELA_DIAGNOSTIC_FILE: diagnosticLogPath,
-          },
-        });
-        child.unref();
-        emitDiagnosticEvent("chatgpt_tela_service", "spawned", { service: input.service });
-      } finally {
-        closeSync(logFd);
-      }
+      const diagnosticLogPath = `${input.logPath}.diagnostics.jsonl`;
+      child = spawn(input.command[0], input.command.slice(1), {
+        cwd: input.cwd,
+        detached: true,
+        // Daemons persist bounded structural diagnostics themselves. Keeping
+        // their stdout/stderr open on a detached append file grows forever.
+        stdio: ["ignore", "ignore", "ignore"],
+        windowsHide: true,
+        env: {
+          ...process.env,
+          ...input.environment,
+          CHATGPT_TELA_DIAGNOSTIC_FILE: diagnosticLogPath,
+        },
+      });
+      child.unref();
+      emitDiagnosticEvent("chatgpt_tela_service", "spawned", { service: input.service });
       const deadline = Date.now() + timeoutMs;
       let lastError: unknown;
       while (Date.now() < deadline) {
@@ -246,8 +235,8 @@ export class LocalServiceSupervisor {
         service: input.service,
         duration_ms: diagnosticDurationMs(startedAt),
       });
-      const detail = existsSync(input.logPath) ? readFileSync(input.logPath, "utf8").slice(-4000).trim() : "";
-      throw new Error(`${input.service} daemon did not become ready${detail ? `: ${detail}` : ""}`, lastError ? { cause: lastError } : undefined);
+      throw new Error(`${input.service} daemon did not become ready; inspect its structural diagnostics`,
+        lastError ? { cause: lastError } : undefined);
     } finally {
       await release();
     }
