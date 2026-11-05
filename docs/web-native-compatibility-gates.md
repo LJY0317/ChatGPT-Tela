@@ -52,8 +52,18 @@ routing only: the process snapshot omitted engine arguments containing `-c`, so
 it does not independently certify that engine's parentage/version. See the
 [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
 
+A following disposable Desktop chat recorded official engine 0.166, the selected
+synthetic model, exactly one HTTP Responses dispatch and one completed final
+matching the visible answer. This accepts synthetic final delivery, not real Web
+inference or Native Computer Use coexistence. The incomplete test ingress first
+omitted compressed-body decoding; after fixing that, the user still saw a `5/5`
+counter with repeated WebSocket attempts before successful HTTP delivery.
+The exact UI counter mapping remains unproved. Further tests reuse the existing
+local Responses ingress, including its decoding and explicit 426 response,
+rather than reproducing individual transport behaviors in a test server.
+
 The remaining bounded cutover check is an app-owned Desktop start in one authorized
-profile with verified engine identity, a synthetic Web final, and an original
+profile with verified engine identity, clean transport, and an original
 Native Computer Use call. Preserve and restore that profile's configuration and
 leave other profiles unchanged. Existing Plura routed launch starts an external
 engine; it is not evidence of this app-owned start. Only after this boundary is
