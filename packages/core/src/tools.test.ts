@@ -12,6 +12,34 @@ function tool(wireName: string): NativeToolDescriptor {
 }
 
 describe("native tool inventory", () => {
+  test("deferred discovery hints do not become Tela-side execution restrictions or descriptor conflicts", () => {
+    const deferred: NativeToolDescriptor = { ...tool("later"), deferLoading: true };
+    const other = tool("ready");
+    const initial = NativeToolInventory.fromObservations("thread-1", "turn-1", [
+      { source: "request.input.additional_tools:0", tools: [deferred, other] },
+    ]);
+    expect(initial.list().map(item => item.wireName)).toEqual(["later", "ready"]);
+    expect(initial.search("").map(item => item.wireName)).toEqual(["later", "ready"]);
+    expect(initial.search("later").map(item => item.wireName)).toEqual(["later"]);
+    expect(initial.exact("later")?.deferLoading).toBe(true);
+    // Official tool_search_output can retain true; omitted/false variants must
+    // still match the same definition without inventing a new authorization.
+    for (const returned of [{ ...tool("later"), deferLoading: true },
+      { ...tool("later") }, { ...tool("later"), deferLoading: false }]) {
+      for (const reversed of [false, true]) {
+        const observations = [
+          { source: "request.input.additional_tools:0", tools: [deferred, other] },
+          { source: "request.input.tool_search_output:1", tools: [returned] },
+        ];
+        const merged = NativeToolInventory.fromObservations("thread-1", "turn-1",
+          reversed ? observations.reverse() : observations);
+        expect(merged.exact("later")).toMatchObject({
+          wireName: "later", deferLoading: true, inputSchema: { type: "object" },
+        });
+        expect(merged.search("later").map(item => item.wireName)).toEqual(["later"]);
+      }
+    }
+  });
   test("accepts arbitrary current-turn and runtime-discovered tools without a hardcoded catalog", () => {
     const inventory = NativeToolInventory.fromObservations("thread-1", "turn-1", [
       { source: "current-turn", tools: [tool("exec_command")] },

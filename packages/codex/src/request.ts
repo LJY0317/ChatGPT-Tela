@@ -76,6 +76,7 @@ function descriptor(
     ...(namespace ? { namespace } : {}),
     kind,
     description: typeof spec.description === "string" ? spec.description : "",
+    ...(spec.defer_loading === true ? { deferLoading: true } : {}),
     ...(inputSchema ? { inputSchema: Object.freeze({ ...inputSchema }) } : {}),
   });
 }

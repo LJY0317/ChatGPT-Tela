@@ -7,6 +7,8 @@ export interface NativeToolDescriptor {
   readonly kind: NativeToolKind;
   readonly description: string;
   readonly inputSchema?: Readonly<Record<string, unknown>>;
+  /** Native Responses deferred discovery hint, not an execution authorization. */
+  readonly deferLoading?: boolean;
 }
 
 export interface NativeToolObservation {
@@ -96,8 +98,11 @@ export class NativeToolInventory {
         if (!current.observedFrom.includes(observation.source)) {
           map.set(tool.wireName, Object.freeze({
             ...current,
+            ...(tool.deferLoading === true ? { deferLoading: true } : {}),
             observedFrom: Object.freeze([...current.observedFrom, observation.source]),
           }));
+        } else if (tool.deferLoading === true && current.deferLoading !== true) {
+          map.set(tool.wireName, Object.freeze({ ...current, deferLoading: true }));
         }
       }
     }
