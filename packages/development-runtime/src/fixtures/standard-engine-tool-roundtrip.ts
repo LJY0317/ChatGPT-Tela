@@ -14,6 +14,9 @@ const option = (name: string): string | undefined => {
 };
 const engine = resolve(option("--engine")!);
 const catalogPath = resolve(option("--catalog")!);
+const imageEffort = process.argv.includes("--image-effort");
+const interrupt = process.argv.includes("--interrupt");
+assert(!(imageEffort && interrupt), "run one fixture scenario at a time");
 const root = mkdtempSync(join(tmpdir(), "tela-official-tool-roundtrip-"));
 const home = join(root, "home"); mkdirSync(home);
 const model = chatGptWebModelId(chatGptWebFamilyKey("Official Tool Roundtrip Fixture"));
@@ -21,20 +24,56 @@ const original = JSON.parse(readFileSync(catalogPath, "utf8")) as { models: Reco
 const template = original.models[0]!;
 assert(template?.slug, "a public model catalog template is required");
 const modelCatalog = join(root, "models.json");
+// In original-detail mode the public LocalImage contract preserves these exact PNG bytes.
+const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==", "base64");
+const imagePath = join(root, "synthetic.png");
+if (imageEffort) writeFileSync(imagePath, imageBytes);
 writeFileSync(modelCatalog, JSON.stringify({ models: [{ ...template, slug: model,
   display_name: "Official Tool Roundtrip Fixture", tool_mode: "direct",
-  supported_reasoning_levels: [{ effort: "medium", description: "Fixture" }],
+  supported_reasoning_levels: [{ effort: "medium", description: "Fixture" },
+    { effort: "high", description: "Fixture" }],
   default_reasoning_level: "medium",
 }] }));
 
 const callId = "fixture-command-once";
 const marker = "TELA_OFFICIAL_TOOL_ROUNDTRIP_OK";
 let requestCount = 0, toolResultSeen = 0, finalIssued = 0;
+let imageMatched = 0, effortMatched = 0, providerRequestClosed = false;
+let markBlocked!: () => void;
+const blockedRequest = new Promise<void>(resolve => { markBlocked = resolve; });
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
   const body = await request.json() as any;
   assert.equal(body.model, model);
   assert.equal(body.stream, true);
   requestCount++;
+  if (interrupt) {
+    assert.equal(requestCount, 1);
+    return new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`event: response.created\ndata: ${JSON.stringify({
+          type: "response.created", sequence_number: 0, response: {
+            id: "resp_fixture_blocked", object: "response", status: "in_progress", output: [],
+            model, usage: null, created_at: 0,
+          },
+        })}\n\n`));
+        request.signal.addEventListener("abort", () => { providerRequestClosed = true; }, { once: true });
+        markBlocked();
+      },
+      cancel() { providerRequestClosed = true; },
+    }), { headers: { "content-type": "text/event-stream" } });
+  }
+  if (imageEffort) {
+    assert.equal(body.reasoning?.effort, "high");
+    effortMatched++;
+    const images = body.input?.flatMap((item: any) => item.type === "message"
+      ? (item.content ?? []).filter((content: any) => content.type === "input_image") : []);
+    assert.equal(images?.length, 1, "one original local image must reach the provider");
+    assert.equal(typeof images[0].image_url, "string");
+    assert(images[0].image_url.startsWith("data:image/png;base64,"));
+    assert(Buffer.from(images[0].image_url.split(",")[1], "base64").equals(imageBytes),
+      "exact original local image bytes must belong to the provider request");
+    imageMatched++;
+  }
   let outcome: NativeGatewayOutcome;
   if (requestCount === 1) {
     assert(!body.input?.some((item: any) => item.type === "function_call_output"));
@@ -118,17 +157,30 @@ try {
   const started = await rpc("thread/start", { model, modelProvider: "fixture", cwd: root,
     approvalPolicy: "never", sandbox: "danger-full-access", historyMode: "paginated",
     ephemeral: false, baseInstructions: "Execute only the supplied synthetic printf tool call." });
-  await rpc("turn/start", { threadId: started.thread.id, model, effort: "medium",
-    input: [{ type: "text", text: "Run the one synthetic tool and return its result." }] });
+  const launched = await rpc("turn/start", { threadId: started.thread.id, model,
+    effort: imageEffort ? "high" : "medium",
+    input: imageEffort ? [
+      { type: "text", text: "Inspect the synthetic local image and run the fixture tool." },
+      { type: "localImage", path: imagePath, detail: "original" },
+    ] : [{ type: "text", text: interrupt ? "Wait for the fixture response." : "Run the one synthetic tool and return its result." }] });
+  if (interrupt) {
+    await blockedRequest;
+    await rpc("turn/interrupt", { threadId: started.thread.id, turnId: launched.turn.id });
+  }
   const completed = await notification("turn/completed");
-  assert.equal(completed.params.turn.status, "completed");
-  assert.equal(requestCount, 2);
-  assert.equal(toolResultSeen, 1);
-  assert.equal(finalIssued, 1);
+  assert.equal(completed.params.turn.status, interrupt ? "interrupted" : "completed");
+  assert.equal(requestCount, interrupt ? 1 : 2);
+  assert.equal(toolResultSeen, interrupt ? 0 : 1);
+  assert.equal(finalIssued, interrupt ? 0 : 1);
+  if (interrupt) assert(providerRequestClosed, "the blocked provider response must close on interrupt");
+  if (imageEffort) { assert.equal(imageMatched, 2); assert.equal(effortMatched, 2); }
   const proof = { engineVersion: execFileSync(engine, ["--version"], { encoding: "utf8" }).trim(),
     publicAppServer: true, syntheticProvider: true, responseUsage: null, requestCount,
-    toolCallName: "exec_command", toolCallIdMatched: true, hostToolResultSeen: toolResultSeen,
-    finalAnswerAccepted: true, browserOrModelCalls: 0, installedOrRestartedServices: false };
+    toolCallName: interrupt ? null : "exec_command", toolCallIdMatched: !interrupt,
+    hostToolResultSeen: toolResultSeen,
+    finalAnswerAccepted: !interrupt, imageOriginalBytesMatched: imageMatched,
+    reasoningEffortMatched: effortMatched, interrupted: interrupt, providerRequestClosed,
+    browserOrModelCalls: 0, installedOrRestartedServices: false };
   if (option("--output")) writeFileSync(resolve(option("--output")!), JSON.stringify(proof, null, 2) + "\n");
   console.log(JSON.stringify(proof));
 } finally {
