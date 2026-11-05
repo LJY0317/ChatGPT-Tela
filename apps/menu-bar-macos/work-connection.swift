@@ -10,7 +10,7 @@ struct TelaLocalPluginRegistration: Decodable {
     case "already-registered":
       return "Local plugin entry is already registered. Check its installed version in ChatGPT Desktop; preparing does not update an installed plugin."
     case "preserved-user-change":
-      return "An existing tela-local-chat marketplace entry was preserved. If separately registered, uninstall it in ChatGPT Desktop, remove its personal marketplace entry, then prepare and install Tela's source. If you edited a Tela-owned entry, restore that entry before retrying."
+      return "An existing local plugin entry was preserved. Review its source and ownership in ChatGPT Desktop before changing it. Preparing Tela does not replace or update that entry."
     default: return nil
     }
   }

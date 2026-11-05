@@ -374,7 +374,7 @@ test("retention snapshot distinguishes collected 24h and uncollected 7d holds wi
       const item = f.store.capacity(2, undefined, true).cleanup?.protectedThreads?.[0];
       expect(item).toMatchObject({ reason: collected ? "not_yet_due_or_unverified" : "uncollected_answers",
         policy: collected ? "collection_and_activity" : "native_activity",
-        collected, latestTurn: "unknown", managedTail: false,
+        collected, latestTurn: "unknown",
         basisAt: new Date(f.origin).toISOString(),
         dueAt: new Date(f.origin + (collected ? 1 : 7) * DAY).toISOString() });
       expect(JSON.stringify(item)).not.toContain(f.record.answer ?? "result");

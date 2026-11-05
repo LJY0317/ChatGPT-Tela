@@ -118,7 +118,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
   const inventories = new Map<string, Map<string, { archived: boolean; thread: Record<string, any> }>>();
   const occupancy = new Map<string, { slot: number; before: number; current: number; uncertain: boolean;
     protected: Map<string, { reason: string; dueAt?: string; policy?: string; basisAt?: string;
-      collected?: boolean; latestTurn?: "managed" | "other" | "unknown"; managedTail?: boolean }> }>();
+      collected?: boolean; latestTurn?: "managed" | "other" | "unknown" }> }>();
   let pending = [...groups.values()];
   try {
   while (pending.length) {
@@ -157,7 +157,6 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           ? { dueAt: new Date(due).toISOString() } : {}), policy: dueBasis,
         basisAt: new Date(basisAt() ?? record.createdAt).toISOString(), collected: collected !== undefined,
         latestTurn: latestTurn === undefined ? "unknown" : jobs.some(job => job.turnId === latestTurn) ? "managed" : "other",
-        managedTail: latestTurn === undefined ? false : jobs.some(job => job.turnId === latestTurn),
       });
     };
     const skipped = (reason: string, relation = "unknown", error?: unknown) => {

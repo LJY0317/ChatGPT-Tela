@@ -29,7 +29,6 @@ export interface CodexWebDelegationCapacityContract {
       readonly basisAt?: string;
       readonly collected?: boolean;
       readonly latestTurn?: "managed" | "other" | "unknown";
-      readonly managedTail?: boolean;
     }[];
   };
   readonly available: boolean;
@@ -74,8 +73,7 @@ export function parseCodexWebDelegationCapacityContract(value: unknown): CodexWe
           && (item.basisAt === undefined || typeof item.basisAt === "string" && Number.isFinite(Date.parse(item.basisAt)))
           && (item.policy === undefined || typeof item.policy === "string")
           && (item.collected === undefined || typeof item.collected === "boolean")
-          && (item.latestTurn === undefined || ["managed", "other", "unknown"].includes(item.latestTurn))
-          && (item.managedTail === undefined || typeof item.managedTail === "boolean"))))
+          && (item.latestTurn === undefined || ["managed", "other", "unknown"].includes(item.latestTurn)))))
     || typeof row.available !== "boolean"
     || row.blockCode !== undefined && !reasons.includes(row.blockCode as string)
     || row.available !== (row.blockCode === undefined)
