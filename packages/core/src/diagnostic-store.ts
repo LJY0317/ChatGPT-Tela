@@ -44,7 +44,7 @@ const FINGERPRINT = /^[a-f0-9]{24}$/;
 const SAFE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const SAFE_ERROR_KINDS = new Set(["abort", "timeout", "type_error", "range_error", "syntax_error", "reference_error", "uri_error", "aggregate_error", "coded_error", "error", "non_error", "other_error"]);
 const SAFE_PROOF_STAGES = new Set(["account", "model-discovery", "connector", "readiness"]);
-const RETAINED_KINDS = new Set(["system", "developer", "user", "assistant", "tool-call", "tool-result", "steering", "end"]);
+const RETAINED_KINDS = new Set(["system", "developer", "user", "assistant", "tool-call", "tool-result", "configuration", "steering", "end"]);
 /** Closed, payload-free substage vocabulary for a failed Native-to-Web context plan. */
 export const WEB_CONTEXT_PLANNER_STAGES = [
   "request_parse", "model_route", "retained_context", "native_continuity",

@@ -734,8 +734,7 @@ export function projectNativeRequestContext(
           || typeof effort !== "string" || !effort.trim()) {
           throw unsupportedProjection("input_item_type", body.input, index);
         }
-        append("tool-result", stableJson(item), [], historicalTurnId);
-        protectedRevisionIds.push(projected.at(-1)!.revision.id);
+        append("configuration", stableJson(item), [], historicalTurnId);
         continue;
       }
 
@@ -786,6 +785,10 @@ export function projectNativeRequestContext(
   } else if (body.input !== undefined) {
     throw unsupportedProjection("input_container", body.input);
   }
+  // Only the latest durable configuration needs to survive historical sealing
+  // verbatim; older updates remain in their original order in the source.
+  const lastConfiguration = [...projected].reverse().find(item => item.revision.kind === "configuration");
+  if (lastConfiguration) protectedRevisionIds.push(lastConfiguration.revision.id);
   const inputAnchorId = projected.at(-1)?.revision.id;
   appendCurrentGoal();
   const currentGoalObservationId = currentNativeGoal || currentNativeGoalState

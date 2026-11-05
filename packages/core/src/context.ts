@@ -5,6 +5,7 @@ export type RevisionKind =
   | "assistant"
   | "tool-call"
   | "tool-result"
+  | "configuration"
   | "steering";
 
 export interface LogicalRevision {

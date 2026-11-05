@@ -1825,9 +1825,15 @@ test("Native reasoning configuration update retains its order, source and compac
     { type: "message", role: "user", content: "After configuration." },
   ];
   const projected = projectNativeRequestContext("thread-1", { input });
-  expect(projected.revisions.map(item => item.revision.kind)).toEqual(["user", "tool-result", "user"]);
+  expect(projected.revisions.map(item => item.revision.kind)).toEqual(["user", "configuration", "user"]);
   expect(JSON.parse(projected.revisions[1]!.content)).toEqual(update);
   expect(projected.protectedRevisionIds).toContain(projected.revisions[1]!.revision.id);
+  const older = { type: "configuration_update", reasoning: { effort: "medium" } };
+  const multiple = projectNativeRequestContext("thread-1", { input: [older, input[0], update, input[2]] });
+  expect(multiple.revisions.map(item => item.revision.kind)).toEqual([
+    "configuration", "user", "configuration", "user",
+  ]);
+  expect(multiple.protectedRevisionIds).toEqual([multiple.revisions[2]!.revision.id]);
   expect(projectNativeRequestContext("thread-1", { input: [input[0],
     { type: "configuration_update", reasoning: { effort: "high" } }, input[2]] }).headId)
     .not.toBe(projected.headId);

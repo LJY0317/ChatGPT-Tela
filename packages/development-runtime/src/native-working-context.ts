@@ -53,10 +53,13 @@ export function workingCheckpointAnchor(projection: NativeRequestContextProjecti
   return boundary > 0 ? projection.revisions[boundary - 1] : undefined;
 }
 
-/** Preserve current higher-priority Native instructions verbatim outside lossy historical prose. */
+/** Preserve authoritative instructions and the latest durable Native reasoning control outside lossy history. */
 export function exactCurrentInstructions(projection: NativeRequestContextProjection): WebPhysicalContext["segments"] {
+  const latestConfigurationId = [...projection.revisions].reverse()
+    .find(item => item.revision.kind === "configuration")?.revision.id;
   return Object.freeze(projection.revisions.filter(item =>
-    item.revision.kind === "system" || item.revision.kind === "developer")
+    item.revision.kind === "system" || item.revision.kind === "developer"
+    || item.revision.id === latestConfigurationId)
     .map(item => Object.freeze({ type: "revision" as const, revisionId: item.revision.id,
       kind: item.revision.kind, content: item.content })));
 }

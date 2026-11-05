@@ -36,6 +36,7 @@ export type WebContextRevisionKind =
   | "assistant"
   | "tool-call"
   | "tool-result"
+  | "configuration"
   | "steering";
 
 export type WebPhysicalContextSegment =

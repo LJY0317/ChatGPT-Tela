@@ -110,6 +110,33 @@ test("checkpoint projection injects each exact current instruction revision only
   expect(alsoExact.segments.filter(item => item.type === "revision"
     && item.content === "Same exact words")).toHaveLength(2);
 });
+
+test("checkpoint inherits only the latest durable reasoning configuration in source order", () => {
+  const older = { type: "configuration_update", reasoning: { effort: "low" } };
+  const latest = { type: "configuration_update", reasoning: { effort: "ultra" } };
+  const projection = projectNativeRequestContext("task", { input: [
+    { role: "user", content: "First" }, older,
+    { role: "assistant", content: "Finished" }, latest,
+    { role: "user", content: "Continue" },
+  ] });
+  const suffix = projection.revisions.at(-1)!;
+  const physical = { mode: "checkpoint-delta" as const,
+    headRevisionId: projection.headId, baseRevisionId: projection.revisions[2]!.revision.id,
+    activeRequestRevisionId: suffix.revision.id, logicalTokens: 30, transferTokens: 5,
+    segments: [
+      { type: "checkpoint" as const, checkpointId: "verified", sourceRevisionId: projection.revisions[2]!.revision.id, content: "Earlier work" },
+      { type: "revision" as const, revisionId: suffix.revision.id, kind: suffix.revision.kind, content: suffix.content },
+    ],
+  };
+  const restored = withExactCurrentInstructions(physical, projection);
+  const configs = restored.segments.filter(item => item.type === "revision" && item.kind === "configuration");
+  expect(configs).toHaveLength(1);
+  expect(JSON.parse(configs[0]!.content)).toEqual(latest);
+  expect(restored.segments.map(item => item.type === "revision" ? item.kind : item.type)).toEqual([
+    "configuration", "checkpoint", "user",
+  ]);
+  expect(withExactCurrentInstructions(restored, projection)).toBe(restored);
+});
 import { createNativeLocalCompactionRouter } from "./native-local-compaction";
 
 const model = chatGptWebModelId(chatGptWebFamilyKey("Working Set Fixture"));
