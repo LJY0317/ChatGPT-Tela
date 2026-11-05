@@ -20,11 +20,11 @@ test("regenerating a launcher plugin removes old bundles and preserves unrelated
     const build = spawnSync("bun", ["run", "apps/local-mcp/src/package.ts", destination,
       "--launcher", process.execPath], { encoding: "utf8" });
     expect(build.status).toBe(0);
-    const config = JSON.parse(readFileSync(join(plugin, "mcp.json"), "utf8"));
+    const config = JSON.parse(readFileSync(join(plugin, ".mcp.json"), "utf8"));
     expect(config.mcpServers["tela-local-chat"]).toEqual({ type: "stdio", command: basename(process.execPath),
       env: { PATH: dirname(process.execPath) },
       args: ["local-mcp"], cwd: "${PLUGIN_ROOT}" });
-    expect(readdirSync(plugin).sort()).toEqual(["keep.txt", "mcp.json", "plugin.json"]);
+    expect(readdirSync(plugin).sort()).toEqual([".codex-plugin", ".mcp.json", "keep.txt"]);
   } finally { rmSync(destination, { recursive: true, force: true }); }
 });
 

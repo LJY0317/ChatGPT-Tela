@@ -5,6 +5,22 @@ compaction and final-result provenance must remain independent of the
 replaceable Web provider session. This document tracks requirements without
 depending on downstream local patch sets or copying an external runtime.
 
+Official app-owned engine + Tela Web Responses provider is **conditionally
+adopted**, not accepted as an installed replacement. Isolated official 0.166
+fixtures established catalog seeding, normal tool transport, standard
+compaction-v2 and selected cancellation/image inputs; they do not establish
+Desktop picker refresh, live Web-to-original-Native-tool execution, image/typed
+tool result return, or usage-free automatic compression. `usage: null` stays
+unknown; official `ModelInfo` has no fork-only `compaction_mode` selector.
+Keep canonical Native authority and one summary/checkpoint source; do not
+recreate a broker, provider-specific engine or retry protocol. See
+`token-efficiency.md` for the existing compaction evidence.
+The official engine can execute a typed tool call returned by a synthetic
+Responses provider and forward its exact result, but the current ChatGPT Web
+UI event contract exposes no authenticated structured Native tool-call intent
+or result-continuation receipt. Rendered Markdown cannot supply that authority;
+real Web-to-official-Native-tool continuation remains unaccepted.
+
 ## Accepted, owned operation
 
 - An exact user/send receipt and unique user-to-assistant lineage bind every
@@ -40,6 +56,44 @@ depending on downstream local patch sets or copying an external runtime.
 - Public progress and displayed output must be independently verified;
   renderer-visible progress is not proof of a Native application UI receipt.
 
+## Official tool-registration boundary (0.166 source)
+
+- Ordinary MCP uses `[mcp_servers.<server>] enabled = false`; the isolated
+  `33d44f84` fixture already verified its official discovery difference.
+- Plugin-provided MCP uses
+  `[plugins."<actual-plugin-id>".mcp_servers.<manifest-server>] enabled = false`.
+  Official `PluginsConfigToml`/`PluginMcpServerConfig`, plugin loader and
+  `Config::to_mcp_config_with_loaded_plugins` apply this policy before
+  registration. Whole-plugin `enabled = false` also suppresses its MCP/apps/
+  skills, so prefer per-server policy when preserving other plugin features.
+  Plugin server keys must come from its actual installed manifest; do not
+  derive them from a connector display name or tool name.
+  The local-chat package declares one `tela-local-chat` MCP server under its
+  local marketplace plugin. Official 0.166 resolves this exact plugin/server
+  mapping in isolated app-server `plugin/install` tests: server disabled gives
+  no stdio initialization or discovery; enabled gives `initialize`,
+  `tools/list` and deferred `fixture_probe` discovery. This tests official
+  registration under a disposable `CODEX_HOME`, with no real model.
+  Package source uses official `.codex-plugin/plugin.json` and `.mcp.json`
+  layout; earlier root-level manifest files remain a legacy installed-source
+  compatibility case until Root handles migration.
+- Account/cloud apps and plugin app declarations have distinct routing:
+  `app_mcp_routing.rs` gates plugin app declarations on Codex backend auth and
+  can remove an identically named MCP declaration. An `mcp_servers` toggle
+  alone cannot prove the app connection or model-visible tool is suppressed.
+  `plugins.*` is a Codex plugin configuration layer, not a ChatGPT account
+  plugin switch. Web workers use their separately owned connection context.
+- Source proof is from public `openai/codex` tag
+  `rust-v0.166.0-alpha.6` (`codex-rs/config/src/types.rs`,
+  `core-plugins/src/loader.rs`, `core-plugins/src/app_mcp_routing.rs`,
+  `core/src/config/mod.rs`). Isolated plugin registration does not prove the
+  installed Desktop's effective configuration or account-connected apps. Root
+  must verify the exact installed plugin ID and manifest server name against
+  the effective Native `CODEX_HOME`, then obtain official plugin/list/read
+  and MCP status before/after, plus the Native model's tool discovery and
+  actual invocation result on a disposable host session. Preserve separate
+  Chat/Web-worker connections and account-app grants.
+
 ## Verification gates
 
 Release checks include (1) real model/effort selection and restoration,
@@ -48,6 +102,9 @@ Release checks include (1) real model/effort selection and restoration,
 (4) manual and ordinary opt-in approvals without replay,
 (5) real Native Stop-to-Web termination, and (6) secure recovery from a
 renderer hang, changed card, or uncertain accepted request.
+Also prove real CUA/browser image output, quota switch and the plugin/app
+registration boundaries above on the official Desktop; model tool-list
+visibility alone cannot pass acceptance.
 
 Source/test pass, installed service health, and the completion of an actual
 user workflow are separate pieces of evidence. Consumer signing,

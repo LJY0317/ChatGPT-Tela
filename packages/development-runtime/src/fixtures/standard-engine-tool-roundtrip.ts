@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
+import { prepareLocalChatPlugin } from "../../../../apps/local-mcp/src/plugin-package";
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "@chatgpt-tela/responses";
 import type { NativeGatewayOutcome } from "@chatgpt-tela/runtime";
 
@@ -20,10 +21,17 @@ const inspectTools = process.argv.includes("--inspect-tools");
 const defaultToolMode = process.argv.includes("--default-tool-mode");
 const mcpEnabled = process.argv.includes("--mcp-enabled");
 const mcpDisabled = process.argv.includes("--mcp-disabled");
+const pluginEnabled = process.argv.includes("--plugin-enabled");
+const pluginDisabled = process.argv.includes("--plugin-disabled");
+const pluginFixture = pluginEnabled || pluginDisabled;
+const mcpActive = mcpEnabled || pluginEnabled;
+const mcpConfigured = mcpEnabled || mcpDisabled || pluginFixture;
 assert(!(imageEffort && interrupt), "run one fixture scenario at a time");
 assert(!inspectTools || (!imageEffort && !interrupt), "tool declaration inspection is a separate scenario");
 assert(!defaultToolMode || inspectTools, "default tool mode applies to tool inspection only");
 assert(!(mcpEnabled && mcpDisabled), "select one MCP enablement control");
+assert(!(pluginEnabled && pluginDisabled), "select one plugin MCP enablement control");
+assert(!pluginFixture || (!mcpEnabled && !mcpDisabled && inspectTools), "plugin case requires standalone tool inspection");
 assert(!(mcpEnabled || mcpDisabled) || inspectTools, "MCP control requires tool inspection");
 const root = mkdtempSync(join(tmpdir(), "tela-official-tool-roundtrip-"));
 const home = join(root, "home"); mkdirSync(home);
@@ -33,7 +41,16 @@ const template = original.models[0]!;
 assert(template?.slug, "a public model catalog template is required");
 const modelCatalog = join(root, "models.json");
 const mcpLog = join(root, "mcp.jsonl");
-if (mcpEnabled || mcpDisabled) writeFileSync(mcpLog, "");
+if (mcpConfigured) writeFileSync(mcpLog, "");
+let pluginMarketplace: string | undefined;
+if (pluginFixture) {
+  const { plugin, marketplace } = prepareLocalChatPlugin(root, process.execPath);
+  writeFileSync(join(plugin, ".mcp.json"), JSON.stringify({ mcpServers: {
+    "tela-local-chat": { type: "stdio", command: process.execPath,
+      args: [join(import.meta.dir, "standard-engine-mcp-stub.ts"), mcpLog] },
+  } }));
+  pluginMarketplace = marketplace;
+}
 // In original-detail mode the public LocalImage contract preserves these exact PNG bytes.
 const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==", "base64");
 const imagePath = join(root, "synthetic.png");
@@ -62,8 +79,8 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   assert.equal(body.stream, true);
   requestCount++;
   if (inspectTools) {
-    assert(requestCount <= (mcpEnabled ? 2 : 1), "unexpected extra tool inspection request");
-    if (mcpEnabled && requestCount === 2) {
+    assert(requestCount <= (mcpActive ? 2 : 1), "unexpected extra tool inspection request");
+    if (mcpActive && requestCount === 2) {
       // In alpha.6 an ordinary MCP tool is deferred: the engine's own
       // tool_search_output, not the initial additional_tools, reveals its schema.
       const outputs = body.input?.filter((item: any) => item.type === "tool_search_output"
@@ -110,13 +127,13 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
     const all = (items: any[]): any[] => items.flatMap(item => item.type === "namespace"
       ? all(item.tools ?? []) : [item]);
     mcpDeclaredTools = all(tools).map(item => String(item.name ?? item.type));
-    const outcome: NativeGatewayOutcome = mcpEnabled
+    const outcome: NativeGatewayOutcome = mcpActive
       ? { type: "tool-call", item: { type: "tool_search_call",
           call_id: "fixture-mcp-discovery", arguments: { query: "fixture_probe" } },
           delivery: { capability: "synthetic-provider", callId: "fixture-mcp-discovery" } }
       : { type: "final", answer: "Verified official Native tool declaration.",
           delivery: { capability: "synthetic-provider" } };
-    if (!mcpEnabled) finalIssued++;
+    if (!mcpActive) finalIssued++;
     const encoded = encodeNativeResponsesOutcome({ outcome, model: body.model });
     assert.equal(encoded.response.usage, null);
     return new Response(nativeResponsesSsePlan(outcome, encoded).frames.join(""),
@@ -188,6 +205,11 @@ writeFileSync(join(home, "config.toml"), [
     `enabled = ${mcpEnabled}`,
     'startup_timeout_sec = 10',
   ] : []),
+  ...(pluginFixture ? [
+    '[features]', 'plugins = true',
+    '[plugins."tela-local-chat@tela-local-development".mcp_servers."tela-local-chat"]',
+    `enabled = ${pluginEnabled}`,
+  ] : []),
 ].join("\n"));
 const child = Bun.spawn([engine, "app-server", "--stdio"], {
   cwd: root, env: { PATH: process.env.PATH!, HOME: process.env.HOME!, CODEX_HOME: home,
@@ -236,6 +258,9 @@ try {
   await rpc("initialize", { clientInfo: { name: "tela-official-tool-fixture", version: "0.0.0" },
     capabilities: { experimentalApi: true } });
   child.stdin.write(JSON.stringify({ method: "initialized" }) + "\n");
+  if (pluginMarketplace) {
+    await rpc("plugin/install", { marketplacePath: pluginMarketplace, pluginName: "tela-local-chat" });
+  }
   const catalog = await rpc("model/list", { includeHidden: true });
   assert(catalog.data.some((item: any) => item.model === model));
   const started = await rpc("thread/start", { model, modelProvider: "fixture", cwd: root,
@@ -253,26 +278,26 @@ try {
   }
   const completed = await notification("turn/completed");
   assert.equal(completed.params.turn.status, interrupt ? "interrupted" : "completed");
-  assert.equal(requestCount, interrupt || inspectTools && !mcpEnabled ? 1 : 2);
+  assert.equal(requestCount, interrupt || inspectTools && !mcpActive ? 1 : 2);
   assert.equal(toolResultSeen, interrupt || inspectTools ? 0 : 1);
   assert.equal(finalIssued, interrupt ? 0 : 1);
   if (inspectTools) {
     assert(declaration, "official Native tool declaration must be provider-visible");
     assert.equal(toolResultSeen, 0, "inspection must not execute synthetic tools");
   }
-  const mcpMethods = mcpEnabled || mcpDisabled
+  const mcpMethods = mcpConfigured
     ? readFileSync(mcpLog, "utf8").trim().split("\n").filter(Boolean)
       .map(line => (JSON.parse(line) as { method: string }).method)
     : [];
-  if (mcpEnabled || mcpDisabled) console.log(JSON.stringify({ diagnostic: "mcp_tool_probe",
-    enabled: mcpEnabled, mcpMethods, mcpDeclaredTools }));
-  if (mcpEnabled) {
+  if (mcpConfigured) console.log(JSON.stringify({ diagnostic: "mcp_tool_probe",
+    enabled: mcpActive, pluginFixture, mcpMethods, mcpDeclaredTools }));
+  if (mcpActive) {
     assert(mcpMethods.includes("initialize"), "enabled MCP stub must initialize");
     assert(mcpMethods.includes("tools/list"), "enabled MCP stub must publish its tool list");
     assert(mcpDeclaredTools.includes("tool_search"), "deferred MCP tools require official search");
     assert(mcpDiscovery, "official Native search result is required");
   }
-  if (mcpDisabled) {
+  if (mcpDisabled || pluginDisabled) {
     assert.equal(mcpMethods.length, 0, "disabled MCP stub must never start");
     assert.equal(mcpDeclaredTools.filter(name => name.includes("fixture_probe")).length, 0);
   }
@@ -283,8 +308,8 @@ try {
     toolInspection: inspectTools, modelToolMode: defaultToolMode ? null : "direct",
     declaration,
     ...(inspectTools ? { modelVisibleToolNames: mcpDeclaredTools } : {}),
-    ...(mcpEnabled || mcpDisabled ? { mcpEnabled, mcpDeclaredTools, mcpMethods, mcpDiscovery } : {}),
-    toolCallName: inspectTools ? mcpEnabled ? "tool_search" : null
+    ...(mcpConfigured ? { mcpEnabled: mcpActive, pluginFixture, mcpDeclaredTools, mcpMethods, mcpDiscovery } : {}),
+    toolCallName: inspectTools ? mcpActive ? "tool_search" : null
       : interrupt ? null : "exec_command", toolCallIdMatched: !interrupt && !inspectTools,
     hostToolResultSeen: toolResultSeen,
     finalAnswerAccepted: !interrupt, imageOriginalBytesMatched: imageMatched,

@@ -40,7 +40,8 @@ if (process.argv[2] === "--tela-operation-owner-v1") {
       const contents = readdirSync(root).filter(name => name !== ".chatgpt-tela-owner.json");
       const plugin = join(root, "plugins", "tela-local-chat");
       if (contents.length === 0) prepareLocalChatPlugin(root, process.execPath);
-      else if (!existsSync(join(plugin, "plugin.json")) || !existsSync(join(plugin, "mcp.json"))) {
+      else if (!((existsSync(join(plugin, ".codex-plugin", "plugin.json")) && existsSync(join(plugin, ".mcp.json")))
+        || (existsSync(join(plugin, "plugin.json")) && existsSync(join(plugin, "mcp.json"))))) {
         throw Error("existing local plugin source was modified; preserved");
       }
       return registerLocalMarketplace({ manifestPath: paths.installManifest,

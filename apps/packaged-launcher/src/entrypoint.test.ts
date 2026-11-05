@@ -62,7 +62,7 @@ test("one compiled runtime dispatches isolated daemons, CLI and a real owned com
     const { plugin, marketplace } = JSON.parse(exported.out);
     const entry = JSON.parse(readFileSync(marketplace, "utf8")).plugins[0];
     expect(join(destination, entry.source.path)).toBe(plugin);
-    expect(readdirSync(plugin).sort()).toEqual(["mcp.json", "plugin.json"]);
+    expect(readdirSync(plugin).sort()).toEqual([".codex-plugin", ".mcp.json"]);
     writeFileSync(join(destination, "README.md"), "user content");
     expect((await run(["local-mcp", "package", destination])).code).toBe(1);
     expect(readFileSync(join(destination, "README.md"), "utf8")).toBe("user content");
@@ -72,7 +72,7 @@ test("one compiled runtime dispatches isolated daemons, CLI and a real owned com
     const cached = join(root, "plugin cache", "local");
     cpSync(plugin, cached, { recursive: true });
     rmSync(destination, { recursive: true });
-    const config = JSON.parse(readFileSync(join(cached, "mcp.json"), "utf8")).mcpServers["tela-local-chat"];
+    const config = JSON.parse(readFileSync(join(cached, ".mcp.json"), "utf8")).mcpServers["tela-local-chat"];
     const home = join(root, "isolated home");
     const paths = resolveProductPaths({ home, environment: {} });
     const tools = createChatToolRuntime({ allowedRoots: [root], stateRoot: join(root, "local-chat") });
@@ -90,7 +90,7 @@ test("one compiled runtime dispatches isolated daemons, CLI and a real owned com
     const personal = JSON.parse(readFileSync(join(home, ".agents", "plugins", "marketplace.json"), "utf8"));
     expect(personal.plugins[0].source.path.startsWith("./")).toBe(true);
     const ownedPlugin = join(home, personal.plugins[0].source.path);
-    expect(readdirSync(ownedPlugin).sort()).toEqual(["mcp.json", "plugin.json"]);
+    expect(readdirSync(ownedPlugin).sort()).toEqual([".codex-plugin", ".mcp.json"]);
     expect(JSON.parse((await run(["local-mcp", "register"], localEnvironment)).out).result).toBe("already-registered");
     writeServiceRuntimeDescriptor(join(paths.serviceRuntime("chat"), "descriptor.json"), {
       version: 1, service: "chat", instanceId: service.instanceId, installId: owned.installId,

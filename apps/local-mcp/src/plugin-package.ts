@@ -7,18 +7,19 @@ export function prepareLocalChatPlugin(destination: string, launcher?: string) {
   // Preserve the installed launcher's stable alias across updates.
   const executable = launcher ? resolve(launcher) : undefined;
   const plugin = join(root, "plugins", "tela-local-chat");
+  const manifest = join(plugin, ".codex-plugin");
   const catalog = join(root, ".agents", "plugins");
-  mkdirSync(plugin, { recursive: true });
+  mkdirSync(manifest, { recursive: true });
   mkdirSync(catalog, { recursive: true });
   if (executable) {
     for (const file of ["server.cjs", "probe.cjs"]) rmSync(join(plugin, file), { force: true });
   }
   const write = (path: string, value: unknown) => writeFileSync(path, JSON.stringify(value, null, 2) + "\n");
-  write(join(plugin, "plugin.json"), {
+  write(join(manifest, "plugin.json"), {
     $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
     name: "tela-local-chat", version: "0.0.1", description: "Device-local Tela Chat MCP"
   });
-  write(join(plugin, "mcp.json"), {
+  write(join(plugin, ".mcp.json"), {
     $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
     mcpServers: { "tela-local-chat": { type: "stdio", command: executable ? basename(executable) : "node",
       ...(executable ? { env: { PATH: dirname(executable) } } : {}),
