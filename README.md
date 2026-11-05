@@ -1288,19 +1288,28 @@ available through [GitHub Releases](https://github.com/LJY0317/ChatGPT-Tela/rele
 
 GitHub Releases can host both the update archive and `appcast.xml`; a separate website is unnecessary.
 After the menu build, Sparkle's official tools are in
-`apps/menu-bar-macos/.build/artifacts/sparkle/Sparkle/bin/`. Run `generate_keys --account ChatGPT-Tela`
-once to store an update-signing key in your Keychain, then embed its printed **public** key with
-`--update-public-key`. Keep the private key backed up outside the repository and release assets.
+`apps/menu-bar-macos/.build/artifacts/sparkle/Sparkle/bin/`. Select the existing signing
+Keychain identity with `--account <keychain-account>` (a local account name, not a fixed
+project setting). Use `generate_keys --account <keychain-account> -p` to read its **public**
+key; generate a new identity only during an explicitly authorized first-time setup.
+Confirm that this key matches the packaged app's `Contents/Info.plist` `SUPublicEDKey`
+and the `--update-public-key` build input, and that `SUFeedURL` matches the intended
+HTTPS `--update-feed-url`. Stop on a mismatch. Never put the private key in release assets.
 This repository's release public key is in `release/sparkle-public-key.txt`; it contains no private key.
 Built packages retain dependency notices and optional modified Codex provenance in
 `Contents/Resources/ThirdPartyNotices` on macOS and `third-party-notices` elsewhere.
 Outside macOS, Electron notices stay with its complete runtime distribution.
 Use a stable HTTPS feed URL, such as `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml`.
 For each release, archive the final app with `ditto -c -k --sequesterRsrc --keepParent`, then run
-`generate_appcast --account ChatGPT-Tela --download-url-prefix https://github.com/<owner>/<repo>/releases/download/<tag>/ <archives-directory>`.
+`generate_appcast --account <keychain-account> --download-url-prefix https://github.com/<owner>/<repo>/releases/download/<tag>/ <archives-directory>`.
+Before publishing, use Sparkle's `sign_update --account <keychain-account> --verify <archive.zip> "<edSignature-from-appcast>"`
+to verify the archive; sign the feed with `sign_update --account <keychain-account> <appcast.xml>`
+if not already signed, then verify it with `sign_update --account <keychain-account> --verify <appcast.xml>`.
+Both verifications must succeed. The existing named Keychain identity is used without exporting its private key.
 Upload the archive and generated `appcast.xml` to that release. Sparkle owns feed generation and archive
 signing; Tela adds no publishing or signing engine. Apple Developer ID and notarization are optional for
 this update mechanism, but needed for Apple-trusted distribution without the unnotarized-app limitation.
+Publishing and installation remain separate, explicitly approved steps.
 
 Settings → **Maintenance → Manage…** opens the independent repair/removal app. For repair, select a trusted
 Tela app matching the installed version, then **Review changes** before applying. Removal keeps settings
