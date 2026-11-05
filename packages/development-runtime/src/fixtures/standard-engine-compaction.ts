@@ -22,6 +22,10 @@ const catalogPath = resolve(option("--catalog")!);
 const rejectCompaction = option("--reject-compaction");
 const autoLimit = option("--auto-limit") ? Number(option("--auto-limit")) : undefined;
 const oversizedSource = process.argv.includes("--oversized-source");
+const autoOnly = process.argv.includes("--auto-only");
+const usagePositive = process.argv.includes("--usage-positive");
+const positiveUsageTokens = 6_216;
+const syntheticSeed = "Fixture seed. " + "state ".repeat(10_000);
 const root = mkdtempSync(join(option("--scratch-root") ?? tmpdir(), "tela-standard-engine-"));
 const home = join(root, "home"); mkdirSync(home);
 const model = chatGptWebModelId(chatGptWebFamilyKey("Standard Engine Fixture"));
@@ -36,7 +40,12 @@ writeFileSync(modelCatalog, JSON.stringify({ models: [{ ...template, slug: model
 }] }));
 let rpcRequest!: (method: string, params?: unknown) => Promise<any>;
 const current = new AppServerCurrentTurnSource(async () => ({ request: rpcRequest, async close() {} }));
-let summaries = 0, remoteRequests = 0, plannedReplays = 0, nativeSwitches = 0, automatic = 0, continuedAfterRejection = 0;
+let summaries = 0, remoteRequests = 0, plannedReplays = 0, nativeSwitches = 0, firstAutomaticCount = 0, continuedAfterRejection = 0;
+let reportedUsageResponses = 0;
+let followupNullUsageResponses = 0;
+let explicitCompaction = false;
+let automaticCompactions = 0;
+let explicitCompactions = 0;
 const router = createNativeLocalCompactionRouter({
   source: { currentTurn: id => current.currentTurn(id), ...(oversizedSource ? {
     readHistoryPage: current.readHistoryPage.bind(current), readHistoryIndex: current.readHistoryIndex.bind(current),
@@ -56,6 +65,8 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   const body = await request.clone().json() as any;
   if (body.input?.at(-1)?.type === "compaction_trigger") {
     remoteRequests++;
+    if (explicitCompaction) explicitCompactions++;
+    else automaticCompactions++;
     return await router(request) ?? new Response("Unexpected compaction route", { status: 500 });
   }
   if (rejectCompaction && phase === "followup") {
@@ -81,13 +92,22 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
     assert(JSON.stringify(input).includes("Fixture checkpoint:"));
     nativeSwitches++;
   }
-  return nativeCompactionSummaryResponse({ summary: phase === "seed" && autoLimit
-    ? "Fixture seed. " + "state ".repeat(10_000) : "Fixture final answer.",
+  const response = nativeCompactionSummaryResponse({ summary: phase === "seed" && autoLimit
+    ? syntheticSeed : "Fixture final answer.",
     operationId: crypto.randomUUID(), model: body.model, stream: true });
+  if (usagePositive && phase === "seed" && reportedUsageResponses++ === 0) {
+    const usage = { input_tokens: 6_200, input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 16, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: positiveUsageTokens };
+    const wire = (await response.text()).replaceAll('"usage":null', `"usage":${JSON.stringify(usage)}`);
+    return new Response(wire, { status: response.status, headers: response.headers });
+  }
+  if (phase === "followup") followupNullUsageResponses++;
+  return response;
 } });
 writeFileSync(join(home, "config.toml"), [
   `model = ${JSON.stringify(model)}`, 'model_provider = "fixture"',
   `model_catalog_json = ${JSON.stringify(modelCatalog)}`, 'model_reasoning_effort = "medium"',
+  `model_post_turn_compact_threshold_percent = ${autoOnly ? 0 : 1}`,
   "[model_providers.fixture]", 'name = "OpenAI"', `base_url = "${server.url}v1"`,
   'wire_api = "responses"', "requires_openai_auth = false",
 ].join("\n"));
@@ -154,27 +174,59 @@ try {
   }
   phase = "followup";
   if (autoLimit) await turn("Continue the synthetic seed.");
-  automatic = remoteRequests;
-  if (!remoteRequests) {
+  firstAutomaticCount = automaticCompactions;
+  if (!firstAutomaticCount && !autoOnly) {
+    explicitCompaction = true;
     await rpcRequest("thread/compact/start", { threadId });
     const completed = await notification("turn/completed");
     assert.equal(completed.params.turn.status, rejectCompaction ? "failed" : "completed");
+    explicitCompaction = false;
+  }
+  if (autoOnly && usagePositive) {
+    assert(automaticCompactions > 0, "the synthetic usage-bearing response must trigger automatic compaction");
+    assert.equal(explicitCompactions, 0);
+    explicitCompaction = true;
+    await rpcRequest("thread/compact/start", { threadId });
+    const completed = await notification("turn/completed");
+    assert.equal(completed.params.turn.status, "completed");
+    explicitCompaction = false;
+    assert.equal(explicitCompactions, 1, "the explicit control must be counted separately from automatic pressure");
   }
   await turn("Continue after the checkpoint.");
   if (rejectCompaction) {
     assert.equal(remoteRequests, 1); assert.equal(summaries, 1); assert.equal(continuedAfterRejection, 1);
-  } else {
+  } else if (!autoOnly) {
     phase = "native";
     await turn("Continue with the fixture Native route.", String(template.slug));
     assert(plannedReplays > 0); assert.equal(nativeSwitches, 1);
   }
-  if (!rejectCompaction) assert.equal(summaries, remoteRequests);
+  if (!rejectCompaction && !autoOnly) assert.equal(summaries, remoteRequests);
+  if (autoOnly && usagePositive) {
+    assert(automaticCompactions > 0, "automatically triggered compactions must be counted separately");
+    assert.equal(explicitCompactions, 1, "the later manual compaction must remain separately counted");
+    assert.equal(summaries, remoteRequests);
+    assert(plannedReplays > 0, "the completed automatic checkpoint must reach subsequent Web planning");
+    assert(followupNullUsageResponses > 0, "the same run must continue with usage:null after the checkpoint");
+  } else if (autoOnly) {
+    assert.equal(automaticCompactions, 0, "usage:null without model-local compaction metadata must not trigger automatic remote compaction");
+    assert.equal(explicitCompactions, 0, "the negative control must not invoke explicit compaction");
+    assert.equal(remoteRequests, 0, "the complete negative-control run must finish without remote compaction");
+    assert.equal(summaries, 0, "the complete negative-control run must finish without summary production");
+    assert.equal(plannedReplays, 0, "the complete negative-control run must finish without Web summary replay");
+  }
+  // Final counters are sampled only after every turn and explicit control has settled.
   const proof = { engineVersion: execFileSync(engine, ["--version"], { encoding: "utf8" }).trim(),
     engineSuppliedByCaller: true, standardModelCatalogSeed: true,
     canonicalOwner: "public-paginated-rpc", remoteCompactions: remoteRequests, summaryCalls: summaries,
-    automaticCompactionsWithoutUsage: automatic, plannedReplays, nativeSwitches, continuedAfterRejection,
+    automaticCompactions: automaticCompactions, explicitCompactions, plannedReplays, nativeSwitches, continuedAfterRejection,
     terminalCompactionRejection: rejectCompaction ?? null,
-    browserOrModelCalls: 0, fakeResponses: true, oversizedCanonicalSource: oversizedSource, installedOrRestartedServices: false };
+    browserOrModelCalls: 0, fakeResponses: true, oversizedCanonicalSource: oversizedSource,
+    autoOnly, firstAutomaticCount, responseUsage: usagePositive ? positiveUsageTokens : null, autoCompactionTokenLimit: autoLimit ?? null,
+    usagePositive, reportedUsageResponses, followupNullUsageResponses,
+    syntheticSeedCharacters: autoLimit ? syntheticSeed.length : 0,
+    contextWindow: autoLimit ? 100_000 : null, postTurnCompactionThresholdPercent: autoLimit ? (autoOnly ? 0 : 1) : null,
+    provider: "OpenAI Responses v2",
+    installedOrRestartedServices: false };
   if (option("--output")) writeFileSync(resolve(option("--output")!), JSON.stringify(proof, null, 2) + "\n");
   console.log(JSON.stringify(proof));
 } finally {

@@ -246,7 +246,7 @@ Tela-specific engine fork is a separate dependency. Prefer public Codex contract
 | Web summary transport | Standard Responses compaction-v2 (`compaction_trigger`) now uses the existing selector, budget, journal and single summary producer. No separate compressor or engine patch is needed for this transport. |
 | Summary replay and Native switch | A bounded transparent Tela envelope is returned as one `compaction` item. Web reads its historical summary; Native forwarding translates only Tela envelopes to ordinary summary text. Unknown provider-encrypted states keep their existing source-recovery path. |
 | Startup model catalog | Standard `model_catalog_json` exposed a custom Web row through actual `model/list` in the isolated official-engine fixture. This does not prove Desktop picker rendering or live invalidation. |
-| Automatic pressure without usage | The official-engine fixture observed no automatic compaction after a large synthetic reply with `usage: null`; explicit compaction succeeded. The installed fork's local pressure estimate still has a purpose until an equivalent standard path is verified. Do not fabricate provider usage to trigger it. |
+| Automatic pressure without usage | The isolated official-engine fixture observed zero automatic compactions with `usage: null`. Synthetic reported usage above the threshold triggered automatic compaction, accepted summaries and subsequent Web planning. This does not establish live provider usage, billing or Desktop behavior. Do not fabricate provider usage in production. |
 | Live catalog refresh | A fork RPC refreshes an engine catalog but does not invalidate Desktop's picker cache. Retain capability-gated compatibility while verifying supported lifecycle behavior; do not add another refresh protocol. |
 
 The local text transport remains compatible with the installed preview. The legacy Web
@@ -267,6 +267,27 @@ rejection, single summary admission and continued access to unchanged history.
 It makes no browser/model calls and does not validate real model quality, Desktop UI,
 provider billing, or production automatic pressure. A successful manual fallback is
 reported separately from the observed automatic-compaction count.
+
+For the paired automatic-pressure probe, use `--auto-limit 5000 --auto-only` and add
+`--usage-positive` for the positive control. Both runs use a 60 KB synthetic response,
+100,000-token context window, 5,000-token compaction limit and 0% post-turn threshold.
+With isolated official `codex-cli 0.166.0-alpha.6`, the complete `usage: null` run asserts
+zero automatic and explicit compactions, remote requests, summaries and Web replays after
+all turns settle. In the official-app `0.166.0-alpha.6` control, synthetic reported usage
+of 6,216 tokens triggered one automatic compaction before the explicit control. An additional
+automatic compaction occurred on the final continuation even though its provider usage was
+`null`: the complete positive run counted two automatic and one explicit compaction,
+three accepted summaries, two Web planning replays and two later `usage: null` responses.
+Both runs exited 0. These are final protocol counters, not semantic summary quality checks.
+
+An earlier positive run with a 1,000-token limit returned HTTP 400 with
+`phase=identity`, `reason_class=source_changed`, `state=cached`, `source_matches=false`
+and `wire_matches=false`. This limit was below the approximately 1,500-token retained
+instruction context and led to repeated compaction with changed source under one turn.
+The corrected fixture condition is separate from `configuration_update` projection.
+These isolated results demonstrate protocol behavior, not live model summary quality,
+Desktop acceptance, provider billing or production token pressure. No browser or real
+model was called and no installed engine was replaced.
 
 [CodexGPTWeb compaction](https://github.com/miuuyy/codex-chatgpt-web/blob/0901b9fb1976b4a984c7e9b4082c2868767bbf7c/src/responses/compaction.ts)
 separates Native compaction output from provider-readable summaries. Its unknown encrypted
