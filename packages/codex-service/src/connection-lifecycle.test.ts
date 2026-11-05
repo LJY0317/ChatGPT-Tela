@@ -2,6 +2,11 @@ import { expect, test } from "bun:test";
 import { ProfileConnectionError } from "./profile-operation";
 import { startCodexService } from "./controller";
 import type { CodexNativeTargetAdapter } from "./native-target";
+import { mkdtempSync, existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { prepareProfileOwnership } from "../../../apps/cli/src/profile-ownership";
+import { OWNERSHIP_MARKER, readOwnershipManifest, resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 
 function fixture(state: string, targetState: string, desktopProcessId?: number) {
   const target = { slot: 1, adapterKind: "default-desktop" as const, id: "default", displayName: "ChatGPT", state: targetState, managed: true };
@@ -42,6 +47,35 @@ test("profile startup passes the exact owned slot to its optional environment au
     await expect(service.startProfile(1)).rejects.toThrow(ProfileConnectionError);
     expect(observed).toEqual([1]);
   } finally { await service.close(); }
+});
+
+test("direct profile connection records fresh Electron partition ownership before runtime launch", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-direct-profile-owner-"));
+  const paths = resolveProductPaths({ platform: "darwin", home, environment: {} });
+  const native = fixture("available", "stopped");
+  const observed: string[] = [];
+  const service = await startCodexService({
+    config: {}, profileRuntimeCommand: ["unused"], nativeTargetAdapter: native.adapter,
+    async prepareProfileRuntime(slot) {
+      observed.push(`prepare:${slot}`);
+      const result = await prepareProfileOwnership({
+        slot, productPaths: paths, productVersion: "1.0.0", platform: "darwin", homeDirectory: home, environment: {},
+      });
+      expect(result.browserProfile.state).toBe("created-owned");
+    },
+    profileRuntimeEnvironment() {
+      observed.push("runtime");
+      throw Error("fixture stops before spawning Electron");
+    },
+  });
+  try {
+    await expect(service.startProfile(2)).rejects.toThrow(ProfileConnectionError);
+    expect(observed).toEqual(["prepare:2", "runtime"]);
+    const directory = join(home, "Library/Application Support/ChatGPT Tela/Canary-Profile2");
+    expect(existsSync(join(directory, OWNERSHIP_MARKER))).toBe(true);
+    expect(readOwnershipManifest(paths.installManifest)?.resources.some(resource =>
+      resource.kind === "directory" && resource.id === "browser-profile:2" && resource.path === directory)).toBe(true);
+  } finally { await service.close(); rmSync(home, { recursive: true, force: true }); }
 });
 
 test("explicit PID-bound reopen can replace an obsolete route without adopting it", async () => {

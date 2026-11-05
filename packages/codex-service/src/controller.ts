@@ -329,6 +329,8 @@ export async function startCodexService(input: {
   readonly config: CodexServiceConfig;
   readonly profileRuntimeCommand: readonly [string, ...string[]];
   readonly environment?: Readonly<Record<string, string | undefined>>;
+  /** Prepare persistent profile ownership before the runtime can create its Electron partition. */
+  readonly prepareProfileRuntime?: (slot: number) => Promise<void>;
   /** Re-read user-controlled profile preferences at each profile start without restarting the Codex service. */
   readonly profileRuntimeEnvironment?: (slot: number) => Readonly<Record<string, string | undefined>>;
   readonly nativeTargetAdapter?: CodexNativeTargetAdapter;
@@ -659,6 +661,7 @@ export async function startCodexService(input: {
         throw new Error(`${target.displayName} must be normally quit before Tela Codex can attach its route (state=${session.state})`);
       }
       progress("preparing");
+      await input.prepareProfileRuntime?.(slot);
       const route = routeId();
       const responsesToken = secret();
       const internalMcpToken = secret();
