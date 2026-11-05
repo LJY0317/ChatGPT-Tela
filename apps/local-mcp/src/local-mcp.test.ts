@@ -23,6 +23,7 @@ test("owned legacy plugin source is converted once before existing marketplace r
       installId: owner.installId, productVersion: owner.productVersion, resource })).state).toBe("created-owned");
     const launcher = join(home, "tela");
     const { plugin } = prepareLocalChatPlugin(root, launcher);
+    expect(JSON.parse(readFileSync(join(plugin, ".codex-plugin", "plugin.json"), "utf8")).version).toBe("0.0.2");
     const marketplacePath = join(home, ".agents", "plugins", "marketplace.json");
     const register = () => registerLocalMarketplace({ manifestPath: paths.installManifest, marketplacePath, pluginPath: plugin });
     expect(await register()).toBe("registered");
@@ -33,6 +34,10 @@ test("owned legacy plugin source is converted once before existing marketplace r
       renameSync(join(plugin, ".codex-plugin", "plugin.json"), join(plugin, "plugin.json"));
       rmdirSync(join(plugin, ".codex-plugin"));
       renameSync(join(plugin, ".mcp.json"), join(plugin, "mcp.json"));
+      const oldManifest = join(plugin, "plugin.json");
+      const metadata = JSON.parse(readFileSync(oldManifest, "utf8"));
+      metadata.version = "0.0.1";
+      writeFileSync(oldManifest, JSON.stringify(metadata, null, 2) + "\n");
     };
     legacyLayout();
     expect(existsSync(join(plugin, ".codex-plugin", "plugin.json"))).toBe(false);

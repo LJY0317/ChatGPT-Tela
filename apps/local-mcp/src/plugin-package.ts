@@ -36,9 +36,9 @@ export function prepareLocalChatPlugin(destination: string, launcher?: string) {
   return { root, plugin, marketplace };
 }
 
-function localPluginManifest() {
+function localPluginManifest(version = "0.0.2") {
   return { $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-    name: "tela-local-chat", version: "0.0.1", description: "Device-local Tela Chat MCP" };
+    name: "tela-local-chat", version, description: "Device-local Tela Chat MCP" };
 }
 
 function localMcpManifest(executable?: string) {
@@ -61,7 +61,7 @@ export function normalizeOwnedLocalChatPlugin(destination: string, launcher: str
   const oldManifest = join(plugin, "plugin.json");
   const oldMcp = join(plugin, "mcp.json");
   const expected = new Map([
-    ["plugin.json", JSON.stringify(localPluginManifest(), null, 2) + "\n"],
+    ["plugin.json", JSON.stringify(localPluginManifest("0.0.1"), null, 2) + "\n"],
     ["mcp.json", JSON.stringify(localMcpManifest(resolve(launcher)), null, 2) + "\n"],
   ]);
   if (entries.sort().join(",") !== "mcp.json,plugin.json"
