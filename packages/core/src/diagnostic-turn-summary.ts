@@ -183,6 +183,10 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
 export function startTurnDiagnosticSummary(scope: string, turn: string, request?: string) {
   if(!fp(scope)||!fp(turn)||!configuredDiagnosticRoot())return;
   const startedAt=performance.now();
+  // A cycle can be closed while admitting a later HTTP request. Its receipt must
+  // retain the request that started this cycle, not inherit the closer's context.
+  const cycleOrigin = {scope_fingerprint:scope,turn_fingerprint:turn,
+    ...(fp(request)?{request_fingerprint:request}:{})};
   const durable = new Map<string,StructuralDiagnosticEvent>();
   const rows:StructuralDiagnosticEvent[]=[];const requests=new Set<string>(fp(request)?[request]:[]);
   let clipped=false,closed=false;
@@ -201,8 +205,8 @@ export function startTurnDiagnosticSummary(scope: string, turn: string, request?
     if(rows.length>=512){clipped=true;rows.shift();}rows.push(row);
   });
   if(!stop)return;
-  withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn,...(fp(request)?{request_fingerprint:request}:{})},()=>
-    emitDiagnosticEvent('chatgpt_tela_work','native_cycle_observation_started'));
+  withDiagnosticContext(cycleOrigin,()=>
+    emitDiagnosticEvent('chatgpt_tela_work','native_cycle_observation_started'),false);
   return {finish(){
     if(closed)return;closed=true;
     try{
@@ -227,7 +231,7 @@ export function startTurnDiagnosticSummary(scope: string, turn: string, request?
         ...(s.context.logicalEstimate===undefined?{}:{logical_estimate:s.context.logicalEstimate}),
         ...(s.context.transferEstimate===undefined?{}:{transfer_estimate:s.context.transferEstimate}),
       };
-      withDiagnosticContext({scope_fingerprint:scope,turn_fingerprint:turn},()=>emitDiagnosticEvent('chatgpt_tela_work','native_cycle_summary',fields));
+      withDiagnosticContext(cycleOrigin,()=>emitDiagnosticEvent('chatgpt_tela_work','native_cycle_summary',fields),false);
       const root=configuredDiagnosticRoot();
       if(root&&receipt)writeDiagnosticIncident(root,{stage:receipt.stage,observedAt:receipt.ts,timeline:[...durable.values(),receipt]});
     }catch{/* Diagnostics never affect lifecycle. */}

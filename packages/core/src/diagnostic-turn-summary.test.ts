@@ -46,6 +46,22 @@ test('process-local cycle summary closes once, isolates scope and releases its o
  }finally{observer.finish();if(old===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=old;rmSync(root,{recursive:true,force:true});}
 });
 
+test('closing an old cycle during a later request preserves the original receipt identity',()=>{
+ const root=mkdtempSync(join(tmpdir(),'tela-cycle-origin-')),file=join(root,'events.jsonl');
+ const old=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=file;
+ const laterRequest='a'.repeat(24),laterOperation='b'.repeat(24);
+ try{
+  const observer=startTurnDiagnosticSummary(scope,turn,request)!;
+  withDiagnosticContext({request_fingerprint:laterRequest,operation_fingerprint:laterOperation},()=>observer.finish());
+  const rows=readFileSync(file,'utf8').trim().split('\n').map(s=>JSON.parse(s));
+  for(const stage of ['native_cycle_observation_started','native_cycle_summary']){
+   const row=rows.find(x=>x.stage===stage);
+   expect(row.request_fingerprint).toBe(request);
+   expect(row.operation_fingerprint).toBeUndefined();
+  }
+ }finally{if(old===undefined)delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=old;rmSync(root,{recursive:true,force:true});}
+});
+
 test('late inspection cannot inflate completed duration and a new cycle cannot inherit the old final',()=>{
  const first=e('native_cycle_observation_started'),final=e('native_outcome_committed',{outcome:'final'});
  const late=e('inspection_input_observed');(late as any).ts=new Date(Date.parse(final.ts)+600000).toISOString();
