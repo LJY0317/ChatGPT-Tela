@@ -249,6 +249,13 @@ Tela-specific engine fork is a separate dependency. Prefer public Codex contract
 | Automatic pressure without usage | The isolated official-engine fixture observed zero automatic compactions with `usage: null`. Synthetic reported usage above the threshold triggered automatic compaction, accepted summaries and subsequent Web planning. This does not establish live provider usage, billing or Desktop behavior. Do not fabricate provider usage in production. |
 | Live catalog refresh | A fork RPC refreshes an engine catalog but does not invalidate Desktop's picker cache. Retain capability-gated compatibility while verifying supported lifecycle behavior; do not add another refresh protocol. |
 
+The exact official `rust-v0.166.0-alpha.6` `ModelInfo` source does not contain the
+fork's `compaction_mode` or `prefers_local_compaction` selector. Do not attribute
+the modified 0.159 source's history estimator to that official catalog contract.
+An input-only Responses provider need not acquire Native history authority, but
+cannot recover history omitted by its host. This narrower contract does not by
+itself connect the existing ChatGPT Web UI to official Native tool-call output.
+
 The local text transport remains compatible with the installed preview. The legacy Web
 `/responses/compact` endpoint remains unsupported; standard compaction-v2 is supported.
 Terminal source/budget errors use HTTP 400 with their existing recovery codes: the
