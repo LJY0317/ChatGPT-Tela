@@ -21,12 +21,14 @@ UI event contract exposes no authenticated structured Native tool-call intent
 or result-continuation receipt. Rendered Markdown cannot supply that authority;
 real Web-to-official-Native-tool continuation remains unaccepted.
 
-Native-only Computer Use restoration is a separate acceptance gate from
-Web-to-Native tool continuation. First verify the existing Web-off, ordinary
-official-app launch path after active owned work has settled. Do not delay that
-check for a missing Web tool-call contract, or treat a signed externally
-started engine as an app-owned engine. A shared-engine replacement must still
-pass the Web, history and compaction gates above.
+Native-only recovery is separate from Web-to-Native tool continuation. On
+macOS, ordinary official-app launch with Tela Web disconnected accepted a real
+Native `cua.getState()` call on official engine 0.166: app enumeration and
+browser discovery returned without errors. Clicking, screenshots and browser
+interaction remain unaccepted. The Tela-owned engine route still failed
+Native pipe/browser-host startup in the other profile. Do not treat a signed
+externally started engine as app-owned, or generalize Native-only acceptance
+to a shared-engine replacement: Web, history and compaction gates remain.
 
 ## Accepted, owned operation
 
