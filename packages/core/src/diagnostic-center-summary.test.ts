@@ -44,3 +44,25 @@ test('context reads a bounded durable cycle after detailed events rotate away',(
   expect(busy.turns[0].plans[0].transferTokenEstimate).toBe(4);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+test('compact context view preserves separate requests and sends within one exact turn',()=>{
+ const root=mkdtempSync(join(tmpdir(),'tela-request-view-')),file=join(root,'events.jsonl');
+ const at='2026-11-05T10:00:00.000Z',scope='a'.repeat(24),turn='b'.repeat(24);
+ const first='c'.repeat(24),second='d'.repeat(24),operation='e'.repeat(24);
+ try{
+  const base={ts:at,event:'chatgpt_tela_work',scope_fingerprint:scope,turn_fingerprint:turn};
+  const events=[first,second].flatMap(request_fingerprint=>[
+   {...base,stage:'web_turn_plan',request_fingerprint,operation_fingerprint:operation,context_mode:'retained-delta'},
+   {...base,stage:'web_send_activation_started',request_fingerprint,operation_fingerprint:operation},
+   {...base,stage:'web_turn_identity_accepted',request_fingerprint,operation_fingerprint:operation,causal_receipt:true},
+   {...base,stage:'native_cycle_summary',request_fingerprint,contract_version:1,state:'completed',web_send_count:1,web_accept_count:1},
+  ]);
+  writeFileSync(file,events.map(row=>JSON.stringify(row)).join('\n')+'\n');
+  const flags:Record<string,string>={'--view':'summary','--scope':scope,'--at':at};
+  const report:any=diagnosticCenter(root,[file],'context',key=>flags[key]);
+  expect(report.turns[0].cycleReceipts.map((r:any)=>r.requestFingerprint)).toEqual([first,second]);
+  expect(report.turns[0].requestBoundaries.filter((r:any)=>r.stage==='web_turn_identity_accepted')
+   .map((r:any)=>r.requestFingerprint)).toEqual([first,second]);
+  expect(report.turns[0].requestBoundaries).toHaveLength(8);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

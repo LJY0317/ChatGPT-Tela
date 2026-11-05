@@ -38,7 +38,8 @@ export function diagnosticCenter(root: string, paths: readonly string[], command
     const selected=report.turns.slice(-limit);
     return { ...report,view,selection:{turnLimit:limit,turnsOmitted:report.turns.length-selected.length},
       turns:view==="full"?selected:selected.map(t=>({scopeFingerprint:t.scopeFingerprint,turnFingerprint:t.turnFingerprint,
-        outcome:t.outcome,completionEvidence:t.completionEvidence,summary:t.summary,cycleReceipts:t.cycleReceipts.slice(-1)})),
+        outcome:t.outcome,completionEvidence:t.completionEvidence,summary:t.summary,
+        requestBoundaries:t.requestBoundaries,cycleReceipts:t.cycleReceipts})),
       sourceCoverage: source.coverage, archivedCycleEvents:source.archivedEvents,
       incidentsRead:source.incidentsRead, incidentsUnavailable:source.incidentsUnavailable,
       sourceLimitReached: source.sourceLimitReached, byteLimitReached: source.byteLimitReached, excludedTestEvents: source.excludedTestEvents };

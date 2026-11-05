@@ -97,6 +97,27 @@ test('previous cycle summary cannot mark a newly started cycle complete',()=>{
  const r=summarizeContextContinuity({events:[event('native_cycle_summary',{contract_version:1,state:'completed',local_final_committed:true,summary_complete:true}),event('native_cycle_observation_started')],atMs:100000});
  expect(r.turns[0].completionEvidence).toBe('not_observed');expect(r.turns[0].summary.state).toBe('in_progress');
 });
+test('one Native turn exposes distinct request dispatches without counting progress as inference',()=>{
+ const another='a'.repeat(24), secondOperation='b'.repeat(24);
+ const rows=[
+  plan('retained-delta',{request_fingerprint:request}),
+  event('web_send_activation_started',{request_fingerprint:request,operation_fingerprint:operation}),
+  event('web_turn_identity_accepted',{request_fingerprint:request,operation_fingerprint:operation,causal_receipt:true}),
+  event('web_public_progress_extraction',{request_fingerprint:request}),
+  event('native_cycle_summary',{request_fingerprint:request,contract_version:1,state:'completed',web_send_count:1,web_accept_count:1}),
+  plan('retained-delta',{request_fingerprint:another,operation_fingerprint:secondOperation}),
+  event('web_send_activation_started',{request_fingerprint:another,operation_fingerprint:secondOperation}),
+  event('web_turn_identity_accepted',{request_fingerprint:another,operation_fingerprint:secondOperation,causal_receipt:true}),
+  event('native_cycle_summary',{request_fingerprint:another,contract_version:1,state:'completed',web_send_count:1,web_accept_count:1}),
+ ];
+ const [turn]=summarizeContextContinuity({events:rows,atMs:100000,scope}).turns;
+ expect(turn.plans.map((p:any)=>p.requestFingerprint)).toEqual([request,another]);
+ expect(turn.cycleReceipts.map((r:any)=>r.requestFingerprint)).toEqual([request,another]);
+ expect(turn.requestBoundaries.map((r:any)=>r.stage)).toEqual([
+  'web_turn_plan','web_send_activation_started','web_turn_identity_accepted','native_cycle_summary',
+  'web_turn_plan','web_send_activation_started','web_turn_identity_accepted','native_cycle_summary']);
+ expect(turn.requestBoundaries.filter((r:any)=>r.stage==='web_turn_identity_accepted').map((r:any)=>r.requestFingerprint)).toEqual([request,another]);
+});
 test('retained boundary structure survives report sanitation without request prose',()=>{
  const row=event('web_retained_context_decision',{reason_class:'answer_boundary_missing',retained_revision_count:8,
   retained_input_head_found:true,retained_input_head_fingerprint:head,retained_input_head_index:2,

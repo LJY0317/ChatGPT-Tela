@@ -3,6 +3,11 @@ import { structuralDiagnosticEvent, type StructuralDiagnosticEvent } from "./dia
 
 const FP = /^[a-f0-9]{24}$/;
 const MODES = new Set(["full", "checkpoint-delta", "retained-delta"]);
+const REQUEST_BOUNDARIES = new Set([
+  "native_cycle_observation_started", "native_steering_cycle_started", "web_turn_plan",
+  "web_send_activation_started", "web_turn_identity_accepted", "context_checkpoint_provider_invoked",
+  "checkpoint_operation_observed", "native_outcome_committed", "native_cycle_summary",
+]);
 const fp = (v: unknown): string | undefined => typeof v === "string" && FP.test(v) ? v : undefined;
 const count = (v: unknown): number | undefined => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : undefined;
 
@@ -91,7 +96,9 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
         : surface === previous.surfaceFingerprint && epoch === previous.epochFingerprint
           && generation === previous.documentGeneration && retainedInputHead === previous.headRevisionFingerprint
           ? "verified_local_link" : "unmatched_local_link";
-      const plan = { at: row.ts, mode, retentionLink: link, surfaceFingerprint: surface, epochFingerprint: epoch,
+      const plan = { at: row.ts, requestFingerprint: fp(row.request_fingerprint),
+        operationFingerprint: fp(row.operation_fingerprint), mode, retentionLink: link,
+        surfaceFingerprint: surface, epochFingerprint: epoch,
         documentGeneration: generation, headRevisionFingerprint: fp(row.head_revision_fingerprint),
         baseRevisionFingerprint: base, checkpointFingerprint: fp(row.checkpoint_fingerprint), checkpointCount: count(row.checkpoint_count),
         retainedInputHeadFingerprint: retainedInputHead,
@@ -135,6 +142,14 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
   for (const [key,state] of turns) {
     const observations=attributedRows.get(key)??[];
     state.summary=summarizeTurnDiagnostics(observations);
+    // Preserve the sparse request/model-dispatch boundaries across multiple cycles of one
+    // Native turn. Progress/approval observations are never additional model requests.
+    state.requestBoundaries=observations.filter(row=>REQUEST_BOUNDARIES.has(row.stage)).slice(-128).map(row=>({
+      at:row.ts,stage:row.stage,requestFingerprint:fp(row.request_fingerprint),
+      operationFingerprint:fp(row.operation_fingerprint),
+      ...(row.stage==="web_turn_identity_accepted"?{causalReceipt:row.causal_receipt===true}:{}),
+      ...(row.stage==="checkpoint_operation_observed"?{submissionAccepted:row.submission_accepted===true}:{}),
+    }));
     state.retentionDecisions=observations.filter(row=>row.stage==='web_retained_context_decision').map(row=>({
       at:row.ts,reason:row.reason_class,reuseEligible:row.reuse_eligible,priorSettlementPresent:row.prior_settlement_present,
       inputEstimate:count(row.epoch_input_estimate),rolloverLimit:count(row.epoch_rollover_limit),
@@ -157,7 +172,8 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
       truncatedAssistant:latestPlan.projectionTruncatedAssistant,truncatedToolResults:latestPlan.projectionTruncatedToolResults,
     }:undefined;
     state.cycleReceipts=observations.filter(row=>row.stage==="native_cycle_summary"&&row.contract_version===1).slice(-16).map(row=>({
-      at:row.ts,state:row.state,firstFailure:row.first_reason_class??row.reason_class,localFinalCommitted:row.local_final_committed===true,complete:row.summary_complete===true,
+      at:row.ts,requestFingerprint:fp(row.request_fingerprint),operationFingerprint:fp(row.operation_fingerprint),
+      state:row.state,firstFailure:row.first_reason_class??row.reason_class,localFinalCommitted:row.local_final_committed===true,complete:row.summary_complete===true,
       coverage:"process_local_observation",observedEvents:count(row.observed_event_count),durationMs:count(row.duration_ms),
       webSends:count(row.web_send_count),accepted:count(row.web_accept_count),causal:row.causal_receipt===true,
       toolQueued:count(row.tool_queued_count),toolResults:count(row.tool_result_count),toolReleased:count(row.tool_release_count),
