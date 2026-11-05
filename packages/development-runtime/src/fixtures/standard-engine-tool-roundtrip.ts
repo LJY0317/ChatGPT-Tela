@@ -18,9 +18,13 @@ const imageEffort = process.argv.includes("--image-effort");
 const interrupt = process.argv.includes("--interrupt");
 const inspectTools = process.argv.includes("--inspect-tools");
 const defaultToolMode = process.argv.includes("--default-tool-mode");
+const mcpEnabled = process.argv.includes("--mcp-enabled");
+const mcpDisabled = process.argv.includes("--mcp-disabled");
 assert(!(imageEffort && interrupt), "run one fixture scenario at a time");
 assert(!inspectTools || (!imageEffort && !interrupt), "tool declaration inspection is a separate scenario");
 assert(!defaultToolMode || inspectTools, "default tool mode applies to tool inspection only");
+assert(!(mcpEnabled && mcpDisabled), "select one MCP enablement control");
+assert(!(mcpEnabled || mcpDisabled) || inspectTools, "MCP control requires tool inspection");
 const root = mkdtempSync(join(tmpdir(), "tela-official-tool-roundtrip-"));
 const home = join(root, "home"); mkdirSync(home);
 const model = chatGptWebModelId(chatGptWebFamilyKey("Official Tool Roundtrip Fixture"));
@@ -28,6 +32,8 @@ const original = JSON.parse(readFileSync(catalogPath, "utf8")) as { models: Reco
 const template = original.models[0]!;
 assert(template?.slug, "a public model catalog template is required");
 const modelCatalog = join(root, "models.json");
+const mcpLog = join(root, "mcp.jsonl");
+if (mcpEnabled || mcpDisabled) writeFileSync(mcpLog, "");
 // In original-detail mode the public LocalImage contract preserves these exact PNG bytes.
 const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==", "base64");
 const imagePath = join(root, "synthetic.png");
@@ -44,6 +50,9 @@ const marker = "TELA_OFFICIAL_TOOL_ROUNDTRIP_OK";
 let requestCount = 0, toolResultSeen = 0, finalIssued = 0;
 let declaration: { location: string; namespace: string | null; parameterType: string;
   commandType: string; commandRequired: boolean } | null = null;
+let mcpDeclaredTools: string[] = [];
+let mcpDiscovery: { callId: string; names: string[]; status: string;
+  schemaType: string | null; deferLoading: boolean | null } | null = null;
 let imageMatched = 0, effortMatched = 0, providerRequestClosed = false;
 let markBlocked!: () => void;
 const blockedRequest = new Promise<void>(resolve => { markBlocked = resolve; });
@@ -53,7 +62,33 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   assert.equal(body.stream, true);
   requestCount++;
   if (inspectTools) {
-    assert.equal(requestCount, 1, "tool inspection needs only the initial model request");
+    assert(requestCount <= (mcpEnabled ? 2 : 1), "unexpected extra tool inspection request");
+    if (mcpEnabled && requestCount === 2) {
+      // In alpha.6 an ordinary MCP tool is deferred: the engine's own
+      // tool_search_output, not the initial additional_tools, reveals its schema.
+      const outputs = body.input?.filter((item: any) => item.type === "tool_search_output"
+        && item.call_id === "fixture-mcp-discovery") ?? [];
+      assert.equal(outputs.length, 1, "official Native engine must return its own discovery output");
+      const tools = outputs[0].tools ?? [];
+      const definitions = tools.flatMap((item: any) => item.type === "namespace"
+        ? item.tools ?? [] : [item]);
+      const names = definitions.map((item: any) => item.name);
+      const discovered = definitions.find((item: any) => item.name?.includes("fixture_probe"));
+      mcpDiscovery = { callId: outputs[0].call_id, names,
+        status: outputs[0].status, schemaType: discovered?.parameters?.type ?? null,
+        deferLoading: discovered?.defer_loading ?? null };
+      assert.equal(mcpDiscovery.status, "completed");
+      assert(names.some((name: string) => name?.includes("fixture_probe")),
+        "official Native MCP search should resolve the isolated tool");
+      assert.equal(mcpDiscovery.schemaType, "object");
+      const outcome: NativeGatewayOutcome = { type: "final", answer: "MCP discovery verified.",
+        delivery: { capability: "synthetic-provider" } };
+      finalIssued++;
+      const encoded = encodeNativeResponsesOutcome({ outcome, model: body.model });
+      assert.equal(encoded.response.usage, null);
+      return new Response(nativeResponsesSsePlan(outcome, encoded).frames.join(""),
+        { headers: { "content-type": "text/event-stream" } });
+    }
     // Official Responses Lite transmits tool declarations as a durable input item.
     // Other standard Responses providers may use top-level tools instead.
     const additional = body.input?.filter((item: any) => item.type === "additional_tools") ?? [];
@@ -72,10 +107,16 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
     declaration = { location: additional.length ? "input.additional_tools" : "tools",
       namespace: namespace?.name ?? null, parameterType: entry.parameters.type,
       commandType: entry.parameters.properties.cmd.type, commandRequired: true };
-    const outcome: NativeGatewayOutcome = { type: "final",
-      answer: "Verified official Native tool declaration.",
-      delivery: { capability: "synthetic-provider" } };
-    finalIssued++;
+    const all = (items: any[]): any[] => items.flatMap(item => item.type === "namespace"
+      ? all(item.tools ?? []) : [item]);
+    mcpDeclaredTools = all(tools).map(item => String(item.name ?? item.type));
+    const outcome: NativeGatewayOutcome = mcpEnabled
+      ? { type: "tool-call", item: { type: "tool_search_call",
+          call_id: "fixture-mcp-discovery", arguments: { query: "fixture_probe" } },
+          delivery: { capability: "synthetic-provider", callId: "fixture-mcp-discovery" } }
+      : { type: "final", answer: "Verified official Native tool declaration.",
+          delivery: { capability: "synthetic-provider" } };
+    if (!mcpEnabled) finalIssued++;
     const encoded = encodeNativeResponsesOutcome({ outcome, model: body.model });
     assert.equal(encoded.response.usage, null);
     return new Response(nativeResponsesSsePlan(outcome, encoded).frames.join(""),
@@ -139,6 +180,14 @@ writeFileSync(join(home, "config.toml"), [
   `model_catalog_json = ${JSON.stringify(modelCatalog)}`, 'model_reasoning_effort = "medium"',
   '[model_providers.fixture]', 'name = "OpenAI"', `base_url = "${server.url}v1"`,
   'wire_api = "responses"', 'requires_openai_auth = false',
+  ...(mcpEnabled || mcpDisabled ? [
+    // Official mcp_servers configuration, never an installed app/plugin toggle.
+    '[mcp_servers.fixture_isolation]',
+    `command = ${JSON.stringify(process.execPath)}`,
+    `args = ${JSON.stringify([join(import.meta.dir, "standard-engine-mcp-stub.ts"), mcpLog])}`,
+    `enabled = ${mcpEnabled}`,
+    'startup_timeout_sec = 10',
+  ] : []),
 ].join("\n"));
 const child = Bun.spawn([engine, "app-server", "--stdio"], {
   cwd: root, env: { PATH: process.env.PATH!, HOME: process.env.HOME!, CODEX_HOME: home,
@@ -204,12 +253,28 @@ try {
   }
   const completed = await notification("turn/completed");
   assert.equal(completed.params.turn.status, interrupt ? "interrupted" : "completed");
-  assert.equal(requestCount, interrupt || inspectTools ? 1 : 2);
+  assert.equal(requestCount, interrupt || inspectTools && !mcpEnabled ? 1 : 2);
   assert.equal(toolResultSeen, interrupt || inspectTools ? 0 : 1);
   assert.equal(finalIssued, interrupt ? 0 : 1);
   if (inspectTools) {
     assert(declaration, "official Native tool declaration must be provider-visible");
     assert.equal(toolResultSeen, 0, "inspection must not execute synthetic tools");
+  }
+  const mcpMethods = mcpEnabled || mcpDisabled
+    ? readFileSync(mcpLog, "utf8").trim().split("\n").filter(Boolean)
+      .map(line => (JSON.parse(line) as { method: string }).method)
+    : [];
+  if (mcpEnabled || mcpDisabled) console.log(JSON.stringify({ diagnostic: "mcp_tool_probe",
+    enabled: mcpEnabled, mcpMethods, mcpDeclaredTools }));
+  if (mcpEnabled) {
+    assert(mcpMethods.includes("initialize"), "enabled MCP stub must initialize");
+    assert(mcpMethods.includes("tools/list"), "enabled MCP stub must publish its tool list");
+    assert(mcpDeclaredTools.includes("tool_search"), "deferred MCP tools require official search");
+    assert(mcpDiscovery, "official Native search result is required");
+  }
+  if (mcpDisabled) {
+    assert.equal(mcpMethods.length, 0, "disabled MCP stub must never start");
+    assert.equal(mcpDeclaredTools.filter(name => name.includes("fixture_probe")).length, 0);
   }
   if (interrupt) assert(providerRequestClosed, "the blocked provider response must close on interrupt");
   if (imageEffort) { assert.equal(imageMatched, 2); assert.equal(effortMatched, 2); }
@@ -217,7 +282,10 @@ try {
     publicAppServer: true, syntheticProvider: true, responseUsage: null, requestCount,
     toolInspection: inspectTools, modelToolMode: defaultToolMode ? null : "direct",
     declaration,
-    toolCallName: interrupt ? null : "exec_command", toolCallIdMatched: !interrupt && !inspectTools,
+    ...(inspectTools ? { modelVisibleToolNames: mcpDeclaredTools } : {}),
+    ...(mcpEnabled || mcpDisabled ? { mcpEnabled, mcpDeclaredTools, mcpMethods, mcpDiscovery } : {}),
+    toolCallName: inspectTools ? mcpEnabled ? "tool_search" : null
+      : interrupt ? null : "exec_command", toolCallIdMatched: !interrupt && !inspectTools,
     hostToolResultSeen: toolResultSeen,
     finalAnswerAccepted: !interrupt, imageOriginalBytesMatched: imageMatched,
     reasoningEffortMatched: effortMatched, interrupted: interrupt, providerRequestClosed,
