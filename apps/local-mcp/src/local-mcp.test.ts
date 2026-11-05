@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, cpSync, rmSync, readFileSync, readdirSync, writeFileSync, renameSync, rmdirSync, existsSync } from "node:fs";
+import { mkdtempSync, cpSync, rmSync, readFileSync, readdirSync, writeFileSync, renameSync, rmdirSync, existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -10,17 +10,32 @@ import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest, p
 import { normalizeOwnedLocalChatPlugin, prepareLocalChatPlugin } from "./plugin-package";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 
+async function ownedPluginRoot(home: string) {
+  const paths = resolveProductPaths({ home, environment: {} });
+  const owner = createOwnershipManifest("test", new Date(), "legacy-plugin");
+  writeOwnershipManifest(paths.installManifest, owner);
+  const root = join(paths.stateRoot, "install", "local-chat-plugin");
+  const resource = { kind: "directory" as const, id: "local-chat-plugin-source",
+    owner: "product" as const, path: root, dataClass: "binary" as const };
+  expect((await prepareOwnedDirectory({ manifestPath: paths.installManifest,
+    installId: owner.installId, productVersion: owner.productVersion, resource })).state).toBe("created-owned");
+  return { paths, root };
+}
+
+function legacyLayout(plugin: string) {
+  renameSync(join(plugin, ".codex-plugin", "plugin.json"), join(plugin, "plugin.json"));
+  rmdirSync(join(plugin, ".codex-plugin"));
+  renameSync(join(plugin, ".mcp.json"), join(plugin, "mcp.json"));
+  const oldManifest = join(plugin, "plugin.json");
+  const metadata = JSON.parse(readFileSync(oldManifest, "utf8"));
+  metadata.version = "0.0.1";
+  writeFileSync(oldManifest, JSON.stringify(metadata, null, 2) + "\n");
+}
+
 test("owned legacy plugin source is converted once before existing marketplace re-registration; custom source is preserved", async () => {
   const home = mkdtempSync(join(tmpdir(), "tela-local-plugin-update-"));
   try {
-    const paths = resolveProductPaths({ home, environment: {} });
-    const owner = createOwnershipManifest("test", new Date(), "legacy-plugin");
-    writeOwnershipManifest(paths.installManifest, owner);
-    const root = join(paths.stateRoot, "install", "local-chat-plugin");
-    const resource = { kind: "directory" as const, id: "local-chat-plugin-source",
-      owner: "product" as const, path: root, dataClass: "binary" as const };
-    expect((await prepareOwnedDirectory({ manifestPath: paths.installManifest,
-      installId: owner.installId, productVersion: owner.productVersion, resource })).state).toBe("created-owned");
+    const { paths, root } = await ownedPluginRoot(home);
     const launcher = join(home, "tela");
     const { plugin } = prepareLocalChatPlugin(root, launcher);
     expect(JSON.parse(readFileSync(join(plugin, ".codex-plugin", "plugin.json"), "utf8")).version).toBe("0.0.2");
@@ -30,16 +45,7 @@ test("owned legacy plugin source is converted once before existing marketplace r
     expect(await register()).toBe("already-registered");
 
     // Recreate the exact old generated layout, as a previously registered consumer would retain.
-    const legacyLayout = () => {
-      renameSync(join(plugin, ".codex-plugin", "plugin.json"), join(plugin, "plugin.json"));
-      rmdirSync(join(plugin, ".codex-plugin"));
-      renameSync(join(plugin, ".mcp.json"), join(plugin, "mcp.json"));
-      const oldManifest = join(plugin, "plugin.json");
-      const metadata = JSON.parse(readFileSync(oldManifest, "utf8"));
-      metadata.version = "0.0.1";
-      writeFileSync(oldManifest, JSON.stringify(metadata, null, 2) + "\n");
-    };
-    legacyLayout();
+    legacyLayout(plugin);
     expect(existsSync(join(plugin, ".codex-plugin", "plugin.json"))).toBe(false);
     normalizeOwnedLocalChatPlugin(root, launcher);
     expect(existsSync(join(plugin, ".codex-plugin", "plugin.json"))).toBe(true);
@@ -48,12 +54,45 @@ test("owned legacy plugin source is converted once before existing marketplace r
     expect(await register()).toBe("already-registered");
 
     // A changed legacy package is user data: do not silently rewrite it.
-    legacyLayout();
+    legacyLayout(plugin);
     writeFileSync(join(plugin, "mcp.json"), "user-modified");
     expect(() => normalizeOwnedLocalChatPlugin(root, launcher)).toThrow("modified; preserved");
     expect(readFileSync(join(plugin, "mcp.json"), "utf8")).toBe("user-modified");
     expect(existsSync(join(plugin, ".codex-plugin"))).toBe(false);
     expect(await register()).toBe("already-registered");
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("owned legacy normalization preserves an external plugin reached through a symlink", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-local-plugin-link-"));
+  try {
+    const { root } = await ownedPluginRoot(home);
+    const launcher = join(home, "tela");
+    const external = prepareLocalChatPlugin(join(home, "external"), launcher).plugin;
+    legacyLayout(external);
+    mkdirSync(join(root, "plugins"));
+    symlinkSync(external, join(root, "plugins", "tela-local-chat"), "dir");
+    expect(() => normalizeOwnedLocalChatPlugin(root, launcher)).toThrow("preserved");
+    expect(existsSync(join(external, "plugin.json"))).toBe(true);
+    expect(existsSync(join(external, "mcp.json"))).toBe(true);
+    expect(existsSync(join(external, ".codex-plugin"))).toBe(false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("incomplete current plugin source is preserved; current user edits are accepted", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-local-plugin-current-"));
+  try {
+    const { root } = await ownedPluginRoot(home);
+    const launcher = join(home, "tela");
+    const plugin = prepareLocalChatPlugin(root, launcher).plugin;
+    const manifest = join(plugin, ".codex-plugin", "plugin.json");
+    writeFileSync(manifest, "user-edited standard manifest");
+    normalizeOwnedLocalChatPlugin(root, launcher);
+    expect(readFileSync(manifest, "utf8")).toBe("user-edited standard manifest");
+    rmSync(manifest);
+    expect(() => normalizeOwnedLocalChatPlugin(root, launcher)).toThrow("preserved");
+    expect(readdirSync(join(plugin, ".codex-plugin"))).toEqual([]);
+    expect(existsSync(join(plugin, ".mcp.json"))).toBe(true);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 

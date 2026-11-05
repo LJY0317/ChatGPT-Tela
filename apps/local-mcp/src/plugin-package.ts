@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 /** Prepare an inactive marketplace; installation remains a separate host operation. */
@@ -50,12 +50,20 @@ function localMcpManifest(executable?: string) {
 
 /** Called only after the product ownership marker and install manifest match. */
 export function normalizeOwnedLocalChatPlugin(destination: string, launcher: string): void {
-  const plugin = join(resolve(destination), "plugins", "tela-local-chat");
+  const root = resolve(destination);
+  const plugin = join(root, "plugins", "tela-local-chat");
   const standardManifest = join(plugin, ".codex-plugin", "plugin.json");
   const standardMcp = join(plugin, ".mcp.json");
+  // An owned root does not imply ownership of a linked child directory.
+  if (realpathSync(plugin) !== join(realpathSync(root), "plugins", "tela-local-chat"))
+    throw Error("existing local plugin source was modified; preserved");
   const entries = readdirSync(plugin);
   if (entries.includes(".codex-plugin") && entries.includes(".mcp.json")) {
-    // A current source may contain user edits. Leave it untouched on re-registration.
+    // Current source contents may be edited, but the required layout must exist.
+    if (!lstatSync(join(plugin, ".codex-plugin")).isDirectory()
+      || !existsSync(standardManifest) || !lstatSync(standardManifest).isFile()
+      || !lstatSync(standardMcp).isFile())
+      throw Error("existing local plugin source was modified; preserved");
     return;
   }
   const oldManifest = join(plugin, "plugin.json");
@@ -78,8 +86,12 @@ export function normalizeOwnedLocalChatPlugin(destination: string, launcher: str
     renameSync(oldMcp, standardMcp);
   } catch (error) {
     // Restore the previous layout if the second rename fails.
-    if (readdirSync(manifestDir).includes("plugin.json")) renameSync(standardManifest, oldManifest);
-    rmdirSync(manifestDir);
+    try {
+      if (readdirSync(manifestDir).includes("plugin.json")) renameSync(standardManifest, oldManifest);
+      rmdirSync(manifestDir);
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], "local plugin normalization failed; rollback incomplete");
+    }
     throw error;
   }
 }
