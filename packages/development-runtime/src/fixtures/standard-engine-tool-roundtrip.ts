@@ -16,7 +16,11 @@ const engine = resolve(option("--engine")!);
 const catalogPath = resolve(option("--catalog")!);
 const imageEffort = process.argv.includes("--image-effort");
 const interrupt = process.argv.includes("--interrupt");
+const inspectTools = process.argv.includes("--inspect-tools");
+const defaultToolMode = process.argv.includes("--default-tool-mode");
 assert(!(imageEffort && interrupt), "run one fixture scenario at a time");
+assert(!inspectTools || (!imageEffort && !interrupt), "tool declaration inspection is a separate scenario");
+assert(!defaultToolMode || inspectTools, "default tool mode applies to tool inspection only");
 const root = mkdtempSync(join(tmpdir(), "tela-official-tool-roundtrip-"));
 const home = join(root, "home"); mkdirSync(home);
 const model = chatGptWebModelId(chatGptWebFamilyKey("Official Tool Roundtrip Fixture"));
@@ -29,7 +33,7 @@ const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA
 const imagePath = join(root, "synthetic.png");
 if (imageEffort) writeFileSync(imagePath, imageBytes);
 writeFileSync(modelCatalog, JSON.stringify({ models: [{ ...template, slug: model,
-  display_name: "Official Tool Roundtrip Fixture", tool_mode: "direct",
+  display_name: "Official Tool Roundtrip Fixture", tool_mode: defaultToolMode ? null : "direct",
   supported_reasoning_levels: [{ effort: "medium", description: "Fixture" },
     { effort: "high", description: "Fixture" }],
   default_reasoning_level: "medium",
@@ -38,6 +42,8 @@ writeFileSync(modelCatalog, JSON.stringify({ models: [{ ...template, slug: model
 const callId = "fixture-command-once";
 const marker = "TELA_OFFICIAL_TOOL_ROUNDTRIP_OK";
 let requestCount = 0, toolResultSeen = 0, finalIssued = 0;
+let declaration: { location: string; namespace: string | null; parameterType: string;
+  commandType: string; commandRequired: boolean } | null = null;
 let imageMatched = 0, effortMatched = 0, providerRequestClosed = false;
 let markBlocked!: () => void;
 const blockedRequest = new Promise<void>(resolve => { markBlocked = resolve; });
@@ -46,6 +52,35 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   assert.equal(body.model, model);
   assert.equal(body.stream, true);
   requestCount++;
+  if (inspectTools) {
+    assert.equal(requestCount, 1, "tool inspection needs only the initial model request");
+    // Official Responses Lite transmits tool declarations as a durable input item.
+    // Other standard Responses providers may use top-level tools instead.
+    const additional = body.input?.filter((item: any) => item.type === "additional_tools") ?? [];
+    const advertised = additional.flatMap((item: any) => item.tools ?? []);
+    const tools = [...(body.tools ?? []), ...advertised];
+    const namespace = tools.find((item: any) => item.type === "namespace"
+      && item.tools?.some((nested: any) => nested.name === "exec_command"));
+    const entry = tools.find((item: any) => item.name === "exec_command")
+      ?? namespace?.tools.find((item: any) => item.name === "exec_command");
+    assert(entry, `official request lacks exec_command schema (input item types: ${
+      [...new Set((body.input ?? []).map((item: any) => item.type))].join(",")})`);
+    assert.equal(entry.type, "function");
+    assert.equal(entry.parameters?.type, "object");
+    assert.equal(entry.parameters?.properties?.cmd?.type, "string");
+    assert(entry.parameters?.required?.includes("cmd"));
+    declaration = { location: additional.length ? "input.additional_tools" : "tools",
+      namespace: namespace?.name ?? null, parameterType: entry.parameters.type,
+      commandType: entry.parameters.properties.cmd.type, commandRequired: true };
+    const outcome: NativeGatewayOutcome = { type: "final",
+      answer: "Verified official Native tool declaration.",
+      delivery: { capability: "synthetic-provider" } };
+    finalIssued++;
+    const encoded = encodeNativeResponsesOutcome({ outcome, model: body.model });
+    assert.equal(encoded.response.usage, null);
+    return new Response(nativeResponsesSsePlan(outcome, encoded).frames.join(""),
+      { headers: { "content-type": "text/event-stream" } });
+  }
   if (interrupt) {
     assert.equal(requestCount, 1);
     return new Response(new ReadableStream({
@@ -169,14 +204,20 @@ try {
   }
   const completed = await notification("turn/completed");
   assert.equal(completed.params.turn.status, interrupt ? "interrupted" : "completed");
-  assert.equal(requestCount, interrupt ? 1 : 2);
-  assert.equal(toolResultSeen, interrupt ? 0 : 1);
+  assert.equal(requestCount, interrupt || inspectTools ? 1 : 2);
+  assert.equal(toolResultSeen, interrupt || inspectTools ? 0 : 1);
   assert.equal(finalIssued, interrupt ? 0 : 1);
+  if (inspectTools) {
+    assert(declaration, "official Native tool declaration must be provider-visible");
+    assert.equal(toolResultSeen, 0, "inspection must not execute synthetic tools");
+  }
   if (interrupt) assert(providerRequestClosed, "the blocked provider response must close on interrupt");
   if (imageEffort) { assert.equal(imageMatched, 2); assert.equal(effortMatched, 2); }
   const proof = { engineVersion: execFileSync(engine, ["--version"], { encoding: "utf8" }).trim(),
     publicAppServer: true, syntheticProvider: true, responseUsage: null, requestCount,
-    toolCallName: interrupt ? null : "exec_command", toolCallIdMatched: !interrupt,
+    toolInspection: inspectTools, modelToolMode: defaultToolMode ? null : "direct",
+    declaration,
+    toolCallName: interrupt ? null : "exec_command", toolCallIdMatched: !interrupt && !inspectTools,
     hostToolResultSeen: toolResultSeen,
     finalAnswerAccepted: !interrupt, imageOriginalBytesMatched: imageMatched,
     reasoningEffortMatched: effortMatched, interrupted: interrupt, providerRequestClosed,
