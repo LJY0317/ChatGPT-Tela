@@ -21,6 +21,13 @@ UI event contract exposes no authenticated structured Native tool-call intent
 or result-continuation receipt. Rendered Markdown cannot supply that authority;
 real Web-to-official-Native-tool continuation remains unaccepted.
 
+Native-only Computer Use restoration is a separate acceptance gate from
+Web-to-Native tool continuation. First verify the existing Web-off, ordinary
+official-app launch path after active owned work has settled. Do not delay that
+check for a missing Web tool-call contract, or treat a signed externally
+started engine as an app-owned engine. A shared-engine replacement must still
+pass the Web, history and compaction gates above.
+
 ## Accepted, owned operation
 
 - An exact user/send receipt and unique user-to-assistant lineage bind every
