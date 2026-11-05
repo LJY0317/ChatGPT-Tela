@@ -197,6 +197,12 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     expect(direct.browserProfile.state).toBe("created-owned");
     expect(existsSync(join(direct.profile.userDataDir, OWNERSHIP_MARKER))).toBe(true);
     writeFileSync(join(direct.profile.userDataDir, "connected-fixture.txt"), "synthetic runtime state");
+    const moved = await prepareInstalledProfileOwnership({
+      slot: 2, productPaths: paths, installId: manifest.installId,
+      environment: { CHATGPT_TELA_PROFILE_ROOT: join(root, "relocated-profiles") },
+    });
+    expect(moved.browserProfile.state).toBe("created-owned");
+    writeFileSync(join(moved.profile.userDataDir, "connected-fixture.txt"), "relocated runtime state");
     const legacy = await prepareInstalledProfileOwnership({
       slot: 3, productPaths: paths, installId: manifest.installId,
       environment: { CHATGPT_TELA_PROFILE_ROOT: profileRoot },
@@ -220,6 +226,7 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
       expect(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).toBe(productConfig);
       expect(readFileSync(join(setupProfile.userDataDir, "login-fixture.txt"), "utf8")).toBe("synthetic login state\n");
       expect(readFileSync(join(direct.profile.userDataDir, "connected-fixture.txt"), "utf8")).toBe("synthetic runtime state");
+      expect(readFileSync(join(moved.profile.userDataDir, "connected-fixture.txt"), "utf8")).toBe("relocated runtime state");
       expect(readFileSync(join(legacyProfile, "legacy-fixture.txt"), "utf8")).toBe("external profile fixture");
       expect(readFileSync(preferences, "utf8")).toBe(prefs);
       expect(readFileSync(binding, "utf8")).toBe("synthetic login binding\n");
@@ -287,7 +294,8 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     const removed = await uninstall("apply", true);
     expect(removed).toMatchObject({ failedCount: 0, preservedCount: 0, manifestRemoved: true });
     for (const path of [paths.binaryRoot, paths.configRoot, paths.cacheRoot, paths.logsRoot,
-      paths.serviceState("chat"), browser, setupProfile.userDataDir, direct.profile.userDataDir, paths.installManifest]) expect(existsSync(path)).toBe(false);
+      paths.serviceState("chat"), browser, setupProfile.userDataDir, direct.profile.userDataDir, moved.profile.userDataDir,
+      paths.installManifest]) expect(existsSync(path)).toBe(false);
     expect(readFileSync(join(legacyProfile, "legacy-fixture.txt"), "utf8")).toBe("external profile fixture");
     expect(runner.loaded.size).toBe(0);
     for (const path of external) expect(readFileSync(path, "utf8")).toBe("external fixture: preserve exactly\n");

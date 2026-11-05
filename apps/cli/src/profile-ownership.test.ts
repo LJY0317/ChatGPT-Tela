@@ -70,4 +70,41 @@ describe("CLI profile ownership preparation", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test("changing a profile root retains both owned locations and never adopts an unmarked third root", async () => {
+    const home = mkdtempSync(join(tmpdir(), "tela-profile-relocation-"));
+    const productPaths = resolveProductPaths({ platform: "darwin", home, environment: {} });
+    const prepare = (root: string) => prepareProfileOwnership({
+      slot: 1, productPaths, productVersion: "0.0.0", profileRoot: root,
+    });
+    const firstRoot = join(home, "first");
+    const secondRoot = join(home, "second");
+    const externalRoot = join(home, "external");
+    try {
+      const first = await prepare(firstRoot);
+      writeFileSync(join(first.profile.userDataDir, "saved-state"), "owned first location");
+      const second = await prepare(secondRoot);
+      expect(second.browserProfile.state).toBe("created-owned");
+      expect(second.accountBindings.state).toBe("created-owned");
+      expect(second.browserProfile.resource.id).not.toBe(first.browserProfile.resource.id);
+      expect(second.accountBindings.resource.id).not.toBe(first.accountBindings.resource.id);
+      expect((await prepare(secondRoot)).browserProfile.state).toBe("already-owned");
+      expect((await prepare(firstRoot)).browserProfile.state).toBe("already-owned");
+      expect(readFileSync(join(first.profile.userDataDir, "saved-state"), "utf8")).toBe("owned first location");
+      for (const result of [first, second]) {
+        expect(existsSync(join(result.profile.userDataDir, OWNERSHIP_MARKER))).toBe(true);
+        expect(existsSync(join(result.profile.profileRoot, "account-bindings", OWNERSHIP_MARKER))).toBe(true);
+      }
+      mkdirSync(join(externalRoot, "Canary-Profile1"), { recursive: true });
+      mkdirSync(join(externalRoot, "account-bindings"));
+      writeFileSync(join(externalRoot, "Canary-Profile1", "saved-state"), "unowned user data");
+      const external = await prepare(externalRoot);
+      expect(external.browserProfile.state).toBe("external-existing");
+      expect(external.accountBindings.state).toBe("external-existing");
+      expect(readFileSync(join(external.profile.userDataDir, "saved-state"), "utf8")).toBe("unowned user data");
+      const resources = readOwnershipManifest(productPaths.installManifest)!.resources;
+      expect(resources.filter(resource => resource.kind === "directory" && resource.dataClass === "browser-profile").length).toBe(2);
+      expect(resources.some(resource => resource.kind === "directory" && resource.path.startsWith(externalRoot))).toBe(false);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
 });

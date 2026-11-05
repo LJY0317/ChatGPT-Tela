@@ -647,9 +647,13 @@ export async function startCodexService(input: {
       if (options?.requireStopped && (session.state !== "available" || target.state === "running")) {
         throw new Error("Work restoration requires a stopped target; existing app preserved");
       }
-      if (session.state === "restart-required"
+      const mustQuit = session.state === "restart-required"
         || (session.state === "ready" && (session.responsesRouteFingerprint === undefined
-          || options?.expectedDesktopProcessId !== undefined))) {
+          || options?.expectedDesktopProcessId !== undefined));
+      if (mustQuit) {
+        // Ownership preparation must fail before any quit of the existing Desktop.
+        progress("preparing");
+        await input.prepareProfileRuntime?.(slot);
         progress("closing");
         emitDiagnosticEvent("chatgpt_tela_codex", "profile_reopen_quit_started", { slot,
           endpoint_available: !!session.endpoint, pid_bound: options?.expectedDesktopProcessId !== undefined,
@@ -660,8 +664,10 @@ export async function startCodexService(input: {
       if (session.state !== "available") {
         throw new Error(`${target.displayName} must be normally quit before Tela Codex can attach its route (state=${session.state})`);
       }
-      progress("preparing");
-      await input.prepareProfileRuntime?.(slot);
+      if (!mustQuit) {
+        progress("preparing");
+        await input.prepareProfileRuntime?.(slot);
+      }
       const route = routeId();
       const responsesToken = secret();
       const internalMcpToken = secret();

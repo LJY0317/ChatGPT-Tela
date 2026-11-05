@@ -8,14 +8,15 @@ import { join } from "node:path";
 import { prepareInstalledProfileOwnership } from "../../../apps/cli/src/profile-ownership";
 import { OWNERSHIP_MARKER, ensureOwnershipManifest, readOwnershipManifest, resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 
-function fixture(state: string, targetState: string, desktopProcessId?: number) {
-  const target = { slot: 1, adapterKind: "default-desktop" as const, id: "default", displayName: "ChatGPT", state: targetState, managed: true };
-  const session = { targetId: "default", state, ...(desktopProcessId ? { desktopProcessId } : {}) };
+function fixture(state: string, targetState: string, desktopProcessId?: number, slot = 1) {
+  const id = slot === 1 ? "default" : `profile-${slot}`;
+  const target = { slot, adapterKind: "default-desktop" as const, id, displayName: "ChatGPT", state: targetState, managed: true };
+  const session = { targetId: id, state, ...(desktopProcessId ? { desktopProcessId } : {}) };
   let quits = 0;
   const adapter: CodexNativeTargetAdapter = {
     kind: "default-desktop", async profiles() { return [{ target, session }]; },
     async resolve() { return { target, session }; }, async session() { return session; },
-    async quit() { quits++; return { targetId: "default", state: "available" }; },
+    async quit() { quits++; return { targetId: id, state: "available" }; },
     profileRuntimeEnvironment() { return {}; },
   };
   return { adapter, quits: () => quits };
@@ -53,7 +54,7 @@ test("direct profile connection records fresh Electron partition ownership befor
   const home = mkdtempSync(join(tmpdir(), "tela-direct-profile-owner-"));
   const paths = resolveProductPaths({ platform: "darwin", home, environment: {} });
   const manifest = await ensureOwnershipManifest({ path: paths.installManifest, productVersion: "1.0.0" });
-  const native = fixture("available", "stopped");
+  const native = fixture("available", "stopped", undefined, 2);
   const observed: string[] = [];
   const service = await startCodexService({
     config: {}, profileRuntimeCommand: ["unused"], nativeTargetAdapter: native.adapter,
@@ -78,6 +79,27 @@ test("direct profile connection records fresh Electron partition ownership befor
     expect(readOwnershipManifest(paths.installManifest)?.resources.some(resource =>
       resource.kind === "directory" && resource.id === "browser-profile:2" && resource.path === directory)).toBe(true);
   } finally { await service.close(); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("a failed profile ownership preparation cannot quit an existing Desktop", async () => {
+  const native = fixture("restart-required", "running", 123);
+  const phases: string[] = [];
+  let preparations = 0;
+  const service = await startCodexService({
+    config: {}, profileRuntimeCommand: ["unused"], nativeTargetAdapter: native.adapter,
+    async prepareProfileRuntime(slot) {
+      expect(slot).toBe(1);
+      preparations++;
+      throw Error("synthetic ownership conflict");
+    },
+  });
+  try {
+    await expect(service.startProfile(1, { expectedDesktopProcessId: 123, onProgress: phase => phases.push(phase) }))
+      .rejects.toThrow(ProfileConnectionError);
+    expect(preparations).toBe(1);
+    expect(native.quits()).toBe(0);
+    expect(phases).toEqual(["checking", "preparing"]);
+  } finally { await service.close(); }
 });
 
 test("explicit PID-bound reopen can replace an obsolete route without adopting it", async () => {
@@ -177,6 +199,6 @@ test("quit failure has a stable phase and no raw process/error payload; duplicat
     expect(failure).toBeInstanceOf(ProfileConnectionError);
     expect(failure.phase).toBe("closing");
     expect(failure.message).not.toContain("private path");
-    expect(phases).toEqual(["checking", "closing"]);
+    expect(phases).toEqual(["checking", "preparing", "closing"]);
   } finally { release(); await service.close(); }
 });

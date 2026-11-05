@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import {
   resolveChatGptTelaBrowserProfile,
@@ -7,6 +8,7 @@ import {
   ensureOwnershipManifest,
   prepareOwnedDirectory,
   readOwnershipManifest,
+  type OwnershipManifest,
   type PrepareOwnedDirectoryResult,
   type ProductPaths,
 } from "@chatgpt-tela/product-lifecycle";
@@ -15,6 +17,17 @@ export interface ProfileOwnershipPreparation {
   readonly profile: ChatGptTelaBrowserProfile;
   readonly browserProfile: PrepareOwnedDirectoryResult;
   readonly accountBindings: PrepareOwnedDirectoryResult;
+}
+
+function directoryResourceId(manifest: OwnershipManifest, legacyId: string, path: string): string {
+  const qualifiedId = `${legacyId}:${createHash("sha256").update(path).digest("hex")}`;
+  const matching = manifest.resources.find(resource => resource.kind === "directory"
+    && resource.path === path && (resource.id === legacyId || resource.id === qualifiedId));
+  if (matching) return matching.id;
+  const legacy = manifest.resources.find(resource => resource.id === legacyId);
+  if (!legacy) return legacyId;
+  // A relocated profile is a separate owned directory; do not replace the old marker or manifest entry.
+  return qualifiedId;
 }
 
 /**
@@ -47,7 +60,7 @@ export async function prepareProfileOwnership(input: {
     productVersion: manifest.productVersion,
     resource: {
       kind: "directory",
-      id: `browser-profile:${profile.slot}`,
+      id: directoryResourceId(manifest, `browser-profile:${profile.slot}`, profile.userDataDir),
       owner: "codex",
       path: profile.userDataDir,
       dataClass: "browser-profile",
@@ -59,7 +72,7 @@ export async function prepareProfileOwnership(input: {
     productVersion: manifest.productVersion,
     resource: {
       kind: "directory",
-      id: "account-bindings",
+      id: directoryResourceId(manifest, "account-bindings", dirname(profile.accountBindingPath)),
       owner: "codex",
       path: dirname(profile.accountBindingPath),
       dataClass: "state",
