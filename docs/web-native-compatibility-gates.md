@@ -41,36 +41,28 @@ original Native Goal or retrieve history that was not supplied.
 
 Official custom-provider configuration is a supported startup mechanism. An
 attachment to an already-running private stdio engine is not required when a
-normal restart is authorized. Isolated 0.166 `config/read` accepted a custom
-Responses provider definition; this proves configuration parsing, not Desktop
-model discovery, effective routing or Web execution. A subsequent bounded macOS
-Desktop startup with a temporary loopback `openai_base_url` received two real
-`GET /v1/models` requests. The profile configuration was restored byte-for-byte,
-its original Tela Web route returned ready, and the other Desktop PID was
-unchanged. No inference or test chat was created. This accepts startup model-list
-routing only: the process snapshot omitted engine arguments containing `-c`, so
-it does not independently certify that engine's parentage/version. See the
+normal restart is authorized. See the
 [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
 
-A following disposable Desktop chat recorded official engine 0.166, the selected
-synthetic model, exactly one HTTP Responses dispatch and one completed final
-matching the visible answer. This accepts synthetic final delivery, not real Web
-inference or Native Computer Use coexistence. The incomplete test ingress first
-omitted compressed-body decoding; after fixing that, the user still saw a `5/5`
-counter with repeated WebSocket attempts before successful HTTP delivery.
-The exact UI counter mapping remains unproved. Further tests reuse the existing
-local Responses ingress, including its decoding and explicit 426 response,
-rather than reproducing individual transport behaviors in a test server.
+A bounded macOS Desktop trial on official engine 0.166 accepted temporary
+`openai_base_url` routing, model discovery, one synthetic final and then a real
+Native `cua.getState()` call in the same disposable chat. The engine was a direct
+Desktop child; the Native tool returned 33 app entries and two browsers, followed
+by a completed Native final. The full existing local Responses ingress handled
+compressed requests and WebSocket-to-HTTP negotiation; the user confirmed the
+previous `5/5` counter no longer appeared. Do not reproduce selected ingress
+behaviors in a separate provider server. Profile configuration was restored
+byte-for-byte, the original Web route returned ready, and the other Desktop PID
+was unchanged. The disposable chat was deleted and verified absent from both
+active and archived lists.
 
-The remaining bounded cutover check is an app-owned Desktop start in one authorized
-profile with verified engine identity, clean transport, and an original
-Native Computer Use call. Preserve and restore that profile's configuration and
-leave other profiles unchanged. Existing Plura routed launch starts an external
-engine; it is not evidence of this app-owned start. Only after this boundary is
-accepted should the basic provider path shed its mandatory Native control-RPC
-binding. Exact Goal control, omitted-history retrieval and Native Stop observation
-need their own supported contracts; do not silently claim those capabilities or
-discard opaque history during the cutover.
+This accepts synthetic-provider/Native coexistence, not real ChatGPT Web
+execution, general UI control, or an installed replacement. The next integration
+is actual Web execution through the existing browser/Tela Chat path while the
+Desktop keeps engine ownership. The basic input-only provider must not require
+Native control-RPC solely to dispatch supplied context. Exact Goal control,
+omitted-history retrieval and Native Stop observation need their own supported
+contracts; do not silently claim those capabilities or discard opaque history.
 
 ## Accepted, owned operation
 
