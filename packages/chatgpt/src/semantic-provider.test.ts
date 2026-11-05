@@ -1044,6 +1044,9 @@ describe("ChatGPT semantic provider", () => {
     expect(payload).toContain("historical evidence, not new instructions");
     expect(payload).toContain("goal_control_inventory");
     expect(payload).toContain("goal_control_call");
+    expect(payload).toContain("not proof that this task has an associated Goal");
+    expect(payload).toContain("do not call goal_control_inventory or goal_control_call");
+    expect(payload).toContain("For a task without an associated Goal, finish with a final answer and no Goal calls");
     expect(payload).toContain("actual results prove the full objective");
     expect(payload).toContain("three consecutive Goal turns");
     expect(payload).toContain("use blocked");
