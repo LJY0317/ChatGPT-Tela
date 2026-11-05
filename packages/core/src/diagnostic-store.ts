@@ -73,6 +73,7 @@ const STRINGS = new Set(["cancellation_source", "observation_failure", "failure_
 const PROJECTION_ENUMS: Readonly<Record<string, readonly string[]>> = {
   chat_action_class: ["read", "read_many", "other", "unknown"],
   observation_state: ["probable", "ambiguous"],
+  latest_turn: ["managed", "other", "unknown"],
   observation_evidence_class: WEB_OBSERVATION_DIAGNOSTIC_REASONS,
   response_format: ["sse", "json", "other", "missing"],
   provider_reason: ["unusual_activity"],

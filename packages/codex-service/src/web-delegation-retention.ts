@@ -80,7 +80,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
   let next = Infinity;
   const historyEligible = new Set<string>();
   const connections = new Map<string, Awaited<ReturnType<WebDelegationAdapters["connect"]>>>();
-  const confirmAbsent = async (record: WebDelegationRecord, rpc: Awaited<ReturnType<WebDelegationAdapters["connect"]>>): Promise<void> => {
+  const confirmAbsent = async (record: WebDelegationRecord, rpc: Awaited<ReturnType<WebDelegationAdapters["connect"]>>): Promise<boolean> => {
     const key = { slot: record.slot, accountFingerprint: record.owner.accountFingerprint, threadId: record.threadId! };
     const path = statePath(adapters, record);
     try {
@@ -88,13 +88,14 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
       // A missing list entry is not a user opt-out. Only a stale deletion
       // receipt must relinquish deletion authority when the thread still exists.
       if (object(read?.thread)?.id === key.threadId && load(path)?.state === "deleted") exclude(adapters, record, "deleted_thread_present");
-      return;
+      return false;
     } catch (error) {
       if (!isExactDeletedNativeThreadAbsent(error, key.threadId)) throw error;
     }
-    if (!sameAccountOwner(record, await adapters.owner(record.slot))) return;
+    if (!sameAccountOwner(record, await adapters.owner(record.slot))) return false;
     save(path, { state: "deleted" });
     adapters.store.removeDeletedThread(key);
+    return true;
   };
   for (const key of adapters.store.pendingDeletedThreads()) {
     const record = adapters.store.recordsForThread(key)[0];
@@ -116,7 +117,8 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
   }
   const inventories = new Map<string, Map<string, { archived: boolean; thread: Record<string, any> }>>();
   const occupancy = new Map<string, { slot: number; before: number; current: number; uncertain: boolean;
-    protected: Map<string, { reason: string; dueAt?: string }> }>();
+    protected: Map<string, { reason: string; dueAt?: string; policy?: string; basisAt?: string;
+      collected?: boolean; latestTurn?: "managed" | "other" | "unknown"; managedTail?: boolean }> }>();
   let pending = [...groups.values()];
   try {
   while (pending.length) {
@@ -138,16 +140,31 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
     let publicOperation = "owner_resolution";
     let scopeConnection: string | undefined;
     let unarchived = false;
+    let latestTurn: string | undefined;
+    const diagnosticIdentity = { slot: record.slot,
+      thread_fingerprint: diagnosticFingerprint(record.threadId!),
+      operation_fingerprint: diagnosticFingerprint(record.id) };
+    const basisAt = () => dueBasis === "archive_expiry" ? retained?.archivedAt
+      : dueBasis === "capacity_pressure" ? now
+      : due - (collected === undefined ? 7 : 1) * DAY;
+    const timing = () => ({ policy: dueBasis, basis_at: basisAt() ?? 0, due_at: due,
+      collected: collected !== undefined,
+      latest_turn: latestTurn === undefined ? "unknown" : jobs.some(job => job.turnId === latestTurn) ? "managed" : "other",
+      managed_jobs: jobs.length });
     const protect = (reason: string) => {
       if (unarchived && scopeConnection) occupancy.get(scopeConnection)?.protected.set(record.threadId!, {
-        reason, ...(reason === "not_yet_due_or_unverified" ? { dueAt: new Date(due).toISOString() } : {}),
+        reason, ...(reason === "not_yet_due_or_unverified" || reason === "uncollected_answers"
+          ? { dueAt: new Date(due).toISOString() } : {}), policy: dueBasis,
+        basisAt: new Date(basisAt() ?? record.createdAt).toISOString(), collected: collected !== undefined,
+        latestTurn: latestTurn === undefined ? "unknown" : jobs.some(job => job.turnId === latestTurn) ? "managed" : "other",
+        managedTail: latestTurn === undefined ? false : jobs.some(job => job.turnId === latestTurn),
       });
     };
     const skipped = (reason: string, relation = "unknown", error?: unknown) => {
       protect(reason);
       if (due > now || retained?.state === "excluded") return;
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_skipped", {
-        reason_class: reason, due_at: due, kind: relation, policy: dueBasis, next_action: publicOperation,
+        ...diagnosticIdentity, ...timing(), reason_class: reason, kind: relation, next_action: publicOperation,
         ...(error === undefined ? {} : { failure_class: diagnosticFailureClass(error) }),
       });
     };
@@ -239,12 +256,13 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
             const startedAt = Number(latest?.startedAt);
             const lastTurnAt = Number.isFinite(completedAt) && completedAt > 0 ? completedAt * 1000
               : Number.isFinite(startedAt) && startedAt > 0 ? startedAt * 1000 : undefined;
+            latestTurn = typeof latest?.id === "string" ? latest.id : undefined;
             if (lastTurnAt !== undefined) {
               due = archiveDue(Math.max(journalActivity, lastTurnAt));
               dueBasis = "native_turn_activity";
             } else if (now >= archiveDue(journalActivity)) {
               emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_skipped", {
-                reason_class: "native_metadata_clock_unattributed", due_at: due,
+                ...diagnosticIdentity, ...timing(), reason_class: "native_metadata_clock_unattributed",
                 kind: latest?.id && jobs.some(job => job.turnId === latest.id)
                   ? "managed_tail" : latest?.id ? "other_tail" : "unknown_tail",
                 policy: dueBasis, next_action: "inspect_native_activity_source",
@@ -252,7 +270,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
             }
           } catch (error) {
             emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", {
-              failure_class: diagnosticFailureClass(error), kind: publicErrorKind(error), next_action: "thread_turns_list",
+              ...diagnosticIdentity, ...timing(), failure_class: diagnosticFailureClass(error), kind: publicErrorKind(error), next_action: "thread_turns_list",
             });
           }
         }
@@ -266,6 +284,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
             threadId: record.threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded",
           }, input.signal));
           const latest = Array.isArray(tail?.data) ? object(tail.data[0]) : undefined;
+          latestTurn = typeof latest?.id === "string" ? latest.id : undefined;
           if (!latest || !["completed", "failed", "interrupted"].includes(latest.status)
             || nativeState === "active" || !jobs.some(job => job.turnId === latest.id)) continue;
           if (!present.archived) {
@@ -333,7 +352,9 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           publicOperation = "thread_delete";
           await rpc.request("thread/delete", { threadId: record.threadId }, input.signal);
           publicOperation = "thread_read_after_delete";
-          await confirmAbsent(record, rpc);
+          if (await confirmAbsent(record, rpc)) emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_deleted", {
+            ...diagnosticIdentity, ...timing(), confirmed_at: now, state: "deleted",
+          });
         } else {
           publicOperation = "thread_archive";
           await rpc.request("thread/archive", { threadId: record.threadId }, input.signal);
@@ -344,6 +365,9 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
           const archivedUpdatedAt = object(read?.thread)?.updatedAt;
           if (!Number.isFinite(archivedUpdatedAt)) throw Error("Archived thread receipt unavailable");
           save(path, { state: "archived", archivedAt: now, updatedAt: archivedUpdatedAt });
+          emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_archived", {
+            ...diagnosticIdentity, ...timing(), archived_at: now, state: "archived",
+          });
           next = Math.min(next, now + 30 * DAY);
         }
       } finally { /* Shared owner connection closes after the pass. */ }
@@ -356,7 +380,7 @@ export async function settleWebDelegationRetention(adapters: WebDelegationAdapte
       if (publicOperation === "owner_resolution" && ownerTemporarilyUnavailable(error)) continue;
       skipped("public_metadata_or_retention_error", "unknown", error);
       emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_retention_failed", {
-        failure_class: diagnosticFailureClass(error), kind: publicErrorKind(error), next_action: publicOperation,
+        ...diagnosticIdentity, ...timing(), failure_class: diagnosticFailureClass(error), kind: publicErrorKind(error), next_action: publicOperation,
       });
       // Reconsider on a real journal/profile change or the next daemon start,
       // not through a retry/polling loop.

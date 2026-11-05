@@ -199,17 +199,23 @@ test("uncollected and manually restored conversations can exceed the soft target
 
 test("an unknown archive outcome stops further pressure mutations until fresh inventory", async () => {
   const f = capacityFixture();
+  const observed: Record<string, unknown>[] = [];
+  const off = observeDiagnosticEvents(event => {
+    if (event.stage.startsWith("web_delegation_retention_")) observed.push(structuralDiagnosticEvent(event)!);
+  });
   try {
     f.loseArchiveAck();
     await f.run();
     expect(f.mutations).toHaveLength(1);
     expect(f.store.capacity(2).cleanup?.uncertain).toBe(true);
+    expect(observed.some(event => event.stage === "web_delegation_retention_failed" && event.next_action === "thread_archive")).toBe(true);
+    expect(observed.some(event => event.stage === "web_delegation_retention_archived")).toBe(false);
     expect(f.store.capacity(2, undefined, true).cleanup?.protectedThreads?.some(item =>
       item.reason === "public_metadata_or_retention_error" && item.nextAction === "inspect_thread")).toBe(true);
     await f.run();
     expect(f.mutations).toHaveLength(1);
     expect(f.store.capacity(2).cleanup).toMatchObject({ unarchived: 32, uncertain: false });
-  } finally { f.cleanup(); }
+  } finally { off?.(); f.cleanup(); }
 }, 30_000);
 
 test("explicit adoption works without an execution directory or rollout and reclaims a known exclusion", async () => {
@@ -358,6 +364,47 @@ test("retention diagnostics preserve only structural reason, due, relation and o
     kind: "unmanaged", policy: "collection_and_activity", next_action: "managed_turn_comparison" });
   expect(event).toMatchObject({ stage: "web_delegation_retention_skipped", reason_class: "latest_turn_unmanaged",
     due_at: 1700000000000, kind: "unmanaged", policy: "collection_and_activity", next_action: "managed_turn_comparison" });
+});
+test("retention snapshot distinguishes collected 24h and uncollected 7d holds without payloads", async () => {
+  for (const collected of [true, false]) {
+    const f = fixture();
+    try {
+      if (collected) f.store.collect(f.record.id, f.origin);
+      await f.run(f.origin + DAY / 2);
+      const item = f.store.capacity(2, undefined, true).cleanup?.protectedThreads?.[0];
+      expect(item).toMatchObject({ reason: collected ? "not_yet_due_or_unverified" : "uncollected_answers",
+        policy: collected ? "collection_and_activity" : "native_activity",
+        collected, latestTurn: "unknown", managedTail: false,
+        basisAt: new Date(f.origin).toISOString(),
+        dueAt: new Date(f.origin + (collected ? 1 : 7) * DAY).toISOString() });
+      expect(JSON.stringify(item)).not.toContain(f.record.answer ?? "result");
+      expect(JSON.stringify(item)).not.toContain(f.record.threadId!.replace(/-/g, "").slice(0, 8) + "secret");
+      expect(f.native.archived).toBe(false);
+    } finally { f.cleanup(); }
+  }
+});
+test("successful archive and delete diagnostics require receipts and keep fingerprints only", async () => {
+  const f = fixture();
+  f.store.collect(f.record.id, f.origin);
+  const events: Record<string, unknown>[] = [];
+  const off = observeDiagnosticEvents(event => {
+    if (["web_delegation_retention_archived", "web_delegation_retention_deleted"].includes(event.stage))
+      events.push(structuralDiagnosticEvent(event)!);
+  });
+  try {
+    await f.run(f.origin + DAY);
+    expect(f.store.threadRetention(f.record)).toMatchObject({state: "archived", archivedAt: f.origin + DAY});
+    expect(events[0]).toMatchObject({stage: "web_delegation_retention_archived", slot: 2,
+      collected: true, archived_at: f.origin + DAY, state: "archived"});
+    await f.run(f.origin + 31 * DAY);
+    expect(f.native.exists).toBe(false);
+    expect(events[1]).toMatchObject({stage: "web_delegation_retention_deleted", slot: 2,
+      state: "deleted", confirmed_at: f.origin + 31 * DAY});
+    expect(events).toHaveLength(2);
+    expect(events[0]?.thread_fingerprint).toMatch(/^[a-f0-9]{24}$/);
+    expect(JSON.stringify(events)).not.toContain(f.record.threadId!);
+    expect(JSON.stringify(events)).not.toContain("result");
+  } finally { off?.(); f.cleanup(); }
 });
 test("uncollected results use seven actual idle days, polling never resets activity", async () => {
   const f = fixture();

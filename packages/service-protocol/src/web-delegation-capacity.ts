@@ -24,6 +24,12 @@ export interface CodexWebDelegationCapacityContract {
       readonly reason: string;
       readonly nextAction: string;
       readonly dueAt?: string;
+      /** Last cleanup snapshot only; absent timing/linkage means unobserved. */
+      readonly policy?: string;
+      readonly basisAt?: string;
+      readonly collected?: boolean;
+      readonly latestTurn?: "managed" | "other" | "unknown";
+      readonly managedTail?: boolean;
     }[];
   };
   readonly available: boolean;
@@ -64,7 +70,12 @@ export function parseCodexWebDelegationCapacityContract(value: unknown): CodexWe
         || !cleanup.protectedThreads.every(item => item && typeof item.threadId === "string" && item.threadId.length > 0
           && typeof item.reason === "string" && item.reason.length > 0
           && typeof item.nextAction === "string" && item.nextAction.length > 0
-          && (item.dueAt === undefined || typeof item.dueAt === "string" && Number.isFinite(Date.parse(item.dueAt))))))
+          && (item.dueAt === undefined || typeof item.dueAt === "string" && Number.isFinite(Date.parse(item.dueAt)))
+          && (item.basisAt === undefined || typeof item.basisAt === "string" && Number.isFinite(Date.parse(item.basisAt)))
+          && (item.policy === undefined || typeof item.policy === "string")
+          && (item.collected === undefined || typeof item.collected === "boolean")
+          && (item.latestTurn === undefined || ["managed", "other", "unknown"].includes(item.latestTurn))
+          && (item.managedTail === undefined || typeof item.managedTail === "boolean"))))
     || typeof row.available !== "boolean"
     || row.blockCode !== undefined && !reasons.includes(row.blockCode as string)
     || row.available !== (row.blockCode === undefined)
