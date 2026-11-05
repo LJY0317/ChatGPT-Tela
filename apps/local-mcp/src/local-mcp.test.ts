@@ -1,13 +1,56 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, cpSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, cpSync, rmSync, readFileSync, readdirSync, writeFileSync, renameSync, rmdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { createChatToolRuntime, startChatService } from "@chatgpt-tela/chat-service";
-import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
+import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest, prepareOwnedDirectory, registerLocalMarketplace } from "@chatgpt-tela/product-lifecycle";
+import { normalizeOwnedLocalChatPlugin, prepareLocalChatPlugin } from "./plugin-package";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
+
+test("owned legacy plugin source is converted once before existing marketplace re-registration; custom source is preserved", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-local-plugin-update-"));
+  try {
+    const paths = resolveProductPaths({ home, environment: {} });
+    const owner = createOwnershipManifest("test", new Date(), "legacy-plugin");
+    writeOwnershipManifest(paths.installManifest, owner);
+    const root = join(paths.stateRoot, "install", "local-chat-plugin");
+    const resource = { kind: "directory" as const, id: "local-chat-plugin-source",
+      owner: "product" as const, path: root, dataClass: "binary" as const };
+    expect((await prepareOwnedDirectory({ manifestPath: paths.installManifest,
+      installId: owner.installId, productVersion: owner.productVersion, resource })).state).toBe("created-owned");
+    const launcher = join(home, "tela");
+    const { plugin } = prepareLocalChatPlugin(root, launcher);
+    const marketplacePath = join(home, ".agents", "plugins", "marketplace.json");
+    const register = () => registerLocalMarketplace({ manifestPath: paths.installManifest, marketplacePath, pluginPath: plugin });
+    expect(await register()).toBe("registered");
+    expect(await register()).toBe("already-registered");
+
+    // Recreate the exact old generated layout, as a previously registered consumer would retain.
+    const legacyLayout = () => {
+      renameSync(join(plugin, ".codex-plugin", "plugin.json"), join(plugin, "plugin.json"));
+      rmdirSync(join(plugin, ".codex-plugin"));
+      renameSync(join(plugin, ".mcp.json"), join(plugin, "mcp.json"));
+    };
+    legacyLayout();
+    expect(existsSync(join(plugin, ".codex-plugin", "plugin.json"))).toBe(false);
+    normalizeOwnedLocalChatPlugin(root, launcher);
+    expect(existsSync(join(plugin, ".codex-plugin", "plugin.json"))).toBe(true);
+    expect(existsSync(join(plugin, ".mcp.json"))).toBe(true);
+    expect(existsSync(join(plugin, "mcp.json"))).toBe(false);
+    expect(await register()).toBe("already-registered");
+
+    // A changed legacy package is user data: do not silently rewrite it.
+    legacyLayout();
+    writeFileSync(join(plugin, "mcp.json"), "user-modified");
+    expect(() => normalizeOwnedLocalChatPlugin(root, launcher)).toThrow("modified; preserved");
+    expect(readFileSync(join(plugin, "mcp.json"), "utf8")).toBe("user-modified");
+    expect(existsSync(join(plugin, ".codex-plugin"))).toBe(false);
+    expect(await register()).toBe("already-registered");
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
 
 test("regenerating a launcher plugin removes old bundles and preserves unrelated files", () => {
   const destination = mkdtempSync(join(tmpdir(), "tela-mcp-launcher-"));
