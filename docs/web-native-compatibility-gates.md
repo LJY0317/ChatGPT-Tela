@@ -30,6 +30,32 @@ Native pipe/browser-host startup in the other profile. Do not treat a signed
 externally started engine as app-owned, or generalize Native-only acceptance
 to a shared-engine replacement: Web, history and compaction gates remain.
 
+## App-owned provider cutover
+
+Native models using their original tools and Web models using Tela Chat are the
+minimum target. Web-to-original-Native tool execution is a separate capability,
+not a prerequisite for restoring Native Computer Use. An input-only Responses
+provider also does not inherently need an out-of-band current-turn socket.
+It must not turn supplied request identifiers into authority to change an
+original Native Goal or retrieve history that was not supplied.
+
+Official custom-provider configuration is a supported startup mechanism. An
+attachment to an already-running private stdio engine is not required when a
+normal restart is authorized. Isolated 0.166 `config/read` accepted a custom
+Responses provider definition; this proves configuration parsing, not Desktop
+model discovery, effective routing or Web execution. See the
+[configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+
+The next bounded cutover check is an app-owned Desktop start in one authorized
+profile with a temporary local provider, a synthetic Web final, and an original
+Native Computer Use call. Preserve and restore that profile's configuration and
+leave other profiles unchanged. Existing Plura routed launch starts an external
+engine; it is not evidence of this app-owned start. Only after this boundary is
+accepted should the basic provider path shed its mandatory Native control-RPC
+binding. Exact Goal control, omitted-history retrieval and Native Stop observation
+need their own supported contracts; do not silently claim those capabilities or
+discard opaque history during the cutover.
+
 ## Accepted, owned operation
 
 - An exact user/send receipt and unique user-to-assistant lineage bind every
