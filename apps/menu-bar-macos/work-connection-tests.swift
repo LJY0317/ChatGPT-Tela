@@ -16,12 +16,13 @@ precondition(TelaRequestBudget.seconds(path: "v1/codex/profiles/1/start", method
 precondition(telaConnectionProgress("closing").contains("close"))
 let frame = try! JSONDecoder().decode(TelaConnectionFrame.self, from: Data("{\"error\":{\"phase\":\"closing\",\"message\":\"Quit is blocked\"}}".utf8))
 precondition(frame.error?.phase == "closing" && frame.error?.errorDescription == "Quit is blocked")
-for state in ["registered", "already-registered"] {
-  let receipt = try! JSONDecoder().decode(TelaLocalPluginRegistration.self, from: Data("{\"result\":\"\(state)\"}".utf8))
-  precondition(receipt.guidance?.contains("Install it in ChatGPT Desktop") == true)
-}
+let registered = try! JSONDecoder().decode(TelaLocalPluginRegistration.self, from: Data("{\"result\":\"registered\"}".utf8))
+precondition(registered.guidance?.contains("Install it in ChatGPT Desktop") == true)
+let alreadyRegistered = try! JSONDecoder().decode(TelaLocalPluginRegistration.self, from: Data("{\"result\":\"already-registered\"}".utf8))
+precondition(alreadyRegistered.guidance?.contains("Check its installed version") == true)
 let preserved = try! JSONDecoder().decode(TelaLocalPluginRegistration.self, from: Data("{\"result\":\"preserved-user-change\"}".utf8))
-precondition(preserved.guidance?.contains("preserved") == true)
+precondition(preserved.guidance?.contains("uninstall it in ChatGPT Desktop") == true)
+precondition(preserved.guidance?.contains("restore that entry") == true)
 let unknown = try! JSONDecoder().decode(TelaLocalPluginRegistration.self, from: Data("{\"result\":\"unknown\"}".utf8))
 precondition(unknown.guidance == nil)
 print("passed")
