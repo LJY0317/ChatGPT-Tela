@@ -43,11 +43,17 @@ Official custom-provider configuration is a supported startup mechanism. An
 attachment to an already-running private stdio engine is not required when a
 normal restart is authorized. Isolated 0.166 `config/read` accepted a custom
 Responses provider definition; this proves configuration parsing, not Desktop
-model discovery, effective routing or Web execution. See the
+model discovery, effective routing or Web execution. A subsequent bounded macOS
+Desktop startup with a temporary loopback `openai_base_url` received two real
+`GET /v1/models` requests. The profile configuration was restored byte-for-byte,
+its original Tela Web route returned ready, and the other Desktop PID was
+unchanged. No inference or test chat was created. This accepts startup model-list
+routing only: the process snapshot omitted engine arguments containing `-c`, so
+it does not independently certify that engine's parentage/version. See the
 [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
 
-The next bounded cutover check is an app-owned Desktop start in one authorized
-profile with a temporary local provider, a synthetic Web final, and an original
+The remaining bounded cutover check is an app-owned Desktop start in one authorized
+profile with verified engine identity, a synthetic Web final, and an original
 Native Computer Use call. Preserve and restore that profile's configuration and
 leave other profiles unchanged. Existing Plura routed launch starts an external
 engine; it is not evidence of this app-owned start. Only after this boundary is
