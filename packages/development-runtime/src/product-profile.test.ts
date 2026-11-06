@@ -7,7 +7,9 @@ import {
   prepareProductWebDiscovery,
   productPublicMcpIdentity,
   startProductProfileRuntime,
+  startAppOwnedProductResponsesRuntime,
 } from "./product-profile";
+import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 
 function common(root: string): Record<string, string> {
   return {
@@ -238,5 +240,61 @@ test("preparation policy is explicit and distinct from the whole-task diagnostic
       expect(() => loadProductProfileRuntimeConfig({ ...common(root),
         CHATGPT_TELA_CHECKPOINT_PREPARATION_POLICY: JSON.stringify(bad) })).toThrow("Invalid checkpoint preparation policy");
     }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("app-owned Responses reuses a fixed capability URL while closing only Tela resources", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-app-owned-responses-"));
+  try {
+    const config = loadProductProfileRuntimeConfig(common(root));
+    mkdirSync(config.browserProfile.userDataDir, { recursive: true });
+    bindChatGptTelaAccount(config.browserProfile, "a".repeat(64));
+    const temporary = await startLocalResponsesServer({ requestRouter: async () => new Response(null, { status: 404 }) });
+    const ingress = { port: temporary.port, capability: "c".repeat(48) };
+    await temporary.stop();
+    let closes = 0, nativeRequests = 0;
+    const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
+      expect(options.currentTurnSource).toBeUndefined();
+      expect(options.mcp).toEqual({ kind: "external", abi: "stable" });
+      expect(options.responses).toMatchObject({
+        port: ingress.port, runtimeToken: ingress.capability, authentication: { kind: "path" },
+      });
+      const responses = await startLocalResponsesServer({ ...options.responses,
+        requestRouter: options.responses!.requestRouter! });
+      return {
+        responses,
+        async prepareChatGptWebSession(input: any) {
+          input.onProfile?.({ account: { accountFingerprint: "a".repeat(64),
+            accountStructure: "personal", containerFingerprint: "fixture" } });
+          input.onFamilies?.([]);
+          input.onConnectorStarting?.();
+          input.onConnectorProven?.();
+          return { families: [] };
+        },
+        async discoverChatGptWebModelFamilies() { return []; },
+        async stop() { closes++; await responses.stop(); },
+      } as unknown as ElectronDevelopmentRuntime;
+    }) as typeof import("./electron").startElectronDevelopmentRuntime;
+    const open = () => startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
+      nativeFetch: async () => {
+        nativeRequests++;
+        return Response.json({ models: [{ slug: "native-fixture", display_name: "Fixture",
+          visibility: "list", supported_in_api: true }] });
+      } });
+    const first = await open();
+    const url = first.responses.baseUrl;
+    try {
+      expect(url.pathname).toContain(ingress.capability);
+      expect((await fetch(new URL("models", url), { headers: { authorization: "Bearer native-fixture" } })).status).toBe(200);
+      expect((await fetch(`http://127.0.0.1:${ingress.port}/wrong/v1/models`)).status).toBe(401);
+    } finally { await first.stop(); }
+    const second = await open();
+    try {
+      expect(second.responses.baseUrl.href).toBe(url.href);
+      expect((await fetch(new URL("models", second.responses.baseUrl),
+        { headers: { authorization: "Bearer native-fixture" } })).status).toBe(200);
+    } finally { await second.stop(); }
+    expect(closes).toBe(2);
+    expect(nativeRequests).toBe(2);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

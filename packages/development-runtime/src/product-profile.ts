@@ -117,6 +117,78 @@ export interface ProductProfileRuntime {
   stop(): Promise<void>;
 }
 
+/**
+ * App-owned Desktop provider adapter. The official Desktop and its Native engine
+ * are intentionally not started, inspected or stopped here. The caller supplies
+ * the install-owned fixed Responses port/capability from product configuration.
+ * An explicit initial Desktop provider configuration points at responses.baseUrl;
+ * later Tela restarts rebind the same listener without changing that address.
+ */
+export async function startAppOwnedProductResponsesRuntime(input: {
+  readonly config: ProductProfileRuntimeConfig;
+  readonly ingress: { readonly port: number; readonly capability: string };
+  readonly electronStarter?: typeof startElectronDevelopmentRuntime;
+  readonly nativeFetch?: NativeCodexFetch;
+  readonly signal?: AbortSignal;
+}): Promise<{
+  readonly runtime: ElectronDevelopmentRuntime;
+  readonly responses: ElectronDevelopmentRuntime["responses"];
+  stop(): Promise<void>;
+}> {
+  const { config, ingress } = input;
+  if (config.nativeTarget.kind !== "default-desktop") {
+    throw new Error("App-owned Desktop Responses serves only the default independent Desktop profile");
+  }
+  if (!Number.isSafeInteger(ingress.port) || ingress.port < 1 || ingress.port > 65535
+    || !/^[A-Za-z0-9_-]{43,128}$/.test(ingress.capability)) {
+    throw new Error("App-owned Responses requires an install-owned fixed port and URL capability");
+  }
+  const identity = productPublicMcpIdentity(config.publicMcpAbi);
+  let runtime: ElectronDevelopmentRuntime | undefined;
+  const router = createDefaultProfileCompositeProviderRouter({
+    runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
+    ...(input.nativeFetch ? { fetchUpstream: input.nativeFetch } : {}),
+    discoverWebModelFamilies: signal => runtime?.discoverChatGptWebModelFamilies(signal) ?? Promise.resolve([]),
+  });
+  runtime = await (input.electronStarter ?? startElectronDevelopmentRuntime)({
+    profileSlot: config.slot,
+    profileId: config.browserProfile.profileId,
+    chatGptUrl: CHATGPT_TEMPORARY_CHAT_URL,
+    connectorName: identity.connectorName,
+    approvalAutomationMode: config.approvalAutomationMode,
+    approvalAutomationDelayMs: config.approvalAutomationDelayMs,
+    ...(config.webTurnTimeoutMs !== undefined ? { webTurnTimeoutMs: config.webTurnTimeoutMs } : {}),
+    mcp: { kind: "external", abi: identity.webContract },
+    responses: {
+      hostname: "127.0.0.1",
+      port: ingress.port,
+      runtimeToken: ingress.capability,
+      authentication: { kind: "path" },
+      requestRouter: request => router.route(request),
+    },
+    electron: { userDataDir: config.browserProfile.userDataDir },
+  });
+  try {
+    input.signal?.throwIfAborted();
+    await prepareProductWebDiscovery({
+      runtime, browserProfile: config.browserProfile, connectorName: identity.connectorName,
+      signal: input.signal ?? new AbortController().signal, stage: () => {},
+    });
+    await router.refreshWebModelFamilies(input.signal);
+    input.signal?.throwIfAborted();
+    const owned = runtime;
+    return Object.freeze({
+      runtime: owned,
+      responses: owned.responses,
+      // Only the Tela browser and Responses transport are ours to close.
+      stop: () => owned.stop(),
+    });
+  } catch (error) {
+    await runtime.stop();
+    throw error;
+  }
+}
+
 class LateBoundCurrentTurnSource implements CanonicalCurrentTurnSource {
   get readHistoryPage() { return this.#source?.readHistoryPage?.bind(this.#source); }
   get readHistoryIndex() { return this.#source?.readHistoryIndex?.bind(this.#source); }
