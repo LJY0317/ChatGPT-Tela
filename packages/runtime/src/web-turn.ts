@@ -32,6 +32,9 @@ export interface BrowserTurnRunInput {
   readonly media?: readonly WebTurnMedia[];
   readonly physicalLimits?: ChatGptWebPhysicalLimits;
   readonly chatTools?: WebTurnRequest["chatTools"];
+  /** Provider-operation tool result wait; independent of any Native turn authority. */
+  readonly isToolExecutionPending?: () => boolean;
+  readonly onSubmitted?: (surface: BrowserSurfaceLease, handle: WebTurnHandle) => void;
   /** Non-submit surface preparation that must finish immediately before provider submission. */
   readonly prepareForSubmit?: (
     surface: BrowserSurfaceLease,
@@ -207,11 +210,13 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       ...(input.chatTools ? { chatTools: input.chatTools } : {}),
       isToolExecutionPending: () => {
         const state = input.channel?.state();
-        return !!state?.outstandingToolCallId && !state.nativeResultReady;
+        return (!!state?.outstandingToolCallId && !state.nativeResultReady)
+          || input.isToolExecutionPending?.() === true;
       },
     }, input.signal));
     validateHandle(input, handle);
     acceptedHandle = handle;
+    input.onSubmitted?.(surface, handle);
     input.channel?.markAccepted();
 
     const eventAbort = new AbortController();
@@ -273,6 +278,8 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       }
 
       if (event.kind === "completed") {
+        // A pending structured host call is not itself a final Web answer.
+        if (input.isToolExecutionPending?.()) continue;
         eventWait.signal.throwIfAborted();
         emitDiagnosticEvent("chatgpt_tela_work", "web_answer_received", {
           kind: "task", completion_observed: true, answer_characters: event.answer.length,

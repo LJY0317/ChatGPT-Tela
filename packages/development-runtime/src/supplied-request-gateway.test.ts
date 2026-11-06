@@ -12,7 +12,7 @@ const firstInput = [{ type: "message", role: "user", content: "Inspect A." }];
 function request(turn = "turn-1", input: unknown[] = firstInput) {
   return { model, stream: true, reasoning: { effort: "medium" }, input,
     client_metadata: { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: turn } },
-    tools: [{ type: "function", name: "update_goal", parameters: { type: "object" } }],
+    tools: [],
   };
 }
 
@@ -141,4 +141,72 @@ test("ordinary authenticated Responses ingress delivers a compressed input-only 
     expect(body).toContain("response.completed");
     expect(f.submissions).toHaveLength(1);
   } finally { await server.stop(); await f.gateway.close(); }
+});
+
+test("structured MCP Goal calls roundtrip through the supplied host with canonical prior results", async () => {
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+  const { createPublicMcpServer } = await import("../../gateway/src/public-server");
+  const { DynamicChatBackend } = await import("../../gateway/src/dynamic-chat-backend");
+  const armed: string[] = [];
+  let control = "", mcp: InstanceType<typeof Client>;
+  const provider: WebConversationProvider = {
+    async observeCapabilities() { throw Error("No preflight"); },
+    async observeTurn() { throw Error("No preflight"); },
+    async submitTurn(_surface, turn) {
+      control = turn.chatTools!.nativeGoalControl!;
+      return { state: "proven", evidence: ["fixture"], value: {
+        nativeTaskId: turn.nativeTaskId, nativeTurnId: turn.nativeTurnId,
+        webEpochId: turn.webEpochId, providerTurnId: "goal-web" } };
+    },
+    async armToolContinuation(_surface, handle, callId) {
+      armed.push(callId);
+      return { state: "proven", evidence: ["exact host result fence"], value: { providerTurnId: handle.providerTurnId, callId } };
+    },
+    async waitForTurnEvent(_surface, handle) {
+      for (const [callId, name, args] of [["read-goal", "get_goal", {}],
+        ["complete-goal", "update_goal", { status: "complete" }]] as const) {
+        const result = await mcp.callTool({ name: "chatgpt_tela_chat_capability_call", arguments: {
+          capability: "goal_control_call", arguments: { goal_control: control,
+            call_id: callId, wire_name: name, arguments: args } } });
+        expect(result.isError).not.toBe(true);
+        expect(JSON.stringify(result)).toContain(name === "get_goal" ? "paused" : "complete");
+      }
+      return { state: "proven", evidence: ["fixture"], value: {
+        kind: "completed", providerTurnId: handle.providerTurnId, answer: "Host Goal settled." } };
+    },
+  };
+  // Reuse the ordinary browser fixture; only the provider is replaced.
+  const host: BrowserHost = {
+    async acquire({ taskId, epochId }) { return { leaseId: "goal-surface", taskId, epochId,
+      async navigate() {}, async reveal() {}, async hide() {}, capability() { return undefined; } } as BrowserSurfaceLease; },
+    async release() {}, async close() {},
+  };
+  const gateway = createSuppliedRequestGateway({ browserHost: host, provider, async prepareForSubmit() {} });
+  const backend = new DynamicChatBackend(() => undefined, undefined, gateway.toolBridge);
+  const server = createPublicMcpServer({ chat: backend });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  mcp = new Client({ name: "supplied-host-goal-fixture", version: "1.0.0" });
+  await server.connect(serverTransport);
+  await mcp.connect(clientTransport);
+  const body = { ...request(), tools: ["get_goal", "update_goal"].map(name => ({
+    type: "function", name, parameters: { type: "object" } })) };
+  try {
+    const first = await gateway.handle(body);
+    expect(first).toMatchObject({ type: "tool-call", item: { call_id: "read-goal", name: "get_goal" } });
+    gateway.commit(first);
+    const firstOutput = { type: "function_call_output", call_id: "read-goal", output: '{"status":"paused"}' };
+    const secondBody = { ...body, input: [...body.input, ...(first.type === "tool-call" ? [first.item] : []), firstOutput] };
+    const second = await gateway.handle(secondBody);
+    expect(second).toMatchObject({ type: "tool-call", item: { call_id: "complete-goal", name: "update_goal" } });
+    gateway.commit(second);
+    const finalBody = { ...body, input: [...secondBody.input,
+      ...(second.type === "tool-call" ? [second.item] : []),
+      { type: "function_call_output", call_id: "complete-goal", output: '{"status":"complete"}' }] };
+    const final = await gateway.handle(finalBody);
+    expect(final).toMatchObject({ type: "final", answer: "Host Goal settled." });
+    expect(await gateway.handle(finalBody)).toEqual(final);
+    expect(armed).toEqual(["read-goal", "complete-goal"]);
+    expect(() => gateway.toolBridge.inventory(control)).toThrow("retired");
+  } finally { await mcp.close(); await server.close(); await gateway.close(); }
 });

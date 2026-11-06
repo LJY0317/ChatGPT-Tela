@@ -22,6 +22,56 @@ interface PendingTool {
   result?: NativeToolResult;
 }
 
+/** Exact, one-at-a-time result handoff. It has no Native identity or execution authority. */
+export class ExactToolRound {
+  readonly #used: Set<string>;
+  #pending: PendingTool | undefined;
+
+  constructor(used: Set<string> = new Set()) { this.#used = used; }
+  get pending(): PendingTool | undefined { return this.#pending; }
+  get usedCallIds(): Set<string> { return this.#used; }
+
+  open(invocation: NativeToolInvocation, contract: Readonly<Record<string, DiagnosticScalar>> = {}): Promise<NativeToolResult> {
+    if (!invocation.callId.trim() || this.#used.has(invocation.callId)) throw Error("duplicate or empty tool callId");
+    if (this.#pending) throw Error("a tool call is already outstanding");
+    this.#used.add(invocation.callId);
+    return new Promise<NativeToolResult>((resolve, reject) => {
+      this.#pending = { invocation: Object.freeze({ ...invocation }), resolve, reject,
+        nativeDelivery: "queued", diagnosticContract: contract };
+    });
+  }
+
+  markDelivered(callId: string): void {
+    const pending = this.#pending;
+    if (!pending || pending.invocation.callId !== callId) throw Error("tool delivery callId mismatch");
+    if (pending.nativeDelivery === "delivered") throw Error("tool call delivery already committed");
+    pending.nativeDelivery = "delivered";
+  }
+
+  deliver(result: NativeToolResult): void {
+    const pending = this.#pending;
+    if (!pending || pending.invocation.callId !== result.callId) throw Error("tool result callId mismatch");
+    if (pending.result) throw Error("tool result already received");
+    pending.result = Object.freeze({ ...result });
+  }
+
+
+  release(callId: string): NativeToolResult {
+    const pending = this.#pending;
+    if (!pending || pending.invocation.callId !== callId || !pending.result)
+      throw Error("tool result not ready for release");
+    this.#pending = undefined;
+    pending.resolve(pending.result);
+    return pending.result;
+  }
+
+  fail(error: Error): void {
+    const pending = this.#pending;
+    this.#pending = undefined;
+    pending?.reject(error);
+  }
+}
+
 interface ToolWaiter {
   readonly resolve: (invocation: NativeToolInvocation) => void;
   readonly reject: (error: Error) => void;
@@ -106,10 +156,10 @@ function validateInvocation(
 export class RuntimeTurnChannel {
   #binding: NativeTurnBinding;
   #phase: TurnPhase = "prepared";
-  #pendingTool: PendingTool | undefined;
+  readonly #toolRound: ExactToolRound;
+  get #pendingTool(): PendingTool | undefined { return this.#toolRound.pending; }
   #toolWaiter: ToolWaiter | undefined;
   readonly #stateWaiters = new Set<StateWaiter>();
-  readonly #usedCallIds: Set<string>;
   readonly #finalPromise: Promise<string>;
   readonly #resolveFinal: (answer: string) => void;
   readonly #rejectFinal: (error: Error) => void;
@@ -212,7 +262,7 @@ export class RuntimeTurnChannel {
 
   constructor(binding: NativeTurnBinding, nativeCallIds: Set<string> = new Set()) {
     this.#binding = binding;
-    this.#usedCallIds = nativeCallIds;
+    this.#toolRound = new ExactToolRound(nativeCallIds);
     let resolveFinal!: (answer: string) => void;
     let rejectFinal!: (error: Error) => void;
     this.#finalPromise = new Promise<string>((resolve, reject) => {
@@ -343,24 +393,15 @@ export class RuntimeTurnChannel {
       this.#rejectToolRequest("turn_phase", `cannot request a native tool from turn phase ${this.#phase}`);
     }
     if (this.#pendingTool) this.#rejectToolRequest("pending_call", "a native tool call is already outstanding for this turn");
-    if (this.#usedCallIds.has(invocation.callId)) {
+    if (this.#toolRound.usedCallIds.has(invocation.callId)) {
       this.#rejectToolRequest("duplicate_call", `native tool callId was already used: ${invocation.callId}`);
     }
     const advertised = validateInvocation(this.binding, invocation);
     const diagnosticContract = diagnosticToolContract(advertised);
 
-    this.#usedCallIds.add(invocation.callId);
     this.#toolRoundCount += 1;
 
-    const result = new Promise<NativeToolResult>((resolve, reject) => {
-      this.#pendingTool = {
-        invocation: Object.freeze({ ...invocation }),
-        resolve,
-        reject,
-        nativeDelivery: "queued",
-        diagnosticContract,
-      };
-    });
+    const result = this.#toolRound.open(invocation, diagnosticContract);
     this.#move("tool-wait");
     this.#toolEvidence("native_tool_queued", this.#pendingTool!);
     this.#notifyToolWaiter();
@@ -397,7 +438,7 @@ export class RuntimeTurnChannel {
     if (pending.nativeDelivery === "delivered") {
       throw new Error("native tool call delivery is already committed");
     }
-    pending.nativeDelivery = "delivered";
+    this.#toolRound.markDelivered(callId);
     this.#toolEvidence("native_tool_delivery_committed", pending);
     this.#touchState();
   }
@@ -409,7 +450,7 @@ export class RuntimeTurnChannel {
       throw new Error("native tool result does not match the outstanding call");
     }
     if (pending.result) throw new Error("native tool result was already received for the outstanding call");
-    pending.result = Object.freeze({ ...result });
+    this.#toolRound.deliver(result);
     this.#move("tool-result-delivered");
     this.#toolEvidence(result.isError ? "native_tool_result_error" : "native_tool_result_received", pending,
       { error_result_reported: result.isError });
@@ -449,8 +490,7 @@ export class RuntimeTurnChannel {
     }
     this.#toolEvidence("native_tool_result_released", pending);
     this.recordReleasedToolResultBytes(diagnosticSerializedBytes(pending.result.content));
-    this.#pendingTool = undefined;
-    pending.resolve(pending.result);
+    this.#toolRound.release(callId);
     this.#touchState();
   }
 
@@ -564,9 +604,7 @@ export class RuntimeTurnChannel {
   }
 
   #fail(error: Error): void {
-    const pending = this.#pendingTool;
-    this.#pendingTool = undefined;
-    pending?.reject(error);
+    this.#toolRound.fail(error);
     this.#settleFinal({ error });
   }
 }

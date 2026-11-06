@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
-import { parseNativeTurnReplayIdentity } from "@chatgpt-tela/codex";
-import { capturePrivateDiagnosticValue, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { encodeNativeToolInvocation, extractNativeToolResults, parseNativeTurnClaim, parseNativeTurnReplayIdentity } from "@chatgpt-tela/codex";
+import { NativeToolInventory, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
+import type { TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import { selectChatGptWebModel, type WebConversationProvider } from "@chatgpt-tela/chatgpt";
 import type { ResponsesGateway } from "@chatgpt-tela/responses";
 import {
   RetainedBrowserEpochRegistry, WEB_EPOCH_IDLE_RETENTION_MS, assertWebMessageFitsComposer,
-  bindWebEpochDocument, runBrowserTurnOnSurface, type NativeGatewayOutcome,
+  bindWebEpochDocument, runBrowserTurnOnSurface, ExactToolRound, type NativeGatewayOutcome,
 } from "@chatgpt-tela/runtime";
 import {
   createNativeRequestDevelopmentWebTurnPlanner, nativeRequestBrowserModelRoute,
@@ -16,10 +17,15 @@ import type { DevelopmentWebTurnPlan } from "./runtime";
 
 interface Operation {
   readonly turnId: string;
-  readonly fingerprint: string;
+  fingerprint: string;
   readonly capability: string;
   readonly listeners: Set<(summary: string) => void | boolean>;
-  readonly outcome: Promise<NativeGatewayOutcome>;
+  outcome: Promise<NativeGatewayOutcome>;
+  webRun?: Promise<NativeGatewayOutcome>;
+  readonly round: ExactToolRound;
+  readonly advertisedGoals: readonly NativeToolCatalogEntry[];
+  offer: (outcome: NativeGatewayOutcome) => void;
+  armContinuation?: (callId: string) => Promise<void>;
   finishedAt?: number;
   delivered: boolean;
   progress?: string;
@@ -35,10 +41,9 @@ function fingerprint(body: unknown): string {
 }
 
 /**
- * Input-only Web execution. The authenticated caller supplies request correlation, not Native
- * authority. Reuses the browser runner, context planner and ordinary Responses transport; it
- * cannot issue Native tool/Goal/history capabilities. HTTP disconnect never authorizes a replay
- * or cancellation. Stop/Goal/history integration requires a separately proven Native contract.
+ * Supplied Web execution. Local ingress owns a provider operation, never a Native binding.
+ * An explicitly advertised Goal function may be returned for execution by the Responses host;
+ * its exact result is handed back through the existing structured MCP call.
  */
 export function createSuppliedRequestGateway(input: {
   readonly browserHost: BrowserHost;
@@ -50,6 +55,7 @@ export function createSuppliedRequestGateway(input: {
   readonly prepareForSubmit?: (surface: BrowserSurfaceLease,
     route: NonNullable<ReturnType<typeof nativeRequestBrowserModelRoute>>, signal?: AbortSignal) => Promise<void>;
 }): ResponsesGateway & {
+  readonly toolBridge: TurnBridgeBackend;
   browserRetention(surfaceId?: string): ReturnType<RetainedBrowserEpochRegistry["retention"]>;
   close(): Promise<void>;
 } {
@@ -68,7 +74,26 @@ export function createSuppliedRequestGateway(input: {
     },
   });
 
+  const toolBridge: TurnBridgeBackend = {
+    inventory(capability, query = "") {
+      const op = [...operations.values()].find(candidate => candidate.capability === capability);
+      if (!op || op.finishedAt !== undefined) throw Error("unknown or retired supplied operation");
+      return op.advertisedGoals.filter(tool => tool.wireName.toLowerCase().includes(query.toLowerCase()));
+    },
+    invoke(capability, invocation) {
+      const op = [...operations.values()].find(candidate => candidate.capability === capability);
+      if (!op || op.finishedAt !== undefined) throw Error("unknown or retired supplied operation");
+      const tool = op.advertisedGoals.find(candidate => candidate.wireName === invocation.wireName);
+      if (!tool || invocation.mode !== "structured") throw Error("supplied operation did not advertise this Goal function");
+      const result = op.round.open(invocation);
+      op.offer({ type: "tool-call", item: encodeNativeToolInvocation(tool, invocation),
+        delivery: { capability, callId: invocation.callId } });
+      return result;
+    },
+  };
+
   return {
+    toolBridge,
     browserRetention: surfaceId => epochs.retention(surfaceId),
     async handle(body, presentation) {
       controller.signal.throwIfAborted();
@@ -88,18 +113,44 @@ export function createSuppliedRequestGateway(input: {
       }
       let operation = operations.get(identity.threadId);
       if (operation?.turnId === identity.turnId) {
-        if (operation.fingerprint !== hash) throw new Error("Web request changed within the same response operation");
+        if (operation.fingerprint !== hash) {
+          const outstanding = operation.round.pending;
+          if (!operation.delivered || !outstanding)
+            throw new Error("Web request changed within the same response operation");
+          const results = extractNativeToolResults(body).filter(result => result.callId === outstanding.invocation.callId);
+          if (results.length !== 1 || results[0]!.callId !== outstanding.invocation.callId)
+            throw new Error("supplied host result must match exactly one outstanding callId");
+          // Arm the next event before releasing the result to the still-running Web MCP call.
+          let offer!: (outcome: NativeGatewayOutcome) => void;
+          const nextTool = new Promise<NativeGatewayOutcome>(resolve => { offer = resolve; });
+          operation.offer = offer;
+          operation.fingerprint = hash;
+          operation.delivered = false;
+          operation.outcome = Promise.race([operation.webRun!, nextTool]);
+          operation.round.deliver(results[0]!);
+          if (!operation.armContinuation) throw Error("Web tool continuation was not submitted");
+          await operation.armContinuation(outstanding.invocation.callId);
+          operation.round.release(outstanding.invocation.callId);
+        }
       } else {
         if (operation && operation.finishedAt === undefined) throw new Error("This Web conversation still has an unfinished response");
         if (operation) superseded.set(`${identity.threadId}\u0000${operation.turnId}`, Date.now());
         const listeners = new Set<(summary: string) => void | boolean>();
         const capability = `provider-${randomUUID()}`;
+        // Advertisements are data from this authenticated Responses ingress, not
+        // filesystem/Native authority. Only the exact official Goal function subset is offered.
+        const claim = parseNativeTurnClaim(body);
+        const advertisedGoals = NativeToolInventory.fromObservations(identity.threadId, identity.turnId,
+          claim.toolObservations).list().filter(isNativeGoalTool);
+        let offer!: (outcome: NativeGatewayOutcome) => void;
+        const nextTool = new Promise<NativeGatewayOutcome>(resolve => { offer = resolve; });
         const publish = (summary: string) => {
           owned.progress = summary;
           for (const listener of listeners) { try { if (listener(summary) === false) listeners.delete(listener); } catch { listeners.delete(listener); } }
         };
         const owned: Operation = {
           turnId: identity.turnId, fingerprint: hash, capability, listeners, delivered: false,
+          round: new ExactToolRound(), advertisedGoals, offer,
           outcome: Promise.resolve().then(async () => {
             const signal = input.webTurnTimeoutMs === undefined ? controller.signal
               : AbortSignal.any([controller.signal, AbortSignal.timeout(input.webTurnTimeoutMs)]);
@@ -107,7 +158,8 @@ export function createSuppliedRequestGateway(input: {
             let acquired = false;
             try {
               plan = await planner.planSuppliedRequest(identity, body, { signal, onProgress: publish });
-              const chatTools = input.profileSlot === undefined ? {} : { defaultProfileSlot: input.profileSlot };
+              const chatTools = { ...(input.profileSlot === undefined ? {} : { defaultProfileSlot: input.profileSlot }),
+                ...(owned.advertisedGoals.length ? { nativeGoalControl: capability } : {}) };
               assertWebMessageFitsComposer({ ...plan, chatTools });
               if (plan.physicalContext.mode !== "retained-delta") await epochs.retire(identity.threadId);
               const page = await epochs.acquire(plan.nativeTaskId, plan.webEpochId);
@@ -117,6 +169,15 @@ export function createSuppliedRequestGateway(input: {
                 surface: page.surface, provider: input.provider, nativeTaskId: plan.nativeTaskId,
                 nativeTurnId: identity.turnId, webEpochId: plan.webEpochId,
                 physicalContext: plan.physicalContext, chatTools, signal: bound.signal, onProgress: publish,
+                isToolExecutionPending: () => owned.round.pending !== undefined,
+                onSubmitted: (surface, handle) => {
+                  owned.armContinuation = async callId => {
+                    const proof = await input.provider.armToolContinuation(surface, handle, callId, bound.signal);
+                    if (proof.state !== "proven" || proof.value.callId !== callId
+                      || proof.value.providerTurnId !== handle.providerTurnId)
+                      throw Error("Web provider armed the wrong tool continuation boundary");
+                  };
+                },
                 ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
                 ...(plan.media ? { media: plan.media } : {}),
                 ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
@@ -148,13 +209,16 @@ export function createSuppliedRequestGateway(input: {
               plan?.settle?.({ status: "failed" });
               // Preserve accepted/uncertain browser evidence; expiry remains owned by the existing registry.
               if (plan && acquired) await epochs.fail(plan.nativeTaskId, plan.webEpochId, true).catch(() => {});
+              owned.round.fail(error instanceof Error ? error : new Error(String(error)));
               throw error;
             } finally { owned.finishedAt = Date.now(); }
           }),
         };
+        owned.webRun = owned.outcome;
+        owned.outcome = Promise.race([owned.webRun, nextTool]);
         operation = owned;
         operations.set(identity.threadId, owned);
-        void owned.outcome.catch(() => {});
+        void owned.webRun.catch(() => {});
       }
 
       const signal = presentation?.signal;
@@ -176,10 +240,14 @@ export function createSuppliedRequestGateway(input: {
       }
     },
     commit(outcome) {
-      for (const op of operations.values()) if (op.capability === outcome.delivery.capability) op.delivered = true;
+      for (const op of operations.values()) if (op.capability === outcome.delivery.capability) {
+        if (outcome.type === "tool-call") op.round.markDelivered(outcome.delivery.callId);
+        op.delivered = true;
+      }
     },
     async close() {
       controller.abort(new Error("Web provider runtime stopped"));
+      for (const op of operations.values()) op.round.fail(new Error("supplied operation stopped"));
       epochs.dispose();
       await Promise.allSettled([...operations.values()].map(op => op.outcome));
       operations.clear();
