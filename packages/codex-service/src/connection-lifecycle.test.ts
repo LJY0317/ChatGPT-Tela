@@ -209,3 +209,32 @@ test("same-intent concurrent starts share the exact failure and preserve distinc
     expect(next).not.toBe(failure);
   } finally { release(); await service.close(); }
 });
+
+test("throwing progress observers cannot cancel or alter the shared start", async () => {
+  const native = fixture("restart-required", "running");
+  let release!: () => void;
+  let entered!: () => void;
+  const enteredQuit = new Promise<void>(resolve => { entered = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  native.adapter.quit = async () => { entered(); await blocked; throw new Error("actual quit refusal"); };
+  const phases: string[] = [];
+  const service = await startCodexService({ config: {}, profileRuntimeCommand: ["unused"], nativeTargetAdapter: native.adapter });
+  try {
+    const first = service.startProfile(1, { onProgress: () => { throw Error("observer at initial phase"); } });
+    await enteredQuit;
+    const joined = service.startProfile(1, { onProgress: () => { throw Error("observer at replay"); } });
+    const healthy = service.startProfile(1, { onProgress: phase => phases.push(phase) });
+    expect(joined).toBe(first);
+    expect(healthy).toBe(first);
+    release();
+    const [failure, joinedFailure] = await Promise.all([first.catch(error => error), joined.catch(error => error)]);
+    expect(joinedFailure).toBe(failure);
+    expect(failure).toBeInstanceOf(ProfileConnectionError);
+    expect(failure.phase).toBe("closing");
+    expect((failure.cause as Error).message).toBe("actual quit refusal");
+    expect(phases).toEqual(["closing"]);
+    const next = await service.startProfile(1).catch(error => error);
+    expect(next).toBeInstanceOf(ProfileConnectionError);
+    expect(next).not.toBe(failure);
+  } finally { release(); await service.close(); }
+});

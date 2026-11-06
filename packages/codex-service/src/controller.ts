@@ -363,6 +363,16 @@ export async function startCodexService(input: {
   let closing: Promise<void> | undefined;
   let stopping = false;
 
+  const deliverStartProgress = (slot: number, listeners: Set<NonNullable<ProfileStartOptions["onProgress"]>>,
+    listener: NonNullable<ProfileStartOptions["onProgress"]>, phase: ProfileConnectionPhase) => {
+    try { listener(phase); }
+    catch {
+      // A disconnected UI observer has no ownership over the running start.
+      listeners.delete(listener);
+      emitDiagnosticEvent("chatgpt_tela_codex", "profile_connection_observer_failed", { slot, phase });
+    }
+  };
+
   const targetAndSession = async (slot: number) => {
     return targets.resolve(slot, input.signal);
   };
@@ -614,7 +624,7 @@ export async function startCodexService(input: {
         }
         if (options?.onProgress) {
           active.listeners.add(options.onProgress);
-          if (active.phase) options.onProgress(active.phase);
+          if (active.phase) deliverStartProgress(slot, active.listeners, options.onProgress, active.phase);
         }
         emitDiagnosticEvent("chatgpt_tela_codex", "profile_connection_joined", { slot, phase: active.phase ?? "checking" });
         return active.promise;
@@ -637,7 +647,7 @@ export async function startCodexService(input: {
         phase = value;
         operation.phase = value;
         emitDiagnosticEvent("chatgpt_tela_codex", "profile_connection_phase", { slot, phase: value });
-        for (const listener of listeners) listener(value);
+        for (const listener of listeners) deliverStartProgress(slot, listeners, listener, value);
       };
       const promise: Promise<CodexProfileStatus> = Promise.resolve().then(async () => {
       try {

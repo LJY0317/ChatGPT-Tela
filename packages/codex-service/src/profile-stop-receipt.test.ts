@@ -67,8 +67,8 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
     const sessionGate = new Promise<void>(resolve => { releaseSession = resolve; });
     let sessionReads = 0;
     adapter.session = async (...args) => { sessionReads++; await sessionGate; return originalSession(...args); };
-    const firstJoin = service.startProfile(1);
-    const secondJoin = service.startProfile(1);
+    const firstJoin = service.startProfile(1, { onProgress: () => { throw Error("observer initial failure"); } });
+    const secondJoin = service.startProfile(1, { onProgress: () => { throw Error("observer replay failure"); } });
     expect(secondJoin).toBe(firstJoin);
     releaseSession();
     const [firstResult, secondResult] = await Promise.all([firstJoin, secondJoin]);
