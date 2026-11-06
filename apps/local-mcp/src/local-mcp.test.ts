@@ -141,7 +141,6 @@ test("Chat-only MCP has no Native tools and two independent Chat instances never
   const root = mkdtempSync(join(tmpdir(), "tela-local-chat-"));
   const instances = [];
   const clients: Client[] = [];
-  const servers = [];
   const workspaces: { id: string }[] = [];
   const stopped = new Set<string>();
   try {
@@ -154,7 +153,7 @@ test("Chat-only MCP has no Native tools and two independent Chat instances never
       const tools = createChatToolRuntime({ allowedRoots: [allowed], stateRoot: join(home, "state") });
       await tools.initialize();
       const service = await startChatService({ bearerToken: label.repeat(48), tools });
-      const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
+      const paths = resolveProductPaths({ home, environment: {} });
       const owned = createOwnershipManifest("test", new Date(), label);
       writeOwnershipManifest(paths.installManifest, owned);
       writeServiceRuntimeDescriptor(join(paths.serviceRuntime("chat"), "descriptor.json"), {
@@ -164,14 +163,14 @@ test("Chat-only MCP has no Native tools and two independent Chat instances never
       instances.push({ label, paths, service, allowed });
     }
     for (const instance of instances) {
-      const { createDeviceLocalChatMcpServer } = await import("./main");
-      const server = createDeviceLocalChatMcpServer(instance.paths);
-      const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
-      const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
-      await server.connect(serverTransport);
+      const home = dirname(instance.allowed);
+      const clientTransport = new StdioClientTransport({ command: "bun",
+        args: ["run", "apps/local-mcp/src/main.ts"], cwd: process.cwd(),
+        env: { ...process.env, HOME: home, XDG_STATE_HOME: "", XDG_RUNTIME_DIR: "",
+          XDG_CONFIG_HOME: "", XDG_CACHE_HOME: "", APPDATA: "", LOCALAPPDATA: "" } });
       const client = new Client({ name: "local", version: "0.0.1" }, { capabilities: {} });
       await client.connect(clientTransport);
-      clients.push(client); servers.push(server);
+      clients.push(client);
       expect((await client.listTools()).tools.map(x => x.name).sort()).toEqual([
         "chatgpt_tela_chat_capability_call", "chatgpt_tela_chat_capability_inventory"
       ]);
@@ -200,10 +199,34 @@ test("Chat-only MCP has no Native tools and two independent Chat instances never
       arguments: { capability: "read", arguments: { workspace_id: workspaces[1]!.id, path: "sample.txt" } } });
     expect(available.isError).not.toBe(true);
     expect(JSON.stringify(available.content)).toContain("two");
+    // Even a still-running local stdio connection cannot keep accessing a
+    // service after its installation ownership was removed or replaced.
+    rmSync(instances[1]!.paths.installManifest);
+    const removed = await clients[1]!.callTool({ name: "chatgpt_tela_chat_capability_inventory", arguments: {} });
+    expect(removed.isError).toBe(true);
+    writeOwnershipManifest(instances[1]!.paths.installManifest,
+      createOwnershipManifest("test", new Date(), "replacement"));
+    const replaced = await clients[1]!.callTool({ name: "chatgpt_tela_chat_capability_call",
+      arguments: { capability: "read", arguments: { workspace_id: workspaces[1]!.id, path: "sample.txt" } } });
+    expect(replaced.isError).toBe(true);
+    expect(readFileSync(join(instances[1]!.allowed, "sample.txt"), "utf8")).toBe("two");
   } finally {
     await Promise.all(clients.map(client => client.close()));
-    await Promise.all(servers.map(server => server.close()));
     await Promise.all(instances.filter(i => !stopped.has(i.label)).map(i => i.service.close()));
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("an uninstalled computer cannot initialize local MCP stdio or list any tools", () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-local-not-installed-"));
+  try {
+    const child = spawnSync("bun", ["run", "apps/local-mcp/src/main.ts"], {
+      cwd: process.cwd(), input: "", encoding: "utf8", timeout: 5000,
+      env: { ...process.env, HOME: home, XDG_STATE_HOME: "", XDG_RUNTIME_DIR: "",
+        XDG_CONFIG_HOME: "", XDG_CACHE_HOME: "", APPDATA: "", LOCALAPPDATA: "" },
+    });
+    expect(child.status).toBe(1);
+    expect(child.stdout).toBe("");
+    expect(child.stderr).toContain("Tela is not installed on this computer");
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
