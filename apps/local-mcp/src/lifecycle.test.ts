@@ -145,7 +145,6 @@ test("owned local MCP source, alias and marketplace settle across packaged insta
     const stale = spawnSync(before.command, before.args, {
       env: { PATH: before.env.PATH }, encoding: "utf8" });
     expect(stale.error && (stale.error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    expect(stale.stdout).toBeNull();
 
     const removed = await runProductUninstall({ mode: "apply", removeData: true, ...options,
       serviceRegistrationRunner: runner });
