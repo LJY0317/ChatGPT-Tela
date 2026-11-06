@@ -105,6 +105,7 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
 
 export interface ElectronDevelopmentRuntimeOptions {
   readonly profileSlot?: number;
+  readonly routeId?: string;
   readonly profileId: string;
   readonly connectorName?: string;
   readonly currentTurnSource?: CanonicalCurrentTurnSource;
@@ -296,6 +297,7 @@ export async function startElectronDevelopmentRuntime(
 
   const runtime = await startDevelopmentRuntime({
     ...(input.profileSlot !== undefined ? { profileSlot: input.profileSlot } : {}),
+    ...(input.routeId ? { routeId: input.routeId } : {}),
     ...(input.currentTurnSource ? { currentTurnSource: input.currentTurnSource } : {}),
     browserHost,
     turns,
@@ -355,6 +357,7 @@ export async function startElectronDevelopmentRuntime(
   let stopping: Promise<void> | undefined;
   return Object.freeze({
     responses: runtime.responses,
+    ...(runtime.suppliedToolBridge ? { suppliedToolBridge: runtime.suppliedToolBridge } : {}),
     mcp: runtime.mcp,
     turns: runtime.turns,
     browserRetention: (surfaceId?: string) => runtime.browserRetention(surfaceId),

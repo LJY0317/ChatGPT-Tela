@@ -263,6 +263,7 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
         requestRouter: options.responses!.requestRouter! });
       return {
         responses,
+        suppliedToolBridge: { inventory: () => [], async invoke() { throw Error("No fixture tool calls"); } },
         async prepareChatGptWebSession(input: any) {
           input.onProfile?.({ account: { accountFingerprint: "a".repeat(64),
             accountStructure: "personal", containerFingerprint: "fixture" } });
@@ -297,4 +298,76 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
     expect(closes).toBe(2);
     expect(nativeRequests).toBe(2);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("app-owned startup assembles its authenticated internal MCP with the supplied host operation", async () => {
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+  const { createSuppliedRequestGateway } = await import("./supplied-request-gateway");
+  const { chatGptWebModelId, chatGptWebFamilyKey } = await import("@chatgpt-tela/chatgpt");
+  const root = mkdtempSync(join(tmpdir(), "tela-app-owned-startup-roundtrip-"));
+  const family = { key: chatGptWebFamilyKey("Startup fixture"), label: "Startup fixture", availableEfforts: ["medium"] as const };
+  let client: InstanceType<typeof Client> | undefined;
+  let owned: Awaited<ReturnType<typeof startAppOwnedProductResponsesRuntime>> | undefined;
+  let control = "";
+  try {
+    const config = loadProductProfileRuntimeConfig(common(root));
+    mkdirSync(config.browserProfile.userDataDir, { recursive: true });
+    bindChatGptTelaAccount(config.browserProfile, "a".repeat(64));
+    const temporary = await startLocalResponsesServer({ requestRouter: async () => new Response(null, { status: 404 }) });
+    const ingress = { port: temporary.port, capability: "r".repeat(48) }; await temporary.stop();
+    const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
+      const provider = {
+        async submitTurn(_surface: unknown, turn: any) {
+          control = turn.chatTools.nativeGoalControl;
+          return { state: "proven", evidence: ["fixture"], value: { nativeTaskId: turn.nativeTaskId,
+            nativeTurnId: turn.nativeTurnId, webEpochId: turn.webEpochId, providerTurnId: "startup-web" } };
+        },
+        async armToolContinuation(_surface: unknown, handle: any, callId: string) {
+          return { state: "proven", evidence: ["fixture"], value: { providerTurnId: handle.providerTurnId, callId } };
+        },
+        async waitForTurnEvent(_surface: unknown, handle: any) {
+          const result = await client!.callTool({ name: "chatgpt_tela_codex_tool_call", arguments: {
+            turn_capability: control, call_id: "startup-get-goal", wire_name: "get_goal", mode: "structured", arguments: {} } });
+          expect(result.isError).not.toBe(true);
+          expect(JSON.stringify(result)).toContain("paused");
+          return { state: "proven", evidence: ["fixture"], value: { kind: "completed",
+            providerTurnId: handle.providerTurnId, answer: "Startup host result received." } };
+        },
+      } as any;
+      const host = { async acquire({ taskId, epochId }: any) { return { taskId, epochId, leaseId: "startup-surface",
+        async navigate() {}, async reveal() {}, async hide() {}, capability() {} }; },
+        async release() {}, async close() {} } as any;
+      const gateway = createSuppliedRequestGateway({ browserHost: host, provider,
+        routeId: options.routeId!, async prepareForSubmit() {} });
+      const responses = await startLocalResponsesServer({ ...options.responses, gateway });
+      return { responses, suppliedToolBridge: gateway.toolBridge,
+        async prepareChatGptWebSession(input: any) {
+          input.onProfile?.({ account: { accountFingerprint: "a".repeat(64), accountStructure: "personal", containerFingerprint: "fixture" } });
+          input.onFamilies?.([family]); input.onConnectorStarting?.(); input.onConnectorProven?.(); return { families: [family] };
+        },
+        async discoverChatGptWebModelFamilies() { return [family]; },
+        async stop() { await responses.stop(); await gateway.close(); },
+      } as unknown as ElectronDevelopmentRuntime;
+    }) as typeof import("./electron").startElectronDevelopmentRuntime;
+    owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
+      nativeFetch: async () => Response.json({ models: [] }) });
+    client = new Client({ name: "startup-goal", version: "1.0.0" });
+    await client.connect(new StreamableHTTPClientTransport(owned.internalMcp.endpointUrl, {
+      requestInit: { headers: { authorization: `Bearer ${config.internalMcpToken}` } } }) as unknown as import("@modelcontextprotocol/sdk/shared/transport.js").Transport);
+    const body = { model: chatGptWebModelId(family.key), stream: false, reasoning: { effort: "medium" },
+      client_metadata: { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "startup-thread", turn_id: "startup-turn" } },
+      tools: [{ type: "function", name: "get_goal", parameters: { type: "object" } }],
+      input: [{ role: "user", content: "Read the synthetic Goal." }] };
+    const post = async (value: unknown) => (await fetch(new URL("responses", owned!.responses.baseUrl), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value) })).json() as Promise<any>;
+    const first = await post(body);
+    expect(first.error).toBeUndefined();
+    expect(first.output[0]).toMatchObject({ type: "function_call", call_id: "startup-get-goal", name: "get_goal" });
+    const final = await post({ ...body, input: [...body.input, first.output[0], {
+      type: "function_call_output", call_id: "startup-get-goal", output: '{"status":"paused"}' }] });
+    expect(JSON.stringify(final)).toContain("Startup host result received.");
+    const retired = await client.callTool({ name: "chatgpt_tela_codex_tool_inventory", arguments: { turn_capability: control } });
+    expect(retired.isError).toBe(true);
+  } finally { await client?.close(); await owned?.stop(); rmSync(root, { recursive: true, force: true }); }
 });

@@ -133,6 +133,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
 }): Promise<{
   readonly runtime: ElectronDevelopmentRuntime;
   readonly responses: ElectronDevelopmentRuntime["responses"];
+  readonly internalMcp: CodexBridgeMcpHttpServer;
   stop(): Promise<void>;
 }> {
   const { config, ingress } = input;
@@ -152,6 +153,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   });
   runtime = await (input.electronStarter ?? startElectronDevelopmentRuntime)({
     profileSlot: config.slot,
+    routeId: config.routeId,
     profileId: config.browserProfile.profileId,
     chatGptUrl: CHATGPT_TEMPORARY_CHAT_URL,
     connectorName: identity.connectorName,
@@ -168,6 +170,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     },
     electron: { userDataDir: config.browserProfile.userDataDir },
   });
+  let internalMcp: CodexBridgeMcpHttpServer | undefined;
   try {
     input.signal?.throwIfAborted();
     await prepareProductWebDiscovery({
@@ -176,14 +179,21 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     });
     await router.refreshWebModelFamilies(input.signal);
     input.signal?.throwIfAborted();
+    if (!runtime.suppliedToolBridge) throw Error("App-owned runtime did not expose its operation bridge");
+    internalMcp = await startCodexBridgeMcpHttpServer({ bridge: runtime.suppliedToolBridge,
+      port: 0, authentication: { kind: "bearer", token: config.internalMcpToken } });
+    const ownedMcp = internalMcp;
     const owned = runtime;
+    let stopping: Promise<void> | undefined;
     return Object.freeze({
       runtime: owned,
       responses: owned.responses,
+      internalMcp: ownedMcp,
       // Only the Tela browser and Responses transport are ours to close.
-      stop: () => owned.stop(),
+      stop: () => stopping ??= (async () => { await ownedMcp.stop(); await owned.stop(); })(),
     });
   } catch (error) {
+    await internalMcp?.stop();
     await runtime.stop();
     throw error;
   }

@@ -14,7 +14,8 @@ import {
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 import { classifyWebPreparationErrorKind, classifyWebPreparationFailure } from "./web-preparation-diagnostics";
 import { failedNativeRequestFingerprint, type NativeProjectionError } from "./native-projection-diagnostics";
-import { createSuppliedRequestGateway } from "./supplied-request-gateway";
+import { createProfileTurnBridge, createSuppliedRequestGateway } from "./supplied-request-gateway";
+import type { TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import type { SuppliedRequestWebTurnPlanner } from "./native-request-planner";
 import {
   startLocalResponsesServer,
@@ -23,6 +24,7 @@ import {
   type LocalResponsesServer,
 } from "@chatgpt-tela/local-server";
 import {
+  McpTurnBridge,
   connectCodexBridgeMcpServer,
   connectDevelopmentMcpServer,
   type CodexBridgeMcpConnection,
@@ -96,6 +98,8 @@ export type RetiringDevelopmentWebTurnPlanner = DevelopmentWebTurnPlanner & {
 };
 
 export interface DevelopmentRuntime {
+  /** Present only for the independent supplied Responses owner. */
+  readonly suppliedToolBridge?: TurnBridgeBackend;
   browserRetention(surfaceId?: string): import("@chatgpt-tela/core").BrowserRetentionObservation;
   readonly responses: LocalResponsesServer;
   readonly mcp: DevelopmentMcpRuntime;
@@ -152,6 +156,7 @@ export type DevelopmentMcpRuntime =
 
 export interface DevelopmentRuntimeOptions {
   readonly profileSlot?: number;
+  readonly routeId?: string;
   readonly currentTurnSource?: CanonicalCurrentTurnSource;
   readonly browserHost: BrowserHost;
   readonly turns?: ActiveTurnRegistry;
@@ -194,6 +199,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
     if (typeof planner.planSuppliedRequest !== "function") throw new Error("Web planner does not support supplied requests");
     const gateway = createSuppliedRequestGateway({ browserHost: input.browserHost, provider,
       planner: planner as SuppliedRequestWebTurnPlanner,
+      ...(input.routeId ? { routeId: input.routeId } : {}),
       ...(input.profileSlot !== undefined ? { profileSlot: input.profileSlot } : {}),
       ...(input.browserSurfaceTarget !== undefined ? { browserSurfaceTarget: input.browserSurfaceTarget } : {}),
       ...(input.webTurnTimeoutMs !== undefined ? { webTurnTimeoutMs: input.webTurnTimeoutMs } : {}),
@@ -202,7 +208,9 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
     try { responses = await startLocalResponsesServer({ ...input.responses, gateway }); }
     catch (error) { await gateway.close(); throw error; }
     let stopping: Promise<void> | undefined;
-    return { responses, turns, mcp: { kind: "external", abi: webMcpContract, async close() {} },
+    return { responses, turns,
+      suppliedToolBridge: createProfileTurnBridge(new McpTurnBridge(turns), gateway),
+      mcp: { kind: "external", abi: webMcpContract, async close() {} },
       browserRetention: surfaceId => gateway.browserRetention(surfaceId),
       stop() { return stopping ??= (async () => { await responses.stop(); await gateway.close(); })(); },
     };
