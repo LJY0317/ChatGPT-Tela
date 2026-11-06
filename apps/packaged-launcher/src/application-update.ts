@@ -95,6 +95,17 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
       if (state.phase === "resuming" && (state.resumeVersion !== spec.productVersion || state.resumeFingerprint !== fingerprint)) {
         throw Error("application changed during service restoration");
       }
+      if (state.pendingStop) {
+        const pending = state.pendingStop;
+        // An interrupted worker cannot reuse its old in-memory stop deadline.
+        // Only the exact launchd registration being stopped can settle its
+        // persisted intent; an unavailable or still-running job remains pending.
+        let stopped = false;
+        try { stopped = await step("pending_stop_observation", () => controller.inspect(pending), pending) === "stopped"; }
+        catch { /* Restore acknowledged peers, but preserve the uncertain intent. */ }
+        if (stopped) state = save({ ...state, pendingStop: undefined,
+          stoppedServices: [...state.stoppedServices, pending] });
+      }
       const current = readOwnershipManifest(paths.installManifest);
       if (!current || current.installId !== state.installId
         || ![state.sourceVersion, state.resumeVersion].includes(current.productVersion)) throw Error("application update ledger changed");
@@ -109,10 +120,14 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
         await step("registration_install", () => installer.install({ manifestPath: paths.installManifest, manifest, resource: entry.resource, definition: entry.definition }), service);
       }
       for (const service of startOrder) {
-        if (!state.runningServices.includes(service) || state.resumedServices.includes(service)
+        if (!state.runningServices.includes(service)
           || state.pendingStop && !state.stoppedServices.includes(service)) continue;
+        // A prior resume receipt is not proof the service is still ready after
+        // this worker or a later profile-restore attempt was interrupted.
         await step("service_resume", () => controller.resume(service), service);
-        state = save({ ...state, resumedServices: [...state.resumedServices, service] });
+        if (!state.resumedServices.includes(service)) {
+          state = save({ ...state, resumedServices: [...state.resumedServices, service] });
+        }
       }
       if (state.pendingStop) throw Error(`application update is postponed: ${state.pendingStop} shutdown has not been settled; acknowledged peers were restored`);
       rmSync(path);

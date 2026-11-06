@@ -362,6 +362,53 @@ test("interrupted readiness resumes the target without re-stopping or restarting
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("recovery rechecks a previously resumed service after it exited", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-resume-exited-"));
+  try {
+    const f = await fixture(root);
+    await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" });
+    writeFileSync(packagedProductManifestPath(f.sourceRoot), JSON.stringify({ ...f.manifest, productVersion: "2.0.0" }));
+    writeFileSync(join(f.sourceRoot, "Contents/Resources/build.txt"), "2");
+    await expect(runApplicationUpdate("finish", { ...f.input, options: { ...f.input.options,
+      async waitUntilReady(service) {
+        if (service === "gateway") throw Error("gateway startup interrupted");
+        await f.input.options.waitUntilReady(service);
+      },
+    } })).rejects.toThrow("gateway startup interrupted");
+    expect(readMacApplicationUpdate(f.paths)?.resumedServices).toEqual(["chat"]);
+    f.runner.jobs.get("com.openai.chatgpt-tela.chat")!.running = false;
+    f.runner.calls.length = 0;
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true, restored: true });
+    expect(f.runner.jobs.get("com.openai.chatgpt-tela.chat")?.running).toBe(true);
+    expect(f.runner.calls.some(call => call.startsWith("kickstart") && call.includes("chat"))).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("restart settles a persisted pending stop only from its exact OS state", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-pending-stop-"));
+  try {
+    const f = await fixture(root);
+    // Simulate losing the coordinator after gateway stopped and before the
+    // stop request for chat received a result. Registrations remain loaded.
+    const jobs = [...f.runner.jobs].map(([label, job]) => [label, { ...job }] as const);
+    await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" });
+    for (const [label, job] of jobs) f.runner.jobs.set(label, job);
+    const path = macApplicationUpdatePath(f.paths);
+    const ready = readMacApplicationUpdate(f.paths)!;
+    writeFileSync(path, JSON.stringify({ ...ready, phase: "quiescing", pendingStop: "chat",
+      stoppedServices: ["gateway"] }));
+    f.runner.jobs.get("com.openai.chatgpt-tela.gateway")!.running = false;
+    f.runner.jobs.get("com.openai.chatgpt-tela.chat")!.running = true;
+    await expect(runApplicationUpdate("cancel", f.input)).rejects.toThrow("shutdown has not been settled");
+    expect(readMacApplicationUpdate(f.paths)?.pendingStop).toBe("chat");
+    expect(f.runner.jobs.get("com.openai.chatgpt-tela.chat")?.running).toBe(true);
+    f.runner.jobs.get("com.openai.chatgpt-tela.chat")!.running = false;
+    expect(await runApplicationUpdate("cancel", f.input)).toMatchObject({ ready: true, restored: true });
+    expect(f.runner.jobs.get("com.openai.chatgpt-tela.chat")?.running).toBe(true);
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 
 test("split-payload keep-data removal migrates to one app without a compatibility installer", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-migration-"));
