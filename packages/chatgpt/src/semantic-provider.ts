@@ -820,6 +820,9 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       ...(assistant.bodyProof ? { semantic_version: assistant.bodyProof.version } : {}),
       ...(retention.state === "verified" ? { retained_answer_fingerprint: diagnosticFingerprint(retention.fingerprint) } : {}),
       state: retention.state, semantic_answer_available: retention.state === "verified",
+      // Card disappearance is not proof that the approved task continued.
+      approval_previously_observed: tracked.approvalObservation.phase !== undefined,
+      approval_task_progress_observed: tracked.approvalObservation.phase === "task_progress",
       ...(retention.state === "unavailable" ? { reason_class: retention.reason } : {}),
     });
   }

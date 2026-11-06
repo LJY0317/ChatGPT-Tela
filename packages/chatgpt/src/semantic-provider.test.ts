@@ -3077,6 +3077,10 @@ test("manual approval remains pending beyond ten minutes and can complete withou
   const driver = new FixtureDriver(fixture("ready-new-chat"));
   const surface = await leaseFor(driver);
   const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "off" });
+  const completionEvidence: Record<string, unknown>[] = [];
+  const stop = observeDiagnosticEvents(row => {
+    if (row.stage === "web_retained_answer_committed") completionEvidence.push(row);
+  });
   try {
     const sending = provider.submitTurn(surface.lease, request());
     while (driver.current.revision === "r1") await Promise.resolve();
@@ -3108,8 +3112,11 @@ test("manual approval remains pending beyond ten minutes and can complete withou
         }
       }
       expect(completed).toBe(true);
+      expect(completionEvidence.at(-1)).toMatchObject({
+        approval_previously_observed: true, approval_task_progress_observed: true,
+      });
     } finally { clock.mockRestore(); }
-  } finally { await surface.host.close(); }
+  } finally { stop?.(); await surface.host.close(); }
 });
 
 test.each(["owned", "changed_author"] as const)("public cancellation aborts pending approval and freshly proves Stop ownership (%s)", async scenario => {
