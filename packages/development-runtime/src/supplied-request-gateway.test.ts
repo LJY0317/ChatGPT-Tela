@@ -106,6 +106,7 @@ test("opaque input cannot acquire Native history or a browser through supplied i
   let nativeReads = 0;
   const planner = createNativeRequestDevelopmentWebTurnPlanner({
     async compactionHistory() { nativeReads++; throw Error("Native source must stay unreachable"); },
+    async preparationBudgetFor() { nativeReads++; throw Error("Native compaction budget must stay unreachable"); },
   });
   const f = fixture({ planner });
   try {

@@ -61,9 +61,23 @@ and Responses transport without a Native source or Native MCP exposure. In a
 separate isolated official-engine trial, actual ChatGPT Web family 6 / Extra High
 returned a greeting through this entry in about eight seconds. There was no
 Native inference fallback, and the existing profile connection was restored.
-This accepts real Web response execution, not installed Desktop integration or
-Web local-tool execution. Those remain distinct from the earlier Desktop
-synthetic-provider/Native coexistence trial.
+A later actual Desktop trial accepted a Web-family greeting followed by a
+Native model switch in the same chat: the app-owned engine executed
+`cua.getState()` and completed both turns. This was a model switch, not Web
+invocation of Native tools. The Desktop turn recorded High while the Web route
+received/selected Medium; Extra High is not accepted by this trial. Preserve
+that mismatch for input-boundary investigation rather than overriding effort.
+A separate Web tool trial confirmed three successful local-file read effects
+and an unchanged file. Its literal nonce assertion failed on Markdown-escaped
+underscores, so byte equality and the skipped warm follow-up remain unaccepted.
+All profile configuration was restored and the other profile was unchanged.
+These are candidate-entry trials, not an installed/default launcher migration.
+
+Built-in `openai` cannot be overridden to add provider headers. The app-owned
+trial therefore authenticates the loopback endpoint with a private capability
+URL, preserving the original OpenAI Authorization and organization headers.
+The existing ingress still handles origin rejection, compressed bodies and
+WebSocket-to-HTTP negotiation; no separate authentication server is introduced.
 
 Request metadata supplies correlation only. Duplicate observers join the same
 operation, completed results can be collected again, and superseded operations

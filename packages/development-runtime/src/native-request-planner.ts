@@ -1061,7 +1061,6 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       ...(plannerOptions.budgetTokens !== undefined ? { budgetTokens: plannerOptions.budgetTokens } : {}),
       ...(plannerOptions.checkpointProducer ? { checkpointProducer: plannerOptions.checkpointProducer } : {}),
       ...(plannerOptions.checkpointPreparationPolicy ? { checkpointPreparationPolicy: plannerOptions.checkpointPreparationPolicy } : {}),
-      ...(plannerOptions.preparationBudgetFor ? { preparationBudgetFor: plannerOptions.preparationBudgetFor } : {}),
     };
     // Failure-only stage observations are local to this request, not attached to errors.
     // Observer errors must not replace the original planner exception.

@@ -220,12 +220,12 @@ describe("local Native Responses server", () => {
     const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async () => {});
     const server = await startLocalResponsesServer({
       gateway,
-      authentication: { kind: "header", name: "OpenAI-Organization" },
+      authentication: { kind: "header", name: "X-Tela-Fixture" },
     });
     try {
       const response = await fetch(new URL("responses", server.baseUrl), {
         headers: {
-          "OpenAI-Organization": server.runtimeToken,
+          "X-Tela-Fixture": server.runtimeToken,
           upgrade: "websocket",
         },
       });
@@ -282,6 +282,34 @@ test("explicit route-only server retains auth and fails closed without a gateway
   } finally { await server.stop(); }
 });
 
+
+test("capability URL preserves first-party headers and uses the same decoded Responses ingress", async () => {
+  const received: { path: string; authorization: string | null; organization: string | null; body: unknown }[] = [];
+  const server = await startLocalResponsesServer({ authentication: { kind: "path" },
+    async requestRouter(request) {
+      received.push({ path: new URL(request.url).pathname,
+        authorization: request.headers.get("authorization"), organization: request.headers.get("OpenAI-Organization"),
+        body: await request.json() });
+      return Response.json({ ok: true });
+    },
+  });
+  try {
+    const endpoint = new URL("responses", server.baseUrl);
+    const response = await fetch(endpoint, { method: "POST", headers: {
+      authorization: "Bearer first-party-fixture", "OpenAI-Organization": "org-original",
+      "content-encoding": "zstd",
+    }, body: zstdCompressSync(Buffer.from('{"value":1}')) });
+    expect(response.status).toBe(200);
+    expect(received).toEqual([{ path: "/v1/responses", authorization: "Bearer first-party-fixture",
+      organization: "org-original", body: { value: 1 } }]);
+    const noCapability = new URL("/v1/responses", endpoint);
+    expect((await fetch(noCapability, { method: "POST", body: "broken" })).status).toBe(401);
+    expect((await server.handleRequest(new Request(new URL("/%xx/v1/responses", endpoint)))).status).toBe(401);
+    expect((await fetch(endpoint, { headers: { origin: "https://example.invalid" } })).status).toBe(403);
+    expect((await fetch(endpoint, { headers: { upgrade: "websocket" } })).status).toBe(426);
+    expect(received).toHaveLength(1);
+  } finally { await server.stop(); }
+});
 
 test("in-process dispatch preserves authentication, browser-origin rejection, body decoding and closure", async () => {
   let calls = 0;

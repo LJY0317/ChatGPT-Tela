@@ -45,7 +45,9 @@ export interface LocalResponsesServer {
 
 export type LocalResponsesAuthentication =
   | { readonly kind: "bearer" }
-  | { readonly kind: "header"; readonly name: string };
+  | { readonly kind: "header"; readonly name: string }
+  /** Capability URL for built-in providers that cannot add custom headers. */
+  | { readonly kind: "path" };
 
 export type LocalResponsesRequestRouter = (request: Request) => Promise<Response | undefined>;
 
@@ -65,9 +67,10 @@ function authenticationToken(
   request: Request,
   authentication: LocalResponsesAuthentication,
 ): string | undefined {
-  return authentication.kind === "bearer"
-    ? bearerToken(request)
-    : headerToken(request, authentication.name);
+  if (authentication.kind === "bearer") return bearerToken(request);
+  if (authentication.kind === "header") return headerToken(request, authentication.name);
+  try { return decodeURIComponent(new URL(request.url).pathname.split("/")[1] ?? ""); }
+  catch { return undefined; }
 }
 
 function sameSecret(left: string | undefined, right: string): boolean {
@@ -143,6 +146,10 @@ export async function startLocalResponsesServer(input: {
     if (!sameSecret(authenticationToken(request, authentication), runtimeToken)) {
       return unauthorized(authentication);
     }
+    if (authentication.kind === "path") {
+      url.pathname = url.pathname.slice(url.pathname.indexOf("/", 1)) || "/";
+      request = new Request(url, request);
+    }
     if (url.pathname === "/v1/responses" && request.headers.get("upgrade")?.toLowerCase() === "websocket") {
       // Codex's built-in openai provider advertises WebSocket support. An explicit 426 makes it
       // fall back to the HTTP Responses transport that Tela implements for this local route.
@@ -180,7 +187,8 @@ export async function startLocalResponsesServer(input: {
   });
 
   const port = server.port;
-  const baseUrl = new URL(`http://${hostname}:${port}/v1/`);
+  const prefix = authentication.kind === "path" ? `/${encodeURIComponent(runtimeToken)}` : "";
+  const baseUrl = new URL(`http://${hostname}:${port}${prefix}/v1/`);
 
   return Object.freeze({
     hostname,

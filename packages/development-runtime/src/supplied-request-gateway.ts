@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { parseNativeTurnReplayIdentity } from "@chatgpt-tela/codex";
-import { diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { capturePrivateDiagnosticValue, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { selectChatGptWebModel, type WebConversationProvider } from "@chatgpt-tela/chatgpt";
 import type { ResponsesGateway } from "@chatgpt-tela/responses";
 import {
@@ -129,9 +129,22 @@ export function createSuppliedRequestGateway(input: {
               emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_completed", {
                 scope_fingerprint: diagnosticFingerprint(identity.threadId),
                 turn_fingerprint: diagnosticFingerprint(identity.turnId), native_authority: false,
+                context_mode: plan.physicalContext.mode, retained_surface: page.reused,
+                logical_estimate: plan.physicalContext.logicalTokens, transfer_estimate: plan.physicalContext.transferTokens,
+                effort: route.effort,
               });
               return { type: "final", answer, delivery: { capability } } as const;
             } catch (error) {
+              emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_failed", {
+                scope_fingerprint: diagnosticFingerprint(identity.threadId),
+                turn_fingerprint: diagnosticFingerprint(identity.turnId), native_authority: false,
+                boundary: !plan ? "planning" : acquired ? "browser" : "acquisition",
+                ...diagnosticFailureFields(error),
+              });
+              if (!plan) capturePrivateDiagnosticValue("web_preparation_failure", {
+                phase: "provider_input", request: body,
+                error: error instanceof Error ? { name: error.name, message: error.message } : { name: "unknown" },
+              });
               plan?.settle?.({ status: "failed" });
               // Preserve accepted/uncertain browser evidence; expiry remains owned by the existing registry.
               if (plan && acquired) await epochs.fail(plan.nativeTaskId, plan.webEpochId, true).catch(() => {});
