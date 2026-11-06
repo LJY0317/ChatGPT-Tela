@@ -12,14 +12,6 @@ private struct ServiceStatus: Decodable {
   let state: String
 }
 
-private struct IngressStatus: Decodable {
-  let publicAvailability: String?
-  let contractVersion: Int
-  let availability: String
-  let cause: String
-  let detail: String
-}
-
 private typealias ProfileStatus = TelaWorkProfile
 
 private struct ProfilesEnvelope: Decodable {
@@ -74,7 +66,7 @@ enum TelaPreferencesStore {
 private struct MenuSnapshot {
   let services: [(String, String)]
   let localChatState: String
-  let runtimeReady: Bool
+  let start: TelaStartPresentation
   let workInventory: TelaWorkInventory
 }
 
@@ -522,26 +514,10 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
   }
 
-  private func inspectIngress() async -> IngressStatus? {
-    do {
-      guard let descriptor = try readDescriptor("gateway") else { return nil }
-      let data = try await request(descriptor, path: menuOpen ? "v1/ingress?public=1" : "v1/ingress")
-      let status = try JSONDecoder().decode(IngressStatus.self, from: data)
-      guard status.contractVersion == 1,
-            ["ready", "unavailable", "unconfigured"].contains(status.availability),
-            !status.cause.isEmpty,
-            !status.detail.isEmpty else { return nil }
-      return status
-    } catch {
-      return nil
-    }
-  }
-
   private func inspect() async -> MenuSnapshot {
     async let gateway = inspectService("gateway")
     async let chat = inspectService("chat")
     async let codex = inspectService("codex")
-    async let ingress = inspectIngress()
     let ticket = controlCenter.workState.beginRead()
     do {
       guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "TelaWork", code: 1) }
@@ -551,15 +527,13 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     let gatewayState = await gateway
     let chatState = await chat
     let codexState = await codex
-    let ingressStatus = await ingress
-    let connection = TelaIngressPresentation(localReady: gatewayState == "Ready" && chatState == "Ready",
-      availability: ingressStatus?.availability, publicAvailability: ingressStatus?.publicAvailability)
     return MenuSnapshot(
       services: [
-        ("Chat", chatState == "Stopped" ? "Off" : connection.status)
+        ("Chat", TelaLocalChatPresentation(serviceState: chatState).status)
       ],
       localChatState: chatState,
-      runtimeReady: gatewayState == "Ready" && chatState == "Ready" && codexState == "Ready",
+      start: TelaStartPresentation(webConfigured: controlCenter.webSetupConfigured,
+        chatReady: chatState == "Ready", gatewayReady: gatewayState == "Ready", codexReady: codexState == "Ready"),
       workInventory: workInventory
     )
   }
@@ -621,8 +595,8 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       }
     }
     if let snapshot {
-      if !snapshot.runtimeReady {
-        let start = actionItem("Start Tela", action: #selector(startTela))
+      if snapshot.start.shouldOfferStart {
+        let start = actionItem(snapshot.start.title, action: #selector(startTela))
         start.isEnabled = !controlCenter.connectionOperationInProgress
         menu.addItem(start)
       }

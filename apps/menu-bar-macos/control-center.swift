@@ -378,6 +378,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var serviceAction: String?
   private var previewLoads = 0
   private var bootstrapState = "checking"
+  var webSetupConfigured: Bool { bootstrapState == "configured" }
   private var connectorURL: String?
   private var savingConfiguration = false
   private var settingUp = false
@@ -781,7 +782,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func addTelaControl() {
     guard installedServiceControlsAvailable() else { return }
-    let ready = ["gateway", "chat", "codex"].allSatisfy { serviceStates[$0] == "Ready" }
+    let ready = webSetupConfigured
+      ? ["gateway", "chat", "codex"].allSatisfy { serviceStates[$0] == "Ready" }
+      : serviceStates["chat"] == "Ready"
     guard !ready || changingServices else { return }
     let connection = card("Tela")
     if changingServices {
@@ -790,7 +793,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       append(secondary("Checking…"), to: connection)
     } else {
       let stopped = serviceStates.values.allSatisfy { $0 == "Stopped" }
-      let start = actionButton("Start Tela", action: #selector(startServices))
+      let start = actionButton(webSetupConfigured ? "Start Tela" : "Start Tela Chat",
+        action: webSetupConfigured ? #selector(startServices) : #selector(startLocalChat))
       start.isEnabled = !operationInProgress && !refreshing
       row(stopped ? "Off" : "Needs attention", control: start, in: connection)
     }
@@ -798,14 +802,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func availability(for service: String, needsProfile: Bool = false) -> String {
     if serviceStates[service] == nil { return "Checking…" }
+    if service == "chat" { return TelaLocalChatPresentation(serviceState: serviceStates["chat"]!).status }
     let profileReady = !needsProfile || (workInventory.error == nil && profiles.contains {
       $0.connected && $0.connectionInProgress != true
     })
-    if !needsProfile {
-      let connection = TelaIngressPresentation(localReady: serviceStates["gateway"] == "Ready" && serviceStates[service] == "Ready",
-        availability: ingressStatus?.availability, publicAvailability: ingressStatus?.publicAvailability)
-      return connection.status == "Ready" ? "Available" : connection.status
-    }
     return serviceStates[service] == "Ready" && profileReady ? "Available" : "Needs attention"
   }
 
@@ -829,8 +829,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       pageHeader("Your ChatGPT connections at a glance.")
       addTelaControl()
       let connections = card()
-      addStatus("Chat", value: availability(for: "chat"),
-                subtitle: "Use your local workspace in ChatGPT.", to: connections)
+      addStatus("Chat · This Mac", value: availability(for: "chat"),
+                subtitle: "Local service only; install the plugin separately in ChatGPT Desktop.", to: connections)
       divider(in: connections)
       addStatus("Work / Codex", value: availability(for: "codex", needsProfile: true),
                 subtitle: "Use Web models in your Codex conversations.", to: connections)
@@ -1245,7 +1245,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func addLocalChatPluginSetup() {
     guard installedServiceControlsAvailable() else { return }
-    let local = card("Chat · This Mac")
+    let local = card("1 · Local Chat on this Mac")
     let chatReady = serviceStates["chat"] == "Ready"
     append(secondary("Tela Chat: \(serviceStates["chat"] ?? "Checking…"). For ChatGPT Desktop local threads on this Mac."), to: local)
     if !chatReady {
@@ -1262,7 +1262,17 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     local.addArrangedSubview(prepare)
     if preparingLocalPlugin { append(secondary("Preparing local plugin…"), to: local) }
     if let localPluginMessage { append(secondary(localPluginMessage), to: local) }
-    append(secondary("Approve local folders in Settings, then install tela-local-chat from your personal marketplace in ChatGPT Desktop's Plugins Directory and test a Chat tool. Web conversations use a separate connection."), to: local)
+    let folders = actionButton("Approve local folders…", action: #selector(openLocalFolderSettings))
+    folders.isEnabled = !operationInProgress
+    local.addArrangedSubview(folders)
+    append(secondary("2 · Approve folders in Settings. 3 · Install tela-local-chat from your personal marketplace in ChatGPT Desktop's Plugins Directory; preparation does not install or enable it. 4 · In a local Desktop thread, use a Chat tool to open the approved folder and read a file. HTTPS and Tailscale are not needed. ChatGPT controls plugin visibility; another signed-in device's plugin list is not guaranteed hidden."), to: local)
+  }
+
+  @objc private func openLocalFolderSettings() {
+    selectedPage = .settings
+    updateNavigation()
+    renderCurrentPage()
+    Task { await refreshCurrentPage() }
   }
 
   @objc private func prepareLocalChatPlugin() {
@@ -1436,9 +1446,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       help.addArrangedSubview(actionButton("Check again", action: #selector(refreshPage)))
       return
     }
-    append(secondary("For local ChatGPT Desktop threads, start Tela Chat and prepare its plugin below. You can approve folders in Settings without an HTTPS address. The Web connection is optional."), to: stack)
+    append(secondary("Start with device-local Chat below. HTTPS, Tailscale and a Web account setup are not required. A ready local service or prepared plugin does not prove ChatGPT Desktop installed or enabled it."), to: stack)
     addLocalChatPluginSetup()
-    let connection = card("Optional Web connection (development)")
+    let connection = card("Optional · Remote Web / Codex development")
     let endpoint = NSTextField(string: endpointDraft)
     endpoint.placeholderString = "https://your-server.example/mcp"
     append(endpoint, to: connection)

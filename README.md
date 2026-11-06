@@ -472,22 +472,26 @@ config/state/browser data unless `--remove-data` is explicit. `uninstall --apply
 the currently executing launcher is inside the installed Tela binary root; run it from a separately extracted
 package copy so Windows and other platforms are not asked to delete the executable that is still running.
 
-### First connection from a packaged preview
+### First use: device-local Chat (default)
 
 The macOS control center guides first use from the **installed** package; it needs no source checkout
 or separate Electron build. A fresh installation opens **Set up ChatGPT Tela** automatically.
 
-For local Desktop threads, use **Start Tela Chat** and **Prepare local plugin** in setup or Settings.
-Approve local folders in Settings, then install `tela-local-chat` from your personal marketplace in
-ChatGPT Desktop's Plugins Directory. This source flow does not require a public HTTPS address.
-The plugin preparation button does not install or authorize the plugin in ChatGPT.
+On the current Mac, choose **Start Tela Chat** and **Prepare local plugin** in first-use setup or Settings.
+Choose **Approve local folders…** (or open Settings → Chat · Local folders), approve the folders you
+want this computer to access, and select **Apply Chat settings…** if the saved access is not active.
+Then explicitly install and enable `tela-local-chat` from your personal marketplace in ChatGPT
+Desktop's Plugins Directory. Finally, in a **local Desktop thread**, invoke a Chat tool to open
+an approved workspace and read a file to verify actual access. Service readiness and plugin
+preparation do **not** prove host installation or permission. Neither public HTTPS nor Tailscale
+nor Web account setup is required for this local path.
 The installed macOS `fb519688` release accepted local Chat start/stop and an exact
 read through the existing Profile 1 plugin without re-registration. Fresh plugin
 installation, two-device isolation and Web-worker access remain unverified.
 Use **Stop Tela Chat…** to stop only Chat while keeping Work/Codex connections open. With no Web
 configuration, reopening the menu does not restart Chat; use **Start Tela Chat** when needed.
 
-The optional development Web connection uses the following separate flow:
+The **optional** remote Web / Codex development connection uses this separate flow:
 
 1. Install the signed preview with the plan/apply commands above. The menu bar opens on macOS.
 2. In the setup screen, enter your reachable HTTPS connection address and local port. Choose an existing
@@ -529,7 +533,8 @@ or enable them. Use a supported personal/repository marketplace and install thro
 Plugins Directory, following the [official packaging guide](https://developers.openai.com/plugins/build/plugins).
 The local Chat service must already be running. This candidate has no remote fallback or other-device
 discovery. A macOS Desktop local-thread file read is verified. Clean consumer installation and
-two-computer isolation remain unverified; the
+two-computer isolation remain unverified. Account-shared plugin visibility is owned by the ChatGPT
+host, so Tela cannot guarantee the plugin is completely hidden on another signed-in device; the
 [desktop-only contract](https://developers.openai.com/plugins/deploy/desktop-only) does not establish support
 for regular Web/mobile chats or Tela's Electron Web workers. See [connection scope and remaining
 acceptance](docs/consumer-installation.md#host-and-transport-boundaries) before switching routes.

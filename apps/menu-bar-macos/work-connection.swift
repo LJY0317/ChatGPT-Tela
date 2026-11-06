@@ -243,15 +243,25 @@ struct TelaProfilePresentation {
   }
 }
 
-// Local service readiness does not attest the public connector route.
-struct TelaIngressPresentation {
-  let localReady: Bool
-  let availability: String?
-  let publicAvailability: String?
+// A running local service is independent of public Web ingress and does not
+// prove that the user installed or enabled a plugin in ChatGPT Desktop.
+struct TelaLocalChatPresentation {
+  let serviceState: String
   var status: String {
-    guard localReady else { return "Needs attention" }
-    if publicAvailability == "unavailable" { return "Connection issue" }
-    guard availability == "ready" else { return "Needs attention" }
-    return publicAvailability == "ready" ? "Ready" : "Local ready"
+    switch serviceState {
+    case "Ready": return "Service ready · plugin not verified"
+    case "Stopped": return "Off"
+    case "Unavailable": return "Service unavailable"
+    default: return "Checking…"
+    }
   }
+}
+
+struct TelaStartPresentation {
+  let webConfigured: Bool
+  let chatReady: Bool
+  let gatewayReady: Bool
+  let codexReady: Bool
+  var shouldOfferStart: Bool { !chatReady || (webConfigured && (!gatewayReady || !codexReady)) }
+  var title: String { webConfigured ? "Start Tela" : "Start Tela Chat" }
 }

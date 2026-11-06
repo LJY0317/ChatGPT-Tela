@@ -102,6 +102,11 @@ test("regenerating a launcher plugin removes old bundles and preserves unrelated
     const initial = spawnSync("bun", ["run", "apps/local-mcp/src/package.ts", destination], { encoding: "utf8" });
     expect(initial.status).toBe(0);
     const plugin = join(destination, "plugins", "tela-local-chat");
+    const guide = readFileSync(join(destination, "README.md"), "utf8");
+    expect(guide).toContain("no HTTPS address or Tailscale is required");
+    expect(guide).toContain("preparation is not host installation");
+    expect(guide).toContain("Other signed-in devices are not guaranteed to hide");
+    expect(JSON.parse(readFileSync(join(plugin, ".mcp.json"), "utf8")).mcpServers["tela-local-chat"].type).toBe("stdio");
     expect(readdirSync(plugin)).toContain("server.cjs");
     writeFileSync(join(plugin, "keep.txt"), "unrelated");
     const build = spawnSync("bun", ["run", "apps/local-mcp/src/package.ts", destination,

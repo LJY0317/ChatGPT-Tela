@@ -24,13 +24,18 @@ export function prepareLocalChatPlugin(destination: string, launcher?: string) {
       policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" }, category: "Productivity" }]
   });
   writeFileSync(join(root, "README.md"), [
-    "Private local developer candidate. Preparation does not install a plugin or change ChatGPT configuration.",
+    "Device-local Tela Chat for supported ChatGPT Desktop local threads. Preparation does not install or enable the plugin in ChatGPT.",
     executable ? "Uses this computer's installed Tela launcher and embedded runtime; no Node or runtime copy."
       : "Developer bundle: node plugins/tela-local-chat/server.cjs (Node must be on PATH).",
-    "The Chat service must already be installed and running here; ownership and the loopback descriptor are resolved at call time.",
+    "1. Start this computer's Tela Chat service; no HTTPS address or Tailscale is required.",
+    "2. Approve local folders in Tela Settings and apply Chat settings if prompted.",
+    "3. Install tela-local-chat from this marketplace in ChatGPT Desktop's Plugins Directory; this preparation is not host installation.",
+    "4. In a supported local Desktop thread, invoke a Chat tool to open an approved workspace and read a file.",
+    "The service ownership and loopback descriptor are resolved at call time.",
     "Chat tools only: no Native work tools, discovery of other computers, or remote fallback.",
     "The inactive marketplace is .agents/plugins/marketplace.json; source paths resolve from this output root.",
-    "Use a supported personal/repository marketplace and install in ChatGPT Desktop's Plugins Directory.",
+    "Use a supported personal/repository marketplace; install and enable the plugin in ChatGPT Desktop's Plugins Directory.",
+    "ChatGPT controls account-level plugin visibility. Other signed-in devices are not guaranteed to hide the plugin's existence.",
     "Packaging and Native/Codex acceptance do not prove Desktop installation, Work or Electron Web-worker support.",
   ].join("\n") + "\n");
   return { root, plugin, marketplace };
