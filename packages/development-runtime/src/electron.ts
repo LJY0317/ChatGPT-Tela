@@ -358,6 +358,8 @@ export async function startElectronDevelopmentRuntime(
   return Object.freeze({
     responses: runtime.responses,
     ...(runtime.suppliedToolBridge ? { suppliedToolBridge: runtime.suppliedToolBridge } : {}),
+    ...(runtime.shutdownReadiness ? { shutdownReadiness: () => runtime.shutdownReadiness!() } : {}),
+    ...(runtime.prepareShutdown ? { prepareShutdown: () => runtime.prepareShutdown!() } : {}),
     mcp: runtime.mcp,
     turns: runtime.turns,
     browserRetention: (surfaceId?: string) => runtime.browserRetention(surfaceId),

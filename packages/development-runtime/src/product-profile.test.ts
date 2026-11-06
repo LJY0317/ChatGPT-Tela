@@ -264,6 +264,7 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
       return {
         responses,
         suppliedToolBridge: { inventory: () => [], async invoke() { throw Error("No fixture tool calls"); } },
+        shutdownReadiness: () => "ready", prepareShutdown() {},
         async prepareChatGptWebSession(input: any) {
           input.onProfile?.({ account: { accountFingerprint: "a".repeat(64),
             accountStructure: "personal", containerFingerprint: "fixture" } });
@@ -342,6 +343,7 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
         routeId: options.routeId!, async prepareForSubmit() {} });
       const responses = await startLocalResponsesServer({ ...options.responses, gateway });
       return { responses, suppliedToolBridge: gateway.toolBridge,
+        shutdownReadiness: () => gateway.shutdownReadiness(), prepareShutdown: () => gateway.prepareShutdown(),
         async prepareChatGptWebSession(input: any) {
           input.onProfile?.({ account: { accountFingerprint: "a".repeat(64), accountStructure: "personal", containerFingerprint: "fixture" } });
           input.onFamilies?.([family]); input.onConnectorStarting?.(); input.onConnectorProven?.(); return { families: [family] };

@@ -134,6 +134,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   readonly runtime: ElectronDevelopmentRuntime;
   readonly responses: ElectronDevelopmentRuntime["responses"];
   readonly internalMcp: CodexBridgeMcpHttpServer;
+  shutdownReadiness(): "ready" | "blocked";
   stop(): Promise<void>;
 }> {
   const { config, ingress } = input;
@@ -179,7 +180,8 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     });
     await router.refreshWebModelFamilies(input.signal);
     input.signal?.throwIfAborted();
-    if (!runtime.suppliedToolBridge) throw Error("App-owned runtime did not expose its operation bridge");
+    if (!runtime.suppliedToolBridge || !runtime.shutdownReadiness || !runtime.prepareShutdown)
+      throw Error("App-owned runtime did not expose its operation lifecycle");
     internalMcp = await startCodexBridgeMcpHttpServer({ bridge: runtime.suppliedToolBridge,
       port: 0, authentication: { kind: "bearer", token: config.internalMcpToken } });
     const ownedMcp = internalMcp;
@@ -189,8 +191,13 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       runtime: owned,
       responses: owned.responses,
       internalMcp: ownedMcp,
-      // Only the Tela browser and Responses transport are ours to close.
-      stop: () => stopping ??= (async () => { await ownedMcp.stop(); await owned.stop(); })(),
+      shutdownReadiness: () => owned.shutdownReadiness!(),
+      // Close admission only after exact work is settled, in the same JS turn.
+      stop() {
+        if (stopping) return stopping;
+        owned.prepareShutdown!();
+        return stopping = (async () => { try { await ownedMcp.stop(); } finally { await owned.stop(); } })();
+      },
     });
   } catch (error) {
     await internalMcp?.stop();

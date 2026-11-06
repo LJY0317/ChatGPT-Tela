@@ -100,6 +100,8 @@ export type RetiringDevelopmentWebTurnPlanner = DevelopmentWebTurnPlanner & {
 export interface DevelopmentRuntime {
   /** Present only for the independent supplied Responses owner. */
   readonly suppliedToolBridge?: TurnBridgeBackend;
+  shutdownReadiness?(): "ready" | "blocked";
+  prepareShutdown?(): void;
   browserRetention(surfaceId?: string): import("@chatgpt-tela/core").BrowserRetentionObservation;
   readonly responses: LocalResponsesServer;
   readonly mcp: DevelopmentMcpRuntime;
@@ -210,6 +212,8 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
     let stopping: Promise<void> | undefined;
     return { responses, turns,
       suppliedToolBridge: createProfileTurnBridge(new McpTurnBridge(turns), gateway),
+      shutdownReadiness: () => gateway.shutdownReadiness(),
+      prepareShutdown: () => gateway.prepareShutdown(),
       mcp: { kind: "external", abi: webMcpContract, async close() {} },
       browserRetention: surfaceId => gateway.browserRetention(surfaceId),
       stop() { return stopping ??= (async () => { await responses.stop(); await gateway.close(); })(); },

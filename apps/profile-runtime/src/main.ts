@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   loadProductProfileRuntimeConfig,
   startNativeFirstProductProfileRuntime,
@@ -211,9 +212,11 @@ async function mainAppOwned(
     preview = await startProfileBridgePreviewServer({
       slot: config.slot,
       bearerToken: config.uiToken,
-      // A surface snapshot cannot prove that a newly admitted provider request
-      // has finished planning. Do not advertise managed-style shutdown admission
-      // until the parent wires the exact supplied-request owner lifecycle.
+      shutdownReadiness: () => owned.shutdownReadiness(),
+      shutdownProfile: async () => {
+        await owned.stop();
+        return { responsesRouteFingerprint: createHash("sha256").update(owned.responses.baseUrl.href).digest("hex") };
+      },
       surfaces: () => web.bridgeSurfaces(),
       onSurfacesChanged: listener => web.onBridgeSurfacesChanged(listener),
       observe: (id, threadId) => web.observeBridgePreview(id, threadId),
@@ -230,7 +233,10 @@ async function mainAppOwned(
       profileId: config.browserProfile.profileId,
       bridgePreviewUrl: preview.endpoint.href,
       responsesUrl: owned.responses.baseUrl.href,
-      responsesRouteFingerprint: diagnosticFingerprint(owned.responses.baseUrl.href),
+      responsesRouteFingerprint: createHash("sha256").update(owned.responses.baseUrl.href).digest("hex"),
+      targetId: config.nativeTarget.targetId,
+      nativeTargetKind: config.nativeTarget.kind,
+      internalMcpUrl: owned.internalMcp.endpointUrl.href,
       nativeReady: false,
       webState: "ready",
     });

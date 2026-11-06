@@ -231,3 +231,26 @@ test("structured MCP Goal calls roundtrip through the supplied host with canonic
     await expect(codex.inventory(control)).rejects.toThrow();
   } finally { await mcp.close(); await server.close(); await service.close(); await profileClient.close(); await profileMcp.stop(); await gateway.close(); }
 });
+
+test("shutdown protects accepted work and unreceived answers without retaining settled failures", async () => {
+  let release!: () => void;
+  const f = fixture({ wait: new Promise<void>(resolve => { release = resolve; }) });
+  try {
+    const answer = f.gateway.handle(request());
+    expect(f.gateway.shutdownReadiness()).toBe("blocked");
+    expect(() => f.gateway.prepareShutdown()).toThrow("active Web work");
+    release();
+    const outcome = await answer;
+    expect(f.gateway.shutdownReadiness()).toBe("blocked");
+    f.gateway.commit(outcome);
+    expect(f.gateway.shutdownReadiness()).toBe("ready");
+    f.gateway.prepareShutdown();
+    await expect(f.gateway.handle(request("new-turn"))).rejects.toThrow("admission closed");
+  } finally { release(); await f.gateway.close(); }
+  const failed = fixture({ failure: new Error("Settled provider failure") });
+  try {
+    await expect(failed.gateway.handle(request())).rejects.toThrow("Settled provider failure");
+    expect(failed.gateway.shutdownReadiness()).toBe("ready");
+    failed.gateway.prepareShutdown();
+  } finally { await failed.gateway.close(); }
+});

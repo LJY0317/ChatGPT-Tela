@@ -26,6 +26,7 @@ interface Operation {
   readonly advertisedGoals: readonly NativeToolCatalogEntry[];
   offer: (outcome: NativeGatewayOutcome) => void;
   armContinuation?: (callId: string) => Promise<void>;
+  failed?: true;
   finishedAt?: number;
   delivered: boolean;
   progress?: string;
@@ -57,6 +58,8 @@ export function createSuppliedRequestGateway(input: {
     route: NonNullable<ReturnType<typeof nativeRequestBrowserModelRoute>>, signal?: AbortSignal) => Promise<void>;
 }): ResponsesGateway & {
   readonly toolBridge: TurnBridgeBackend;
+  shutdownReadiness(): "ready" | "blocked";
+  prepareShutdown(): void;
   ownsCapability(capability: string): boolean;
   browserRetention(surfaceId?: string): ReturnType<RetainedBrowserEpochRegistry["retention"]>;
   close(): Promise<void>;
@@ -94,8 +97,16 @@ export function createSuppliedRequestGateway(input: {
     },
   };
 
+  const shutdownReadiness = (): "ready" | "blocked" => [...operations.values()].some(op =>
+    op.finishedAt === undefined || !op.failed && !op.delivered) ? "blocked" : "ready";
+
   return {
     toolBridge,
+    shutdownReadiness,
+    prepareShutdown() {
+      if (shutdownReadiness() !== "ready") throw Error("Finish active Web work or receive its answer before shutdown");
+      controller.abort(new Error("Web provider admission closed"));
+    },
     ownsCapability: capability => [...operations.values()].some(op => op.capability === capability && op.finishedAt === undefined),
     browserRetention: surfaceId => epochs.retention(surfaceId),
     async handle(body, presentation) {
@@ -199,6 +210,7 @@ export function createSuppliedRequestGateway(input: {
               });
               return { type: "final", answer, delivery: { capability } } as const;
             } catch (error) {
+              owned.failed = true;
               emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_failed", {
                 scope_fingerprint: diagnosticFingerprint(identity.threadId),
                 turn_fingerprint: diagnosticFingerprint(identity.turnId), native_authority: false,
