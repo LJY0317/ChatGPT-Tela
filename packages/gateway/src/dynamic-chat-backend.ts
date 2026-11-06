@@ -28,8 +28,7 @@ export type ChatDescriptorResolver = (
 export class DynamicChatBackend {
   readonly #resolveDescriptor: ChatDescriptorResolver;
 
-  constructor(resolveDescriptor: ChatDescriptorResolver, readonly goalBridge?: TurnBridgeBackend,
-    readonly suppliedBridge?: TurnBridgeBackend) {
+  constructor(resolveDescriptor: ChatDescriptorResolver, readonly goalBridge?: TurnBridgeBackend) {
     this.#resolveDescriptor = resolveDescriptor;
   }
 
@@ -49,14 +48,8 @@ export class DynamicChatBackend {
       return this.goalBridge.invoke(history_control, { callId: randomUUID(), wireName: CONTEXT_HISTORY_TOOL.wireName,
         mode: "structured", arguments: selection });
     }
-    if ((this.goalBridge || this.suppliedBridge)
-      && (capability === "goal_control_inventory" || capability === "goal_control_call")) {
+    if (this.goalBridge && (capability === "goal_control_inventory" || capability === "goal_control_call")) {
       const control = arguments_.goal_control;
-      // Provider-operation bearers are minted by supplied ingress, never derived from
-      // a body thread/call ID. The original Native bridge remains a separate owner.
-      const bridge = typeof control === "string" && control.startsWith("provider-")
-        ? this.suppliedBridge : this.goalBridge;
-      if (!bridge) throw Error("unknown Goal operation control");
       let controlFingerprint: string | undefined;
       if (typeof control === "string") {
         try { controlFingerprint = diagnosticFingerprint(control); } catch { /* Invalid input remains a normal capability error. */ }
@@ -69,7 +62,7 @@ export class DynamicChatBackend {
       if (typeof control !== "string") throw Error("Goal control capability is required");
       let tools;
       try {
-        tools = (await bridge.inventory(control)).filter(isNativeGoalTool);
+        tools = (await this.goalBridge.inventory(control)).filter(isNativeGoalTool);
       } catch (error) {
         // Distinguish a rejected per-cycle Goal bearer from a transport
         // failure. Do not retain the bearer or the exception message.
@@ -87,7 +80,7 @@ export class DynamicChatBackend {
         || !arguments_.arguments || typeof arguments_.arguments !== "object" || Array.isArray(arguments_.arguments)) {
         throw Error("Goal control call must match an advertised Native Goal tool");
       }
-      return bridge.invoke(control, { callId: arguments_.call_id,
+      return this.goalBridge.invoke(control, { callId: arguments_.call_id,
         wireName: arguments_.wire_name, mode: "structured", arguments: arguments_.arguments as Record<string, unknown> });
     }
     return dynamicBackendCall({
@@ -108,7 +101,7 @@ export class DynamicChatBackend {
         return descriptor ? new ChatServiceClient(descriptorForService(descriptor, "chat")) : undefined;
       },
       operation: async client => {
-        const catalog = [...await client.capabilityCatalog(), ...(this.goalBridge || this.suppliedBridge ? turnControls : [])];
+        const catalog = [...await client.capabilityCatalog(), ...(this.goalBridge ? turnControls : [])];
         const needle = query.trim().toLowerCase();
         return needle
           ? Object.freeze(catalog.filter(item => item.capability.toLowerCase().includes(needle)

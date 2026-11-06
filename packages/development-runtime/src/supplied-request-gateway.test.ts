@@ -4,7 +4,7 @@ import { BROWSER_DOCUMENT_LIFETIME, type BrowserHost, type BrowserSurfaceLease, 
 import { chatGptWebFamilyKey, chatGptWebModelId, type WebConversationProvider, type WebTurnRequest } from "@chatgpt-tela/chatgpt";
 import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
-import { createSuppliedRequestGateway } from "./supplied-request-gateway";
+import { createProfileTurnBridge, createSuppliedRequestGateway } from "./supplied-request-gateway";
 import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
 
 const model = chatGptWebModelId(chatGptWebFamilyKey("Supplied request fixture"));
@@ -148,6 +148,11 @@ test("structured MCP Goal calls roundtrip through the supplied host with canonic
   const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
   const { createPublicMcpServer } = await import("../../gateway/src/public-server");
   const { DynamicChatBackend } = await import("../../gateway/src/dynamic-chat-backend");
+  const { DynamicCodexTurnBridge } = await import("../../gateway/src/dynamic-codex-turn-bridge");
+  const { RoutedCodexTurnBridge } = await import("../../codex-service/src/routed-turn-bridge");
+  const { startCodexServiceHttpServer } = await import("../../codex-service/src/http-server");
+  const { startCodexBridgeMcpHttpServer, connectCodexTurnBridge, McpTurnBridge } = await import("@chatgpt-tela/mcp");
+  const { ActiveTurnRegistry, turnCapabilityRoute } = await import("@chatgpt-tela/runtime");
   const armed: string[] = [];
   let control = "", mcp: InstanceType<typeof Client>;
   const provider: WebConversationProvider = {
@@ -182,8 +187,22 @@ test("structured MCP Goal calls roundtrip through the supplied host with canonic
       async navigate() {}, async reveal() {}, async hide() {}, capability() { return undefined; } } as BrowserSurfaceLease; },
     async release() {}, async close() {},
   };
-  const gateway = createSuppliedRequestGateway({ browserHost: host, provider, async prepareForSubmit() {} });
-  const backend = new DynamicChatBackend(() => undefined, undefined, gateway.toolBridge);
+  const gateway = createSuppliedRequestGateway({ browserHost: host, provider, routeId: "ProfileB2", async prepareForSubmit() {} });
+  const profileBridge = createProfileTurnBridge(new McpTurnBridge(new ActiveTurnRegistry({ routeId: "ProfileB2" })), gateway);
+  const profileMcp = await startCodexBridgeMcpHttpServer({ bridge: profileBridge,
+    authentication: { kind: "bearer", token: "p".repeat(48) } });
+  const profileClient = await connectCodexTurnBridge({ endpoint: profileMcp.endpointUrl,
+    bearerToken: "p".repeat(48) });
+  const router = new RoutedCodexTurnBridge();
+  router.mount("ProfileB2", profileClient);
+  const service = await startCodexServiceHttpServer({
+    service: { tools: router } as unknown as Parameters<typeof startCodexServiceHttpServer>[0]["service"],
+  });
+  const codex = new DynamicCodexTurnBridge(() => ({ version: 1, service: "codex",
+    instanceId: "fixture-codex-service", installId: "fixture-install", pid: 1,
+    endpoint: service.endpoint.href, bearerToken: service.bearerToken,
+    startedAt: "2026-11-07T00:00:00.000Z" }));
+  const backend = new DynamicChatBackend(() => undefined, codex);
   const server = createPublicMcpServer({ chat: backend });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   mcp = new Client({ name: "supplied-host-goal-fixture", version: "1.0.0" });
@@ -193,6 +212,7 @@ test("structured MCP Goal calls roundtrip through the supplied host with canonic
     type: "function", name, parameters: { type: "object" } })) };
   try {
     const first = await gateway.handle(body);
+    expect(turnCapabilityRoute(control)).toBe("ProfileB2");
     expect(first).toMatchObject({ type: "tool-call", item: { call_id: "read-goal", name: "get_goal" } });
     gateway.commit(first);
     const firstOutput = { type: "function_call_output", call_id: "read-goal", output: '{"status":"paused"}' };
@@ -208,5 +228,6 @@ test("structured MCP Goal calls roundtrip through the supplied host with canonic
     expect(await gateway.handle(finalBody)).toEqual(final);
     expect(armed).toEqual(["read-goal", "complete-goal"]);
     expect(() => gateway.toolBridge.inventory(control)).toThrow("retired");
-  } finally { await mcp.close(); await server.close(); await gateway.close(); }
+    await expect(codex.inventory(control)).rejects.toThrow();
+  } finally { await mcp.close(); await server.close(); await service.close(); await profileClient.close(); await profileMcp.stop(); await gateway.close(); }
 });

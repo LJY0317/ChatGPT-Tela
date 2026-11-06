@@ -49,6 +49,11 @@ function capability(route: string | undefined): string {
   return route ? `turnr_${route}_${secret}` : `turn_${secret}`;
 }
 
+/** Mint a routed operation bearer without registering a fictitious Native turn. */
+export function createRoutedOperationCapability(route?: string): string {
+  return capability(route === undefined ? undefined : routeId(route));
+}
+
 export function turnCapabilityRoute(token: string): string | undefined {
   const match = /^turnr_([A-Za-z0-9]{8,32})_[A-Za-z0-9_-]{40,}$/.exec(token);
   return match?.[1];

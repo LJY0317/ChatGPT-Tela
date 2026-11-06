@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { encodeNativeToolInvocation, extractNativeToolResults, parseNativeTurnClaim, parseNativeTurnReplayIdentity } from "@chatgpt-tela/codex";
 import { NativeToolInventory, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
@@ -7,7 +7,7 @@ import { selectChatGptWebModel, type WebConversationProvider } from "@chatgpt-te
 import type { ResponsesGateway } from "@chatgpt-tela/responses";
 import {
   RetainedBrowserEpochRegistry, WEB_EPOCH_IDLE_RETENTION_MS, assertWebMessageFitsComposer,
-  bindWebEpochDocument, runBrowserTurnOnSurface, ExactToolRound, type NativeGatewayOutcome,
+  bindWebEpochDocument, runBrowserTurnOnSurface, ExactToolRound, createRoutedOperationCapability, type NativeGatewayOutcome,
 } from "@chatgpt-tela/runtime";
 import {
   createNativeRequestDevelopmentWebTurnPlanner, nativeRequestBrowserModelRoute,
@@ -50,12 +50,14 @@ export function createSuppliedRequestGateway(input: {
   readonly provider: WebConversationProvider;
   readonly planner?: SuppliedRequestWebTurnPlanner;
   readonly profileSlot?: number;
+  readonly routeId?: string;
   readonly browserSurfaceTarget?: number;
   readonly webTurnTimeoutMs?: number;
   readonly prepareForSubmit?: (surface: BrowserSurfaceLease,
     route: NonNullable<ReturnType<typeof nativeRequestBrowserModelRoute>>, signal?: AbortSignal) => Promise<void>;
 }): ResponsesGateway & {
   readonly toolBridge: TurnBridgeBackend;
+  ownsCapability(capability: string): boolean;
   browserRetention(surfaceId?: string): ReturnType<RetainedBrowserEpochRegistry["retention"]>;
   close(): Promise<void>;
 } {
@@ -94,6 +96,7 @@ export function createSuppliedRequestGateway(input: {
 
   return {
     toolBridge,
+    ownsCapability: capability => [...operations.values()].some(op => op.capability === capability && op.finishedAt === undefined),
     browserRetention: surfaceId => epochs.retention(surfaceId),
     async handle(body, presentation) {
       controller.signal.throwIfAborted();
@@ -136,7 +139,7 @@ export function createSuppliedRequestGateway(input: {
         if (operation && operation.finishedAt === undefined) throw new Error("This Web conversation still has an unfinished response");
         if (operation) superseded.set(`${identity.threadId}\u0000${operation.turnId}`, Date.now());
         const listeners = new Set<(summary: string) => void | boolean>();
-        const capability = `provider-${randomUUID()}`;
+        const capability = createRoutedOperationCapability(input.routeId);
         // Advertisements are data from this authenticated Responses ingress, not
         // filesystem/Native authority. Only the exact official Goal function subset is offered.
         const claim = parseNativeTurnClaim(body);
@@ -253,6 +256,21 @@ export function createSuppliedRequestGateway(input: {
       operations.clear();
       superseded.clear();
       await input.browserHost.close();
+    },
+  };
+}
+
+/** The existing profile MCP endpoint can serve Native and supplied operations together. */
+export function createProfileTurnBridge(native: TurnBridgeBackend, supplied: {
+  readonly toolBridge: TurnBridgeBackend;
+  ownsCapability(capability: string): boolean;
+}): TurnBridgeBackend {
+  return {
+    inventory(capability, query) {
+      return (supplied.ownsCapability(capability) ? supplied.toolBridge : native).inventory(capability, query);
+    },
+    invoke(capability, invocation) {
+      return (supplied.ownsCapability(capability) ? supplied.toolBridge : native).invoke(capability, invocation);
     },
   };
 }
