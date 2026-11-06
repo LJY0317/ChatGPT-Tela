@@ -63,6 +63,15 @@ test("readiness uses the existing socket once and fails when supervision has clo
   await expect(lifecycle.publishReady({stage:"product-profile-ready"})).rejects.toThrow("already");
  }finally{lifecycle.dispose();await pair.close();}
 });
+test("app-owned provider publishes readiness without claiming Native ownership", async () => {
+  const pair = await connectedPair();
+  const lifecycle = await createProfileSupervisorLifecycle({ signalSource: new EventEmitter(), socket: pair.client });
+  try {
+    const received = new Promise<string>(resolve => pair.server.once("data", data => resolve(data.toString())));
+    await lifecycle.publishReady({ stage: "app-owned-profile-ready", slot: 1, nativeReady: false });
+    expect(JSON.parse(await received)).toEqual({ stage: "app-owned-profile-ready", slot: 1, nativeReady: false });
+  } finally { lifecycle.dispose(); await pair.close(); }
+});
 test("publisher rejects invalid or oversized readiness before writing",async()=>{
  const pair=await connectedPair();const lifecycle=await createProfileSupervisorLifecycle({signalSource:new EventEmitter(),socket:pair.client});
  try{

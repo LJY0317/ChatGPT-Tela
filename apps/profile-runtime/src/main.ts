@@ -1,8 +1,10 @@
 import {
   loadProductProfileRuntimeConfig,
   startNativeFirstProductProfileRuntime,
+  startAppOwnedProductResponsesRuntime,
   readChatGptTelaAccountBinding,
 } from "@chatgpt-tela/development-runtime";
+import { readProductConfigIfPresent } from "@chatgpt-tela/product-config";
 import { app } from "electron";
 import { writeSync } from "node:fs";
 import { startProfileBridgePreviewServer, type ProfileBridgePreviewServer } from "./bridge-preview-server";
@@ -13,6 +15,7 @@ import { createAccountDisplay } from "./account-display";
 import { startNativeAccountLifecycle } from "./native-account-lifecycle";
 import { diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import { bindBeforeQuitToStop } from "./quit";
+import { selectAppOwnedProfileIngress } from "./profile-selection";
 
 function writeStderr(value: unknown): void {
   try {
@@ -177,12 +180,79 @@ async function main(config: ReturnType<typeof loadProductProfileRuntimeConfig>):
   await stop();
 }
 
+/** A separately owned Responses profile: no Native RPC, Desktop launch, quit,
+ * or first-party Native turn authority. Its distinct ready stage must not be
+ * accepted as a managed Desktop lease by the Codex controller. */
+async function mainAppOwned(
+  config: ReturnType<typeof loadProductProfileRuntimeConfig>,
+  ingress: { readonly port: number; readonly capability: string },
+): Promise<void> {
+  app.setPath("userData", config.browserProfile.userDataDir);
+  if (process.platform === "darwin") app.dock?.hide();
+  const lifecycle = await createProfileSupervisorLifecycle();
+  const keepAliveWithoutWindows = () => {};
+  app.on("window-all-closed", keepAliveWithoutWindows);
+  let runtime: Awaited<ReturnType<typeof startAppOwnedProductResponsesRuntime>> | undefined;
+  let preview: ProfileBridgePreviewServer | undefined;
+  let allowQuit = () => {};
+  let stopping: Promise<void> | undefined;
+  const stop = () => stopping ??= (async () => {
+    await runtime?.stop();
+    await preview?.close();
+    app.removeListener("window-all-closed", keepAliveWithoutWindows);
+    lifecycle.dispose();
+    allowQuit();
+    app.quit();
+  })().catch(error => { stopping = undefined; throw error; });
+  try {
+    runtime = await startAppOwnedProductResponsesRuntime({ config, ingress, signal: lifecycle.signal });
+    const owned = runtime;
+    const web = owned.runtime;
+    preview = await startProfileBridgePreviewServer({
+      slot: config.slot,
+      bearerToken: config.uiToken,
+      // A surface snapshot cannot prove that a newly admitted provider request
+      // has finished planning. Do not advertise managed-style shutdown admission
+      // until the parent wires the exact supplied-request owner lifecycle.
+      surfaces: () => web.bridgeSurfaces(),
+      onSurfacesChanged: listener => web.onBridgeSurfacesChanged(listener),
+      observe: (id, threadId) => web.observeBridgePreview(id, threadId),
+      reveal: (id, interactive) => web.revealBridgeSurface(id, interactive),
+      probeModelSelection: () => web.probeChatGptWebModelSelection(),
+      probeContextAttachment: signal => web.probeChatGptContextAttachment(signal),
+    });
+    lifecycle.signal.throwIfAborted();
+    await lifecycle.publishReady({
+      stage: "app-owned-profile-ready",
+      runtimeProcessId: process.pid,
+      slot: config.slot,
+      routeId: config.routeId,
+      profileId: config.browserProfile.profileId,
+      bridgePreviewUrl: preview.endpoint.href,
+      responsesUrl: owned.responses.baseUrl.href,
+      responsesRouteFingerprint: diagnosticFingerprint(owned.responses.baseUrl.href),
+      nativeReady: false,
+      webState: "ready",
+    });
+  } catch (error) {
+    await runtime?.stop().catch(() => {});
+    await preview?.close().catch(() => {});
+    lifecycle.dispose();
+    app.removeListener("window-all-closed", keepAliveWithoutWindows);
+    throw error;
+  }
+  allowQuit = bindBeforeQuitToStop(app, stop, writeStderr);
+  await lifecycle.shutdownRequested;
+  await stop();
+}
+
 function start(): Promise<void> {
   const config = loadProductProfileRuntimeConfig();
+  const ingress = selectAppOwnedProfileIngress(config, readProductConfigIfPresent());
   return withDiagnosticContext({
     profile_fingerprint: diagnosticFingerprint(config.browserProfile.profileId),
     storage_fingerprint: diagnosticFingerprint(config.browserProfile.userDataDir),
-  }, () => main(config));
+  }, () => ingress ? mainAppOwned(config, ingress) : main(config));
 }
 
 void start().catch(error => {

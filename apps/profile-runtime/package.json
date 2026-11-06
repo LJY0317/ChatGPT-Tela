@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@chatgpt-tela/development-runtime": "workspace:*",
+    "@chatgpt-tela/product-config": "workspace:*",
     "@chatgpt-tela/http-host": "workspace:*",
     "@chatgpt-tela/codex": "workspace:*",
     "@chatgpt-tela/core": "workspace:*",

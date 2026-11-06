@@ -39,6 +39,13 @@ export interface ProductConfig {
   readonly multiProfile?: ProductMultiProfileConfig;
   readonly publicMcpAbi: ProductPublicMcpAbi;
   readonly exposure: ProductExposureConfig;
+  /** Opt-in profile routes; stored by the install-owned product config (0600), not a live port registry. */
+  readonly appOwnedResponses?: readonly {
+    readonly slot: number;
+    readonly port: number;
+    /** Stable secret in the private provider URL, never forwarded to the Native backend. */
+    readonly capability: string;
+  }[];
 }
 
 function exactFields(record: Record<string, unknown>, allowed: readonly string[], field: string): void {
@@ -134,18 +141,44 @@ function parseExposure(value: unknown): ProductExposureConfig {
 export function parseProductConfig(value: unknown): ProductConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("product config must be a JSON object");
   const record = value as Record<string, unknown>;
-  exactFields(record, ["version", "multiProfile", "publicMcpAbi", "exposure"], "product config");
+  exactFields(record, ["version", "multiProfile", "publicMcpAbi", "exposure", "appOwnedResponses"], "product config");
   if (record.version !== 1) throw new Error("unsupported product config version");
   const publicMcpAbi = record.publicMcpAbi ?? "stable";
   if (publicMcpAbi !== "stable" && publicMcpAbi !== "unified-development") {
     throw new Error("product public MCP ABI is invalid");
   }
   const multiProfile = parseMultiProfile(record.multiProfile);
+  const exposure = parseExposure(record.exposure);
+  let appOwnedResponses: ProductConfig["appOwnedResponses"];
+  if (record.appOwnedResponses !== undefined) {
+    if (!Array.isArray(record.appOwnedResponses)) throw new Error("app-owned Responses profiles must be an array");
+    const slots = new Set<number>();
+    const ports = new Set<number>([exposure.localPort]);
+    appOwnedResponses = Object.freeze(record.appOwnedResponses.map(value => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("app-owned Responses entry is invalid");
+      const entry = value as Record<string, unknown>;
+      exactFields(entry, ["slot", "port", "capability"], "app-owned Responses entry");
+      if (entry.slot !== 1) {
+        throw new Error("app-owned Responses currently supports only the independent default Desktop slot 1");
+      }
+      const responsePort = port(entry.port, "app-owned Responses port");
+      if (slots.has(entry.slot as number) || ports.has(responsePort)) {
+        throw new Error("app-owned Responses must use distinct profile slots and ports separate from public MCP");
+      }
+      if (typeof entry.capability !== "string" || !/^[A-Za-z0-9_-]{43,128}$/.test(entry.capability)) {
+        throw new Error("app-owned Responses capability must be a URL-safe secret of 43-128 characters");
+      }
+      slots.add(entry.slot as number);
+      ports.add(responsePort);
+      return Object.freeze({ slot: entry.slot as number, port: responsePort, capability: entry.capability });
+    }));
+  }
   return Object.freeze({
     version: 1,
     ...(multiProfile ? { multiProfile } : {}),
     publicMcpAbi,
-    exposure: parseExposure(record.exposure),
+    exposure,
+    ...(appOwnedResponses ? { appOwnedResponses } : {}),
   });
 }
 

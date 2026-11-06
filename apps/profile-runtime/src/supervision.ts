@@ -107,7 +107,9 @@ export async function createProfileSupervisorLifecycle(input: {
     async publishReady(value: Readonly<Record<string, unknown>>) {
       if (publicationAttempted) throw new Error("profile readiness has already been published");
       if (controller.signal.aborted || socket.destroyed) throw new Error("profile supervisor is closed");
-      if (value.stage !== "product-profile-ready") throw new Error("profile readiness publication has an invalid stage");
+      if (value.stage !== "product-profile-ready" && value.stage !== "app-owned-profile-ready") {
+        throw new Error("profile readiness publication has an invalid stage");
+      }
       const frame = JSON.stringify(value) + "\n";
       if (Buffer.byteLength(frame) > 64 * 1024) throw new Error("profile readiness publication exceeded its bounded limit");
       publicationAttempted = true;
