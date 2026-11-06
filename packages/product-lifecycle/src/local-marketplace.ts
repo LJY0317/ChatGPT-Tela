@@ -90,7 +90,10 @@ export async function registerLocalMarketplace(input: {
     throw Error("local marketplace resource identity changed");
   }
   if (existing?.state === "owned") {
-    return observeLocalMarketplaceEntry(existing) === "owned" ? "already-registered" : "preserved-user-change";
+    // A retained entry pointing to a previous plugin source is not a valid
+    // registration of the new source, even if the old entry is still intact.
+    return existing.entryFingerprint === fingerprint(entry) && observeLocalMarketplaceEntry(existing) === "owned"
+      ? "already-registered" : "preserved-user-change";
   }
   const current = load(path);
   // An intent alone never proves creation, even if an external entry is identical.
