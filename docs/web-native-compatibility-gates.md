@@ -64,9 +64,8 @@ Native inference fallback, and the existing profile connection was restored.
 A later actual Desktop trial accepted a Web-family greeting followed by a
 Native model switch in the same chat: the app-owned engine executed
 `cua.getState()` and completed both turns. This was a model switch, not Web
-invocation of Native tools. The Desktop turn recorded High while the Web route
-received/selected Medium; Extra High is not accepted by this trial. Preserve
-that mismatch for input-boundary investigation rather than overriding effort.
+invocation of Native tools. The user confirmed that High was selected intentionally and accepted the
+trial as successful; do not repeat it to investigate effort selection.
 A separate Web tool trial confirmed three successful local-file read effects
 and an unchanged file. Its literal nonce assertion failed on Markdown-escaped
 underscores, so byte equality and the skipped warm follow-up remain unaccepted.
