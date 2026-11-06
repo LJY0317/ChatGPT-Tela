@@ -61,6 +61,21 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
     nativeTargetAdapter: adapter, webDelegationCapacity: async () => ({ total: { used: 0 }, uncertain: 0 }) });
   try {
     const started = await service.startProfile(1);
+    // A second caller joins the same existing-owner start, including success.
+    const originalSession = adapter.session;
+    let releaseSession!: () => void;
+    const sessionGate = new Promise<void>(resolve => { releaseSession = resolve; });
+    let sessionReads = 0;
+    adapter.session = async (...args) => { sessionReads++; await sessionGate; return originalSession(...args); };
+    const firstJoin = service.startProfile(1);
+    const secondJoin = service.startProfile(1);
+    expect(secondJoin).toBe(firstJoin);
+    releaseSession();
+    const [firstResult, secondResult] = await Promise.all([firstJoin, secondJoin]);
+    expect(secondResult).toBe(firstResult);
+    expect(firstResult.controlState).toBe("running");
+    expect(sessionReads).toBe(1); // One owner check, shared by both callers.
+    adapter.session = originalSession;
     expect(await service.shutdownReadiness()).toBe("ready");
     nativeBusy = true;
     let scanned!: () => void;

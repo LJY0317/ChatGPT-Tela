@@ -1,6 +1,6 @@
-import { diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFailureClass, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { connectCodexAppServerWebSocket, readDynamicWebModelCatalog, waitForLoadedAppServerIdle, countLoadedAppServerActiveTurns, interruptLoadedAppServerTurns } from "@chatgpt-tela/codex";
-import { ProfileConnectionError, type ProfileConnectionPhase, type ProfileStartOptions } from "./profile-operation";
+import { ProfileConnectionError, ProfileStartIntentConflictError, type ProfileConnectionPhase, type ProfileStartOptions } from "./profile-operation";
 import { parseCodexTerminalSessionContract, type CodexTerminalSessionContract } from "@chatgpt-tela/service-protocol";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
@@ -351,7 +351,14 @@ export async function startCodexService(input: {
   });
   const routedBridge = new RoutedCodexTurnBridge();
   const owned = new Map<number, OwnedProfile>();
-  const starting = new Map<number, Promise<void>>();
+  const starting = new Map<number, {
+    readonly settled: Promise<void>;
+    readonly expectedDesktopProcessId: number | undefined;
+    readonly requireStopped: boolean;
+    readonly listeners: Set<NonNullable<ProfileStartOptions["onProgress"]>>;
+    readonly promise: Promise<CodexProfileStatus>;
+    phase?: ProfileConnectionPhase;
+  }>();
   const stoppingProfiles = new Set<number>();
   let closing: Promise<void> | undefined;
   let stopping = false;
@@ -594,18 +601,45 @@ export async function startCodexService(input: {
           connectionInProgress: starting.has(target.slot) });
       })));
     },
-    async startProfile(slotValue: number, options?: ProfileStartOptions) {
-      if (stopping || input.signal?.aborted) throw new Error("Tela Codex is stopping");
-      const slot = slotNumber(slotValue);
-      if (starting.has(slot)) throw new Error("A connection operation is already running for this profile; wait for it to finish");
+    startProfile(slotValue: number, options?: ProfileStartOptions) {
+      if (stopping || input.signal?.aborted) return Promise.reject(new Error("Tela Codex is stopping"));
+      let slot: number;
+      try { slot = slotNumber(slotValue); }
+      catch (error) { return Promise.reject(error); }
+      const active = starting.get(slot);
+      if (active) {
+        if (active.expectedDesktopProcessId !== options?.expectedDesktopProcessId
+          || active.requireStopped !== (options?.requireStopped === true)) {
+          return Promise.reject(new ProfileStartIntentConflictError());
+        }
+        if (options?.onProgress) {
+          active.listeners.add(options.onProgress);
+          if (active.phase) options.onProgress(active.phase);
+        }
+        emitDiagnosticEvent("chatgpt_tela_codex", "profile_connection_joined", { slot, phase: active.phase ?? "checking" });
+        return active.promise;
+      }
+      const listeners = new Set<NonNullable<ProfileStartOptions["onProgress"]>>();
+      if (options?.onProgress) listeners.add(options.onProgress);
       let settleStart!: () => void;
-      starting.set(slot, new Promise<void>(resolve => { settleStart = resolve; }));
+      const operation: {
+        settled: Promise<void>;
+        phase?: ProfileConnectionPhase;
+        expectedDesktopProcessId: number | undefined;
+        requireStopped: boolean;
+        listeners: Set<NonNullable<ProfileStartOptions["onProgress"]>>;
+        promise: Promise<CodexProfileStatus>;
+      } = { settled: new Promise<void>(resolve => { settleStart = resolve; }),
+        expectedDesktopProcessId: options?.expectedDesktopProcessId,
+        requireStopped: options?.requireStopped === true, listeners, promise: undefined! };
       let phase: ProfileConnectionPhase = "checking";
       const progress = (value: ProfileConnectionPhase) => {
         phase = value;
+        operation.phase = value;
         emitDiagnosticEvent("chatgpt_tela_codex", "profile_connection_phase", { slot, phase: value });
-        options?.onProgress?.(value);
+        for (const listener of listeners) listener(value);
       };
+      const promise: Promise<CodexProfileStatus> = Promise.resolve().then(async () => {
       try {
       progress("checking");
       const existing = owned.get(slot);
@@ -776,9 +810,15 @@ export async function startCodexService(input: {
         throw error;
       }
       } catch (cause) {
-        emitDiagnosticEvent("chatgpt_tela_codex", "profile_connection_failed", { slot, phase });
+        emitDiagnosticEvent("chatgpt_tela_codex", "profile_connection_failed", {
+          slot, phase, ...diagnosticFailureFields(cause),
+        });
         throw new ProfileConnectionError(phase, { cause });
       } finally { starting.delete(slot); settleStart(); }
+      });
+      operation.promise = promise;
+      starting.set(slot, operation);
+      return promise;
     },
     async stopProfile(slotValue: number) {
       const slot = slotNumber(slotValue);
@@ -1056,7 +1096,7 @@ export async function startCodexService(input: {
         if (await shutdownReadiness(true) !== "ready") throw new CodexShutdownNotStartedError();
         // Admission is closed before taking this snapshot. An already-admitted
         // start may publish its child late; drain it before enumerating owners.
-        await Promise.all([...starting.values()]);
+        await Promise.all([...starting.values()].map(operation => operation.settled));
         for (const profile of [...owned.values()]) {
           await stopOwned(profile, false);
           stoppedSlots.push(profile.slot);

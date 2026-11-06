@@ -10,7 +10,7 @@ import {
   parseCodexSavedDeleteAcceptanceContract,
   parseCodexSyntheticRecoveryContract,
 } from "@chatgpt-tela/service-protocol";
-import { ProfileConnectionError } from "./profile-operation";
+import { ProfileConnectionError, ProfileStartIntentConflictError } from "./profile-operation";
 import { CodexShutdownNotStartedError, type CodexService } from "./controller";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -303,12 +303,24 @@ export async function startCodexServiceHttpServer(input: {
                 emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_begin", { slot: startSlot });
                 void input.service.startProfile(startSlot, { ...options, onProgress: phase => send({ phase }) }).then(async profile => {
                   send({ profile });
-                  if (profile.webState === "preparing") send({ profile: await input.service.waitWebPreparation(startSlot) });
+                  if (profile.webState === "preparing") {
+                    try { send({ profile: await input.service.waitWebPreparation(startSlot) }); }
+                    catch (cause) {
+                      // The connected Native profile was already acknowledged.
+                      // An optional Web readiness observer cannot undo that result.
+                      emitDiagnosticEvent("chatgpt_tela_codex", "profile_web_observation_failed", {
+                        slot: startSlot, ...diagnosticFailureFields(cause), duration_ms: diagnosticDurationMs(startedAt),
+                      });
+                    }
+                  }
                   emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_complete", { slot: startSlot, duration_ms: diagnosticDurationMs(startedAt) });
                 }).catch(cause => {
                   const phase = cause instanceof ProfileConnectionError ? cause.phase : "checking";
-                  send({ error: { phase, message: cause instanceof ProfileConnectionError ? cause.message : "Connection could not be started. Refresh status before trying again." } });
-                  emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_failed", { slot: startSlot, phase, duration_ms: diagnosticDurationMs(startedAt) });
+                  send({ error: { phase, message: cause instanceof ProfileConnectionError || cause instanceof ProfileStartIntentConflictError
+                    ? cause.message : "Connection could not be started. Refresh status before trying again." } });
+                  emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_failed", { slot: startSlot, phase,
+                    ...(cause instanceof ProfileStartIntentConflictError ? { reason_class: "start_intent_conflict" } : diagnosticFailureFields(cause)),
+                    duration_ms: diagnosticDurationMs(startedAt) });
                 }).finally(() => { try { controller.close(); } catch { /* Client disconnected; operation retains its single owner. */ } });
               },
             });
@@ -328,6 +340,7 @@ export async function startCodexServiceHttpServer(input: {
             emitDiagnosticEvent("chatgpt_tela_codex", "profile_start_failed", {
               slot: startSlot,
               phase: cause instanceof ProfileConnectionError ? cause.phase : "checking",
+              ...(cause instanceof ProfileStartIntentConflictError ? { reason_class: "start_intent_conflict" } : diagnosticFailureFields(cause)),
               duration_ms: diagnosticDurationMs(startedAt),
             });
             throw cause;

@@ -536,6 +536,23 @@ test("connection stream exposes Native immediately while Web waits, then preserv
   } finally { release(); await server.close(); }
 });
 
+test("failed optional Web observation cannot turn an acknowledged profile start into a failure", async () => {
+  const service = fixtureService(), token = "o".repeat(48);
+  const profile = { slot: 1, targetId: "default", targetDisplayName: "ChatGPT", targetState: "running",
+    targetSessionState: "ready", controlState: "running" as const, webState: "preparing" as const };
+  service.startProfile = async () => profile;
+  service.waitWebPreparation = async () => { throw Error("private observer failed"); };
+  const server = await startCodexServiceHttpServer({ service, bearerToken: token });
+  try {
+    const response = await fetch(new URL("v1/codex/profiles/1/start", server.endpoint), {
+      method: "POST", headers: { authorization: `Bearer ${token}`, accept: "application/x-ndjson" },
+    });
+    const frames = (await response.text()).trim().split("\n").map(line => JSON.parse(line));
+    expect(frames).toEqual([{ profile }]);
+    expect(JSON.stringify(frames)).not.toContain("private observer");
+  } finally { await server.close(); }
+});
+
 test("private service forwards exact selected preview and explicit reveal without unauthenticated actions", async () => {
   const service = fixtureService(), token = "u".repeat(48), id = "surface_" + "a".repeat(32);
   const calls: string[] = [];

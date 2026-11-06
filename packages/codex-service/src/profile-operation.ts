@@ -23,3 +23,11 @@ export class ProfileConnectionError extends Error {
     this.name = "ProfileConnectionError";
   }
 }
+
+/** A second request cannot inherit different Desktop quit consent. */
+export class ProfileStartIntentConflictError extends Error {
+  constructor() {
+    super("A different connection request is already in progress for this profile. Check its result before starting another.");
+    this.name = "ProfileStartIntentConflictError";
+  }
+}

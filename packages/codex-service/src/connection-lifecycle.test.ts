@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ProfileConnectionError } from "./profile-operation";
+import { ProfileConnectionError, ProfileStartIntentConflictError } from "./profile-operation";
 import { startCodexService } from "./controller";
 import type { CodexNativeTargetAdapter } from "./native-target";
 import { mkdtempSync, existsSync, rmSync } from "node:fs";
@@ -182,7 +182,7 @@ test("a foreign ready route cannot be stopped or erase connection intent", async
 });
 
 
-test("quit failure has a stable phase and no raw process/error payload; duplicate starts are excluded", async () => {
+test("same-intent concurrent starts share the exact failure and preserve distinct PID consent", async () => {
   const native = fixture("restart-required", "running");
   let release!: () => void;
   const blocked = new Promise<void>(resolve => { release = resolve; });
@@ -191,14 +191,21 @@ test("quit failure has a stable phase and no raw process/error payload; duplicat
   const service = await startCodexService({ config: {}, profileRuntimeCommand: ["unused"], nativeTargetAdapter: native.adapter });
   try {
     const first = service.startProfile(1, { onProgress: phase => { phases.push(phase); } });
-    // Allow resolve to enter the controlled quit operation.
-    await Promise.resolve(); await Promise.resolve();
-    await expect(service.startProfile(1)).rejects.toThrow("already running");
+    const joinedPhases: string[] = [];
+    const second = service.startProfile(1, { onProgress: phase => joinedPhases.push(phase) });
+    expect(second).toBe(first);
+    await expect(service.startProfile(1, { expectedDesktopProcessId: 123 })).rejects.toBeInstanceOf(ProfileStartIntentConflictError);
+    await expect(service.startProfile(1, { requireStopped: true })).rejects.toBeInstanceOf(ProfileStartIntentConflictError);
     release();
-    const failure = await first.catch(error => error);
+    const [failure, joinedFailure] = await Promise.all([first.catch(error => error), second.catch(error => error)]);
+    expect(joinedFailure).toBe(failure);
     expect(failure).toBeInstanceOf(ProfileConnectionError);
     expect(failure.phase).toBe("closing");
     expect(failure.message).not.toContain("private path");
     expect(phases).toEqual(["checking", "preparing", "closing"]);
+    expect(joinedPhases).toEqual(phases);
+    const next = await service.startProfile(1).catch(error => error);
+    expect(next).toBeInstanceOf(ProfileConnectionError);
+    expect(next).not.toBe(failure);
   } finally { release(); await service.close(); }
 });
