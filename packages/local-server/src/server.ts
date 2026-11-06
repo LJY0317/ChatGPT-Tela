@@ -2,8 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { zstdDecompress } from "node:zlib";
 import { startWebHttpServer } from "@chatgpt-tela/http-host";
-import type { NativeResponsesGateway } from "@chatgpt-tela/runtime";
-import { handleNativeResponsesHttp } from "@chatgpt-tela/responses";
+import { handleNativeResponsesHttp, type ResponsesGateway } from "@chatgpt-tela/responses";
 
 const DEFAULT_HOSTNAME = "127.0.0.1";
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024;
@@ -108,7 +107,7 @@ function forbiddenBrowserOrigin(): Response {
  */
 export async function startLocalResponsesServer(input: {
   /** Omit only for an explicit router that owns all dispatch; unhandled requests fail closed. */
-  readonly gateway?: NativeResponsesGateway;
+  readonly gateway?: ResponsesGateway;
   readonly hostname?: string;
   readonly port?: number;
   readonly runtimeToken?: string;

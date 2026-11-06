@@ -14,6 +14,8 @@ import {
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 import { classifyWebPreparationErrorKind, classifyWebPreparationFailure } from "./web-preparation-diagnostics";
 import { failedNativeRequestFingerprint, type NativeProjectionError } from "./native-projection-diagnostics";
+import { createSuppliedRequestGateway } from "./supplied-request-gateway";
+import type { SuppliedRequestWebTurnPlanner } from "./native-request-planner";
 import {
   startLocalResponsesServer,
   type LocalResponsesAuthentication,
@@ -40,6 +42,7 @@ import {
   ActiveTurnRegistry,
   NativeResponsesGateway,
   RetainedBrowserEpochRegistry,
+  bindWebEpochDocument,
   assertWebMessageFitsComposer,
   runBrowserTurnOnSurface,
   type RegisteredTurn,
@@ -149,7 +152,7 @@ export type DevelopmentMcpRuntime =
 
 export interface DevelopmentRuntimeOptions {
   readonly profileSlot?: number;
-  readonly currentTurnSource: CanonicalCurrentTurnSource;
+  readonly currentTurnSource?: CanonicalCurrentTurnSource;
   readonly browserHost: BrowserHost;
   readonly turns?: ActiveTurnRegistry;
   readonly mcp: DevelopmentMcpConfiguration;
@@ -185,6 +188,25 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
   const turns = input.turns ?? new ActiveTurnRegistry();
   const webMcpContract: ExternalDevelopmentMcpAbi = input.mcp.abi ?? "development";
   const provider = input.provider ?? new ChatGptSemanticProvider();
+  if (!input.currentTurnSource) {
+    if (input.mcp.kind !== "external") throw new Error("Native MCP exposure requires an independently bound Native source");
+    const planner = input.planWebTurn as Partial<SuppliedRequestWebTurnPlanner>;
+    if (typeof planner.planSuppliedRequest !== "function") throw new Error("Web planner does not support supplied requests");
+    const gateway = createSuppliedRequestGateway({ browserHost: input.browserHost, provider,
+      planner: planner as SuppliedRequestWebTurnPlanner,
+      ...(input.profileSlot !== undefined ? { profileSlot: input.profileSlot } : {}),
+      ...(input.browserSurfaceTarget !== undefined ? { browserSurfaceTarget: input.browserSurfaceTarget } : {}),
+      ...(input.webTurnTimeoutMs !== undefined ? { webTurnTimeoutMs: input.webTurnTimeoutMs } : {}),
+    });
+    let responses: LocalResponsesServer;
+    try { responses = await startLocalResponsesServer({ ...input.responses, gateway }); }
+    catch (error) { await gateway.close(); throw error; }
+    let stopping: Promise<void> | undefined;
+    return { responses, turns, mcp: { kind: "external", abi: webMcpContract, async close() {} },
+      browserRetention: surfaceId => gateway.browserRetention(surfaceId),
+      stop() { return stopping ??= (async () => { await responses.stop(); await gateway.close(); })(); },
+    };
+  }
   const abortController = new AbortController();
   const webRuns = new Set<Promise<unknown>>();
   const planner = input.planWebTurn as DevelopmentWebTurnPlanner & Partial<RetiringDevelopmentWebTurnPlanner>;
@@ -287,14 +309,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           }
           signal.throwIfAborted();
           acquired = await browserEpochs.acquire(plan.nativeTaskId, plan.webEpochId);
-          const document = acquired.surface.capability(BROWSER_DOCUMENT_LIFETIME)?.current();
-          if (plan.physicalContext.mode === "retained-delta"
-            && (!acquired.reused || plan.retainedSurfaceLeaseId !== acquired.surface.leaseId
-              || !document || document.signal.aborted
-              || plan.retainedDocumentGeneration !== document.generation)) {
-            throw new Error("retained Web context does not own the surviving physical surface");
-          }
-          const executionSignal = document ? AbortSignal.any([signal, document.signal]) : signal;
+          const { document, signal: executionSignal } = bindWebEpochDocument(plan, acquired, signal);
           executionSignal.throwIfAborted();
           const checkpoints = plan.physicalContext.segments.filter(segment => segment.type === "checkpoint");
           const contextEvidence = {

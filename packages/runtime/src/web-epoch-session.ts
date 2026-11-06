@@ -1,4 +1,4 @@
-import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
+import { BROWSER_DOCUMENT_LIFETIME, type BrowserHost, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { diagnosticFailureClass, emitDiagnosticEvent, type BrowserRetentionObservation } from "@chatgpt-tela/core";
 
 interface RetainedEpoch {
@@ -10,7 +10,23 @@ interface RetainedEpoch {
   idleSince?: number;
 }
 
-const IDLE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const WEB_EPOCH_IDLE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Physical-page ownership is independent of optional Native tool authority. */
+export function bindWebEpochDocument(plan: {
+  readonly physicalContext: { readonly mode: string };
+  readonly retainedSurfaceLeaseId?: string;
+  readonly retainedDocumentGeneration?: number;
+}, acquired: { readonly surface: BrowserSurfaceLease; readonly reused: boolean }, signal: AbortSignal) {
+  const document = acquired.surface.capability(BROWSER_DOCUMENT_LIFETIME)?.current();
+  if (plan.physicalContext.mode === "retained-delta"
+    && (!acquired.reused || plan.retainedSurfaceLeaseId !== acquired.surface.leaseId
+      || !document || document.signal.aborted
+      || plan.retainedDocumentGeneration !== document.generation)) {
+    throw new Error("retained Web context does not own the surviving physical surface");
+  }
+  return { document, signal: document ? AbortSignal.any([signal, document.signal]) : signal };
+}
 
 /**
  * Own one physical browser conversation per Native task/Web epoch.
@@ -59,7 +75,7 @@ export class RetainedBrowserEpochRegistry {
     if (this.#disposed) return;
     const expiry = [...this.#byTask.entries()]
       .filter(([task, entry]) => !entry.retiring && !this.#active(task, entry) && entry.idleSince !== undefined)
-      .reduce((first, [, entry]) => Math.min(first, entry.idleSince! + IDLE_RETENTION_MS), Infinity);
+      .reduce((first, [, entry]) => Math.min(first, entry.idleSince! + WEB_EPOCH_IDLE_RETENTION_MS), Infinity);
     if (expiry === Infinity) return;
     this.#timer = setTimeout(() => {
       this.#timer = undefined;
@@ -75,7 +91,7 @@ export class RetainedBrowserEpochRegistry {
       for (const [task, entry] of this.#byTask) {
         if (this.#disposed) break;
         if (entry.idleSince === undefined || entry.retiring || this.#active(task, entry)
-          || this.#now() - entry.idleSince < IDLE_RETENTION_MS) continue;
+          || this.#now() - entry.idleSince < WEB_EPOCH_IDLE_RETENTION_MS) continue;
         await this.#release(task, entry);
       }
     } finally {
@@ -147,7 +163,7 @@ export class RetainedBrowserEpochRegistry {
       if (surfaceId === entry.surface.leaseId) surface = Object.freeze({ id: surfaceId, taskId: task, state,
         nextAction: ({ active: "wait_for_work", undelivered: "inspect_result",
           closing: "inspect_close", reclaimable: "allow_idle_cleanup" } as const)[state],
-        ...(entry.idleSince === undefined ? {} : { idleExpiresAt: new Date(entry.idleSince + IDLE_RETENTION_MS).toISOString() }),
+        ...(entry.idleSince === undefined ? {} : { idleExpiresAt: new Date(entry.idleSince + WEB_EPOCH_IDLE_RETENTION_MS).toISOString() }),
       });
     }
     if (!surface && surfaceId) {

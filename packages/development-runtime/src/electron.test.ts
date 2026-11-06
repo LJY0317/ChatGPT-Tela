@@ -182,6 +182,28 @@ class FixtureCheckpointProvider implements WebContextCheckpointProvider {
   }
 }
 
+test("Electron input-only startup needs no Native source and exposes no Native MCP endpoint", async () => {
+  const windows: FakeWindow[] = [];
+  class RuntimeWindow extends FakeWindow {
+    constructor(_input: BrowserWindowConstructorOptions) { super(); windows.push(this); }
+  }
+  const runtime = await startElectronDevelopmentRuntime({
+    profileId: "input-only-fixture", mcp: { kind: "external", abi: "stable" },
+    electron: { async loadRuntime() { return {
+      app: { setPath() {}, async whenReady() {} }, BrowserWindow: RuntimeWindow,
+    }; } },
+  });
+  try {
+    expect(runtime.mcp.kind).toBe("external");
+    const response = await fetch(new URL("responses", runtime.responses.baseUrl), {
+      method: "POST", headers: { authorization: `Bearer ${runtime.responses.runtimeToken}` },
+      body: JSON.stringify(nativeRequest()),
+    });
+    expect(response.status).toBe(400);
+    expect(windows).toHaveLength(0);
+  } finally { await runtime.stop(); }
+});
+
 describe("Electron development runtime composition", () => {
   test("context attachment canary owns one disposable non-Native surface and requires a proven receipt", async () => {
     const [, serverTransport] = InMemoryTransport.createLinkedPair();

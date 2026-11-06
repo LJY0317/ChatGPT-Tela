@@ -10,6 +10,7 @@ export * from "./context-cache";
 export * from "./connector-probe-state";
 export * from "./electron";
 export * from "./native-request-planner";
+export * from "./supplied-request-gateway";
 export * from "./profile-control";
 export * from "./profile-setup";
 export * from "./product-profile";

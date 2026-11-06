@@ -17,7 +17,7 @@ import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-jou
 import { readChatGptTelaAccountBinding } from "./browser-profile";
 import { startModelListOverlayServer } from "./model-list-overlay-server";
 import { readWebModelDisplayCache, writeWebModelDisplayCache } from "./web-model-display-cache";
-import { startElectronDevelopmentRuntime, type ElectronDevelopmentRuntime, type ElectronDevelopmentRuntimeOptions } from "./electron";
+import { startElectronDevelopmentRuntime, type ElectronDevelopmentRuntime, type ElectronDevelopmentRuntimeOptions, type NativeElectronDevelopmentRuntimeOptions } from "./electron";
 import { webPreparationFailureDetail, type ElectronProfileSetupSurface } from "./profile-control";
 import { startElectronProfileSetupRuntime, type ElectronProfileSetupRuntime } from "./profile-setup";
 import type { NativeCodexFetch } from "./native-passthrough";
@@ -78,7 +78,7 @@ export interface NativeFirstProfileOptions {
   readonly connectNativeNotifications?: typeof connectCodexAppServerWebSocket;
   /** Verified candidate descriptor for custom Native fixtures, before initial catalog delivery. */
   readonly nativeEngine?: ReturnType<typeof resolveOwnedNativeEngine>;
-  readonly browserStarter?: typeof startElectronDevelopmentRuntime;
+  readonly browserStarter?: (input: NativeElectronDevelopmentRuntimeOptions) => Promise<ElectronDevelopmentRuntime>;
   /** Injected only for isolated login-browser fixtures. Normal product uses
    * the same Electron app/profile partition when Web admission has failed. */
   readonly accountBrowserStarter?: typeof startElectronProfileSetupRuntime;

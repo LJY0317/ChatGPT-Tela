@@ -107,7 +107,7 @@ export interface ElectronDevelopmentRuntimeOptions {
   readonly profileSlot?: number;
   readonly profileId: string;
   readonly connectorName?: string;
-  readonly currentTurnSource: CanonicalCurrentTurnSource;
+  readonly currentTurnSource?: CanonicalCurrentTurnSource;
   readonly turns?: ActiveTurnRegistry;
   readonly mcp: DevelopmentMcpConfiguration;
   readonly planWebTurn?: DevelopmentWebTurnPlanner;
@@ -162,6 +162,10 @@ export interface ElectronDevelopmentRuntimeOptions {
     };
   };
 }
+
+export type NativeElectronDevelopmentRuntimeOptions = ElectronDevelopmentRuntimeOptions & {
+  readonly currentTurnSource: CanonicalCurrentTurnSource;
+};
 
 /** Classify all acquired pages at the one browser-host seam, including zero-model-call probes.
  * These are surface counters, NOT billing or a second execution/retry ledger. */
@@ -261,7 +265,7 @@ export async function startElectronDevelopmentRuntime(
   };
 
   const turns = input.turns ?? new ActiveTurnRegistry();
-  const localCompactionRouter = input.checkpointProvider ? createNativeLocalCompactionRouter({
+  const localCompactionRouter = input.checkpointProvider && input.currentTurnSource ? createNativeLocalCompactionRouter({
     source: input.currentTurnSource,
     settlePendingToolResult: (threadId, turnId, body) => settleNativeCompactionToolResult(turns, threadId, turnId, body),
     ...(checkpointCache ? { checkpointCache } : {}),
@@ -292,7 +296,7 @@ export async function startElectronDevelopmentRuntime(
 
   const runtime = await startDevelopmentRuntime({
     ...(input.profileSlot !== undefined ? { profileSlot: input.profileSlot } : {}),
-    currentTurnSource: input.currentTurnSource,
+    ...(input.currentTurnSource ? { currentTurnSource: input.currentTurnSource } : {}),
     browserHost,
     turns,
     mcp: input.mcp,

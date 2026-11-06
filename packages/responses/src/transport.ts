@@ -11,6 +11,9 @@ import {
 import { NativeProgressStream } from "./live-progress";
 import { encodeTelaCompactionSummary } from "@chatgpt-tela/codex";
 
+/** Response delivery does not itself require Native tool/history authority. */
+export type ResponsesGateway = Pick<NativeResponsesGateway, "handle" | "commit">;
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -66,7 +69,7 @@ function observedBody(input: {
 
 function responseForOutcome(input: {
   readonly outcome: NativeGatewayOutcome;
-  readonly gateway: NativeResponsesGateway;
+  readonly gateway: ResponsesGateway;
   readonly model: string;
   readonly stream: boolean;
   readonly createdAt: number;
@@ -109,7 +112,7 @@ function responseForOutcome(input: {
  */
 export async function handleNativeResponsesHttp(
   request: Request,
-  gateway: NativeResponsesGateway,
+  gateway: ResponsesGateway,
   options: { readonly now?: () => number } = {},
 ): Promise<Response> {
   if (request.method !== "POST") {

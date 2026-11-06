@@ -99,7 +99,7 @@ export class NativeProgressStream {
     return true;
   };
 
-  finish(outcome: NativeGatewayOutcome, gateway: NativeResponsesGateway): void {
+  finish(outcome: NativeGatewayOutcome, gateway: Pick<NativeResponsesGateway, "commit">): void {
     if (this.#ended || this.signal.signal.aborted) return;
     const reasoning = { type: "reasoning", id: this.#itemId,
       summary: this.#summaries.map(text => ({ type: "summary_text", text })) };

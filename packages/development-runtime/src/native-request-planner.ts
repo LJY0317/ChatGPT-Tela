@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import {
   NativeHistoryBootstrapRequired,
   type NativeThreadGoalObservation,
+  type NativeTurnBinding,
 } from "@chatgpt-tela/codex";
 import {
   RevisionLineage,
@@ -37,7 +38,6 @@ import {
 import {
   prepareWebContext,
   type ContextProjectionSource,
-  type RegisteredTurn,
 } from "@chatgpt-tela/runtime";
 import type {
   CachedContextCheckpoint,
@@ -46,7 +46,7 @@ import type {
 import {
   nativeOpaqueCompaction,
   resolveNativeContextContinuity,
-  type NativeContinuitySources, type NativeRetainedHistory,
+  type NativeContinuitySources, type NativeRetainedHistory, type NativeContinuityDecision,
 } from "./native-context-continuity";
 import { boundedWebCheckpointSource } from "./web-checkpoint-source";
 import { produceNativePrefixCheckpoint } from "./native-visible-prefix-checkpoint";
@@ -937,12 +937,26 @@ function checkpointTokens(content: string): number {
  * checkpoint may only replace transport for a revision that is still on that path; stale branch state
  * is ignored. Deleting/corrupting the cache therefore cannot change logical history, only transfer cost.
  */
+/** Provider request correlation; deliberately carries no Native execution authority. */
+export interface SuppliedWebRequestIdentity {
+  readonly threadId: string;
+  readonly turnId: string;
+}
+
+export type SuppliedRequestWebTurnPlanner = RetiringDevelopmentWebTurnPlanner & {
+  readonly planSuppliedRequest: (
+    identity: SuppliedWebRequestIdentity,
+    request: unknown,
+    preparation?: Parameters<DevelopmentWebTurnPlanner>[2],
+  ) => Promise<DevelopmentWebTurnPlan>;
+};
+
 export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeContinuitySources & {
   readonly checkpointCache?: ContextCheckpointCache;
   readonly budgetTokens?: number;
   readonly preparationBudgetFor?: (threadId: string, turnId: string,
     browserModel: { familyKey: string; effort: ChatGptWebEffort } | undefined) => Promise<CheckpointPreparationBudget | undefined>;
-} = {}): RetiringDevelopmentWebTurnPlanner {
+} = {}): SuppliedRequestWebTurnPlanner {
   const retainedByTask = new Map<string, CommittedRetainedContext>();
   // A frozen historical projection (raw or summarized) is disposable; only a
   // proven surviving Web epoch may skip Native source acquisition. Bound raw
@@ -1038,7 +1052,17 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       tool_result_bytes: toolBytes, tool_round_count: rounds,
     });
   };
-  const plan = async (turn: RegisteredTurn, nativeRequest: unknown, preparation?: Parameters<DevelopmentWebTurnPlanner>[2]): Promise<DevelopmentWebTurnPlan> => {
+  const plannerOptions = options;
+  const plan = async (identity: SuppliedWebRequestIdentity, binding: NativeTurnBinding | undefined,
+    nativeRequest: unknown, preparation?: Parameters<DevelopmentWebTurnPlanner>[2]): Promise<DevelopmentWebTurnPlan> => {
+    // Input-only requests may reuse context planning, never out-of-band Native readers or Goal state.
+    const options: typeof plannerOptions = binding ? plannerOptions : {
+      ...(plannerOptions.checkpointCache ? { checkpointCache: plannerOptions.checkpointCache } : {}),
+      ...(plannerOptions.budgetTokens !== undefined ? { budgetTokens: plannerOptions.budgetTokens } : {}),
+      ...(plannerOptions.checkpointProducer ? { checkpointProducer: plannerOptions.checkpointProducer } : {}),
+      ...(plannerOptions.checkpointPreparationPolicy ? { checkpointPreparationPolicy: plannerOptions.checkpointPreparationPolicy } : {}),
+      ...(plannerOptions.preparationBudgetFor ? { preparationBudgetFor: plannerOptions.preparationBudgetFor } : {}),
+    };
     // Failure-only stage observations are local to this request, not attached to errors.
     // Observer errors must not replace the original planner exception.
     let lastStage = "request_parse";
@@ -1054,7 +1078,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     };
     try {
     stage("request_parse");
-    const threadId = turn.channel.binding.authority.threadId;
+    const threadId = identity.threadId;
     if (pendingByTask.has(threadId)) {
       throw new Error("native task already has an unsettled Web context plan");
     }
@@ -1064,7 +1088,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     const browserModel = nativeRequestBrowserModelRoute(nativeRequest);
     const workingPolicy = webWorkingContextPolicy(browserModel?.effort ?? "medium", options.checkpointPreparationPolicy);
     const preparationBudget = await options.preparationBudgetFor?.(
-      threadId, turn.channel.binding.authority.turnId, browserModel) ?? new CheckpointPreparationBudget(
+      threadId, identity.turnId, browserModel) ?? new CheckpointPreparationBudget(
       workingPolicy.checkpointSourceTokens, options.checkpointPreparationPolicy);
     const checkpointProducer = options.checkpointProducer ? preparationBudget.producer(options.checkpointProducer) : undefined;
     const physicalLimits = browserModel ? workingPolicy.hard : undefined;
@@ -1072,8 +1096,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     const currentRouteIdentity = routeIdentity(nativeRequest);
     const committed = retainedByTask.get(threadId);
     stage("retained_context");
-    const ingress = turn.channel.binding.canonicalEvidence.ingressMedia;
-    if (ingress && ingress.turnId !== turn.channel.binding.authority.turnId) {
+    const ingress = binding?.canonicalEvidence.ingressMedia;
+    if (ingress && ingress.turnId !== identity.turnId) {
       throw new Error("Native ingress media belongs to a different current turn");
     }
     // Prove a surviving Web page against the exact route, canonical input
@@ -1086,8 +1110,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       && committed.routeIdentity === currentRouteIdentity) {
       const provisional = projectNativeRequestContext(threadId, nativeRequest,
         hot.history.visibleHistory, hot.history.inlineHistoryAssets, hot.history.historyReferences, ingress,
-        turn.channel.binding.canonicalEvidence.nativeGoal,
-        turn.channel.binding.canonicalEvidence.nativeGoalState);
+        binding?.canonicalEvidence.nativeGoal,
+        binding?.canonicalEvidence.nativeGoalState);
       const trial = admittedRetainedContext(provisional, committed, currentRouteIdentity,
         budgetTokens, workingPolicy.outputReserveTokens, undefined, physicalLimits);
       if (trial && (!committed.physicalLimits || (trial.pressure && !trial.pressure.shouldRollover))) {
@@ -1104,17 +1128,19 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // The continuity resolver owns all cold-source and checkpoint decisions.
     // Native task authority and Web surface settlement stay in this planner.
     stage("native_continuity");
-    const continuity = await resolveNativeContextContinuity({
-      threadId, currentTurnId: turn.channel.binding.authority.turnId,
-      authority: turn.channel.binding.authority,
+    if (!binding && opaque.count > 0) throw new NativeHistoryBootstrapRequired("source_unavailable");
+    const continuity: NativeContinuityDecision = binding ? await resolveNativeContextContinuity({
+      threadId, currentTurnId: identity.turnId,
+      authority: binding.authority,
       opaque,
-      ...(turn.channel.binding.readHistoryPage && turn.channel.binding.readHistoryIndex ? { historyBodyBudgetBytes: workingPolicy.firstMessageTargetTokens * 4 } : {}),
+      ...(binding?.readHistoryPage && binding?.readHistoryIndex ? { historyBodyBudgetBytes: workingPolicy.firstMessageTargetTokens * 4 } : {}),
       ...(retainedHistory !== undefined ? { retainedHistory } : {}),
       ...(browserModel ? { effort: browserModel.effort, browserModel } : {}),
       options: { ...options, ...(checkpointProducer ? { checkpointProducer } : {}) },
       preparationBudget,
       ...(preparation ? { preparation } : {}),
-    });
+    }) : { mode: "current-input", inlineHistoryAssets: [], checkpointReused: false,
+      checkpointProduced: false, manualHandoff: false };
     const visibleHistory = continuity.visibleHistory;
     const inlineHistoryAssets = continuity.inlineHistoryAssets;
     const historyReferences = continuity.historyReferences;
@@ -1126,8 +1152,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       ? provenRetainedProjection
       : projectNativeRequestContext(threadId, nativeRequest,
         visibleHistory, inlineHistoryAssets, historyReferences, ingress,
-        turn.channel.binding.canonicalEvidence.nativeGoal,
-        turn.channel.binding.canonicalEvidence.nativeGoalState);
+        binding?.canonicalEvidence.nativeGoal,
+        binding?.canonicalEvidence.nativeGoalState);
     // Only a dedicated producer can reduce a fresh canonical prefix. Reuse the calibrated Web
     // transport budget; Native context limits and canonical history remain untouched.
     const hotCandidate = opaqueFingerprint && visibleHistory
@@ -1176,15 +1202,15 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // A healthy page already owns the prefix. Select existing checkpoints, but
     // defer paid preparation until a fresh page or Native compaction needs it.
     stage("checkpoint_lookup");
-    const deferred = !healthyRetained && turn.channel.binding.readHistoryPage && turn.channel.binding.readHistoryIndex
+    const deferred = !healthyRetained && binding?.readHistoryPage && binding?.readHistoryIndex
       ? prepareDeferredNativeHistory(projection, workingPolicy, freshBudgetTokens) : undefined;
-    if (projection.deferredHistory && !(turn.channel.binding.readHistoryPage && turn.channel.binding.readHistoryIndex)) {
+    if (projection.deferredHistory && !(binding?.readHistoryPage && binding?.readHistoryIndex)) {
       throw new Error("Deferred Native originals require their owner-bound reader");
     }
     const working = projection.deferredHistory
       ? { produced: false, reused: false, pendingSuffixTokens: 0 }
       : await selectNativeWorkingCheckpoint({
-      projection, currentTurnId: turn.channel.binding.authority.turnId,
+      projection, currentTurnId: identity.turnId,
       ...(options.checkpointCache ? { cache: options.checkpointCache } : {}),
       ...(options.visiblePrefix ? { visiblePrefix: options.visiblePrefix } : {}),
       ...(checkpointProducer ? { producer: checkpointProducer } : {}),
@@ -1338,7 +1364,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           // Reuse the existing account-owned durable stage ledger, not a second
           // compressor or an unbounded retry of the same summarization request.
           // The exact immutable request prefix is the source; no history RPC is needed.
-          const source = nativeRequestPrefixSnapshot(threadId, turn.channel.binding.authority.turnId, checkpointPhysicalContext);
+          const source = nativeRequestPrefixSnapshot(threadId, identity.turnId, checkpointPhysicalContext);
           const summary = await produceNativePrefixCheckpoint({
             source, accountNamespace: stageOwner.accountNamespace, journal: stageOwner.journal,
             preparationBudget,
@@ -1558,18 +1584,25 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       throw error;
     }
   };
-  const planner: DevelopmentWebTurnPlanner = async (turn, request, preparation) => {
-    const threadId = turn.channel.binding.authority.threadId;
+  const planRequest = async (identity: SuppliedWebRequestIdentity, binding: NativeTurnBinding | undefined,
+    request: unknown, preparation?: Parameters<DevelopmentWebTurnPlanner>[2]) => {
+    const threadId = identity.threadId;
     if (planningByTask.has(threadId)) throw new Error("native task already has an unsettled Web context plan");
     planningByTask.add(threadId);
     try {
       preparation?.signal.throwIfAborted();
-      return await plan(turn, request, preparation);
+      return await plan(identity, binding, request, preparation);
     } finally {
       planningByTask.delete(threadId);
     }
   };
+  const planner: DevelopmentWebTurnPlanner = (turn, request, preparation) =>
+    planRequest(turn.channel.binding.authority, turn.channel.binding, request, preparation);
   return Object.assign(planner, {
+    planSuppliedRequest(identity: SuppliedWebRequestIdentity, request: unknown,
+      preparation?: Parameters<DevelopmentWebTurnPlanner>[2]) {
+      return planRequest(identity, undefined, request, preparation);
+    },
     retireSurface(threadId: string, surfaceLeaseId: string) {
       if (retainedByTask.get(threadId)?.surfaceLeaseId === surfaceLeaseId) {
         clearRetainedContext(threadId);

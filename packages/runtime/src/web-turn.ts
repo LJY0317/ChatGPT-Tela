@@ -20,7 +20,11 @@ import { webExecutionFailureFields } from "./web-failure-diagnostics";
 export interface BrowserTurnRunInput {
   readonly browserHost: BrowserHost;
   readonly provider: WebConversationProvider;
-  readonly channel: RuntimeTurnChannel;
+  /** Original Native tool/lifecycle channel when independently available. */
+  readonly channel?: RuntimeTurnChannel;
+  /** Request correlation only; does not grant Native tool or history authority. */
+  readonly nativeTurnId?: string;
+  readonly onProgress?: (summary: string) => void;
   readonly nativeTaskId: string;
   readonly webEpochId: string;
   readonly physicalContext: WebPhysicalContext;
@@ -61,9 +65,8 @@ export function assertWebMessageFitsComposer(input: Pick<BrowserTurnRunInput,
 }
 
 function validateHandle(input: BrowserTurnSurfaceRunInput, handle: WebTurnHandle): void {
-  const authority = input.channel.binding.authority;
   if (handle.nativeTaskId !== input.nativeTaskId
-    || handle.nativeTurnId !== authority.turnId
+    || handle.nativeTurnId !== (input.channel?.binding.authority.turnId ?? input.nativeTurnId)
     || handle.webEpochId !== input.webEpochId) {
     throw new Error("Web provider accepted a turn with the wrong causal identity");
   }
@@ -99,6 +102,9 @@ async function waitForBrowserTurnSignal(
   state: BrowserTurnWaitState,
 ): Promise<BrowserTurnSignal> {
   state.signal.throwIfAborted();
+  if (!input.channel) {
+    return { kind: "provider", event: requireProven(await input.provider.waitForTurnEvent(surface, handle, state.signal)) };
+  }
   const channelAbort = new AbortController();
   const revision = input.channel.stateRevision;
   try {
@@ -138,13 +144,16 @@ async function waitForBrowserTurnSignal(
 }
 
 /**
- * Drive one browser/Web lifetime for an already-bound Native turn.
+ * Drive one browser/Web lifetime, with an optional original Native tool channel.
  *
  * Tool calls travel through the RuntimeTurnChannel/MCP boundary independently. This runner only
  * owns browser surface lifetime and semantic Web lifecycle proof. It never retries a submitted
  * turn: an ambiguous submit leaves the channel in `submitted` for recovery observation.
  */
 export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput): Promise<string> {
+  const turnId = input.channel?.binding.authority.turnId ?? input.nativeTurnId;
+  if (!turnId) throw new Error("Web request requires a turn correlation id");
+  if (!input.channel && !input.chatTools) throw new Error("Web requests without Native authority must use Tela Chat tools");
   const surface = input.surface;
   let acceptedHandle: WebTurnHandle | undefined;
   let boundary = "preparation";
@@ -186,24 +195,24 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
 
     // From this point a submit may have side effects. Mark it before invoking the provider so a
     // thrown/ambiguous result can never be interpreted as permission to auto-resubmit.
-    input.channel.markSubmitted();
+    input.channel?.markSubmitted();
     boundary = "submission";
     const handle = requireProven(await input.provider.submitTurn(surface, {
       nativeTaskId: input.nativeTaskId,
-      nativeTurnId: input.channel.binding.authority.turnId,
+      nativeTurnId: turnId,
       webEpochId: input.webEpochId,
       physicalContext: input.physicalContext,
       ...(attachmentReference ? { contextAttachment: attachmentReference } : {}),
       ...(input.media ? { media: input.media } : {}),
       ...(input.chatTools ? { chatTools: input.chatTools } : {}),
       isToolExecutionPending: () => {
-        const state = input.channel.state();
-        return !!state.outstandingToolCallId && !state.nativeResultReady;
+        const state = input.channel?.state();
+        return !!state?.outstandingToolCallId && !state.nativeResultReady;
       },
     }, input.signal));
     validateHandle(input, handle);
     acceptedHandle = handle;
-    input.channel.markAccepted();
+    input.channel?.markAccepted();
 
     const eventAbort = new AbortController();
     const eventWait: BrowserTurnWaitState = {
@@ -215,7 +224,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       boundary = "event_wait";
       const signal = await waitForBrowserTurnSignal(input, surface, handle, eventWait);
       if (signal.kind === "channel") {
-        const state = input.channel.state();
+        const state = input.channel!.state();
         if (state.phase === "tool-result-delivered"
           && state.nativeResultReady === true
           && state.outstandingToolCallId) {
@@ -233,7 +242,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
             throw new Error("Web provider armed the wrong tool continuation boundary");
           }
           eventWait.signal.throwIfAborted();
-          input.channel.releaseNativeToolResultToWeb(state.outstandingToolCallId);
+          input.channel!.releaseNativeToolResultToWeb(state.outstandingToolCallId);
         }
         continue;
       }
@@ -244,11 +253,13 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       eventWait.signal.throwIfAborted();
 
       if (event.kind === "progress") {
-        input.channel.publishProgress(event.summary);
+        input.channel?.publishProgress(event.summary);
+        input.onProgress?.(event.summary);
         continue;
       }
 
       if (event.kind === "continuing") {
+        if (!input.channel) continue;
         if (input.channel.phase === "tool-wait") {
           // A subsequent exact MCP call is itself causal proof that ChatGPT resumed after the prior
           // released result. The channel has already advanced into the next tool boundary.
@@ -267,7 +278,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
           kind: "task", completion_observed: true, answer_characters: event.answer.length,
           plain_body_available: event.plainAnswer !== undefined,
         });
-        input.channel.complete(event.answer);
+        input.channel?.complete(event.answer);
         return event.answer;
       }
 
@@ -281,8 +292,8 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
   } catch (error) {
     // Record the original failing boundary before surface retirement.
     emitDiagnosticEvent("chatgpt_tela_work", "web_execution_exception", {
-      ...webExecutionFailureFields(error, input.signal), turn_phase: input.channel.phase,
-      tool_round_count: input.channel.toolRoundCount, accepted: acceptedHandle !== undefined,
+      ...webExecutionFailureFields(error, input.signal), turn_phase: input.channel?.phase ?? (acceptedHandle ? "accepted" : "prepared"),
+      tool_round_count: input.channel?.toolRoundCount ?? 0, accepted: acceptedHandle !== undefined,
       boundary,
     });
     // Sensitive exception text stays in explicit opt-in local capture.
@@ -294,7 +305,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
     });
     // Retire delivery authority before any stop action.
     // A late Web event cannot settle this failed Native run while cleanup waits.
-    if (acceptedPhase(input.channel.phase)) {
+    if (input.channel && acceptedPhase(input.channel.phase)) {
       try { input.channel.markIndeterminate(error); } catch { /* Preserve the first failure. */ }
     }
     if (acceptedHandle && input.provider.cancelTurn && webObservationFailureReason(error) !== "response_wait_timeout") {

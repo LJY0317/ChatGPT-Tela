@@ -56,13 +56,23 @@ byte-for-byte, the original Web route returned ready, and the other Desktop PID
 was unchanged. The disposable chat was deleted and verified absent from both
 active and archived lists.
 
-This accepts synthetic-provider/Native coexistence, not real ChatGPT Web
-execution, general UI control, or an installed replacement. The next integration
-is actual Web execution through the existing browser/Tela Chat path while the
-Desktop keeps engine ownership. The basic input-only provider must not require
-Native control-RPC solely to dispatch supplied context. Exact Goal control,
-omitted-history retrieval and Native Stop observation need their own supported
-contracts; do not silently claim those capabilities or discard opaque history.
+The input-only Electron entry now reuses the same planner, retained-page runner
+and Responses transport without a Native source or Native MCP exposure. In a
+separate isolated official-engine trial, actual ChatGPT Web family 6 / Extra High
+returned a greeting through this entry in about eight seconds. There was no
+Native inference fallback, and the existing profile connection was restored.
+This accepts real Web response execution, not installed Desktop integration or
+Web local-tool execution. Those remain distinct from the earlier Desktop
+synthetic-provider/Native coexistence trial.
+
+Request metadata supplies correlation only. Duplicate observers join the same
+operation, completed results can be collected again, and superseded operations
+cannot be replayed within the existing seven-day idle retention period. A lost
+HTTP observer does not cancel or restart Web execution. Exact Goal control,
+omitted-history retrieval, Native Stop and update-time activity admission still
+need supported owner contracts. An empty Native registry is not evidence of an
+idle Desktop. Do not claim these capabilities, discard opaque history or switch
+the installed launcher before the remaining lifecycle boundaries are accepted.
 
 ## Accepted, owned operation
 
