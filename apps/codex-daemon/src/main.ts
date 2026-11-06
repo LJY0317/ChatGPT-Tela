@@ -9,7 +9,7 @@ import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import { createLocalNativeAccountProof, type TrustedNativeProfileSession } from "../../../packages/codex-service/src/cross-profile-account-proof";
 import { startWebDelegationRetention } from "../../../packages/codex-service/src/web-delegation-retention";
 import { WebDelegationStore, reconcileWebDelegationCapacity } from "../../../packages/codex-service/src/web-delegation";
-import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductPreferences, setWorkProfileConnection, webDelegationLimit } from "@chatgpt-tela/product-config";
+import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductConfigIfPresent, readProductPreferences, setWorkProfileConnection, webDelegationLimit } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { prepareInstalledProfileOwnership } from "../../cli/src/profile-ownership";
 import { diagnosticFailureClass, emitDiagnosticEvent, observeDaemonUncaughtFailures, reportDaemonFailure } from "@chatgpt-tela/core";
@@ -38,9 +38,12 @@ async function main(): Promise<void> {
   let retention: ReturnType<typeof startWebDelegationRetention> | undefined;
   const service = await startCodexService({
     signal: lifecycle.signal,
-    config: multiProfileLauncher
-      ? { multiProfile: { launcherCli: multiProfileLauncher } }
-      : {},
+    config: {
+      ...(multiProfileLauncher ? { multiProfile: { launcherCli: multiProfileLauncher } } : {}),
+      ...(readProductConfigIfPresent()?.appOwnedResponses ? {
+        appOwnedResponses: readProductConfigIfPresent()!.appOwnedResponses,
+      } : {}),
+    },
     profileRuntimeCommand: [runtimeExecutable, runtimeEntrypoint],
     environment: process.env,
     prepareProfileRuntime: async slot => {

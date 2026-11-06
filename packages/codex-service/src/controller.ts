@@ -50,6 +50,12 @@ const CHILD_STOP_TIMEOUT_MS = 20_000;
 
 export interface CodexServiceConfig {
   readonly multiProfile?: { readonly launcherCli: string };
+  /** Install-owned opt-in; the official Desktop is not a Tela-owned Native target. */
+  readonly appOwnedResponses?: readonly {
+    readonly slot: number;
+    readonly port: number;
+    readonly capability: string;
+  }[];
 }
 
 export interface CodexProfileStatus {
@@ -71,7 +77,7 @@ export interface CodexProfileStatus {
 
 interface ChildReady {
   readonly runtimeProcessId: number;
-  readonly stage: "product-profile-ready";
+  readonly stage: "product-profile-ready" | "app-owned-profile-ready";
   readonly slot: number;
   readonly routeId: string;
   readonly targetId: string;
@@ -83,13 +89,14 @@ interface ChildReady {
   readonly responsesUrl: string;
   readonly responsesRouteFingerprint: string;
   readonly targetProcessId?: number;
-  readonly nativeReady: true;
+  readonly nativeReady: boolean;
   readonly webState: CodexWebState;
 }
 
 type ProfileChildProcess = ChildProcessByStdio<null, Readable, Readable>;
 
 interface OwnedProfile {
+  readonly mode: "managed" | "app-owned";
   readonly runtimeProcessId: number;
   readonly slot: number;
   readonly target: CodexNativeTarget;
@@ -167,6 +174,7 @@ function childReady(value: unknown, expected: {
   readonly routeId: string;
   readonly targetId: string;
   readonly nativeTargetKind: "default-desktop" | "multi-profile";
+  readonly appOwnedIngress?: { readonly port: number; readonly capability: string };
 }): ChildReady {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("profile child readiness output is not a JSON object");
@@ -177,14 +185,20 @@ function childReady(value: unknown, expected: {
     if (typeof field !== "string" || !field.trim()) throw new Error(`profile child readiness is missing ${key}`);
     return field;
   };
-  if (item.stage !== "product-profile-ready"
+  const appOwned = expected.appOwnedIngress !== undefined;
+  if (item.stage !== (appOwned ? "app-owned-profile-ready" : "product-profile-ready")
     || item.slot !== expected.slot
     || string("routeId") !== expected.routeId
     || string("targetId") !== expected.targetId
     || item.nativeTargetKind !== expected.nativeTargetKind
-    || item.nativeReady !== true
+    || item.nativeReady !== !appOwned
     || !["preparing", "ready", "login-required", "failed", "closed"].includes(item.webState as string)) {
     throw new Error("profile child readiness identity does not match the requested profile");
+  }
+  if (appOwned && (expected.nativeTargetKind !== "default-desktop"
+    || item.targetProcessId !== undefined || item.terminalEndpoint !== undefined
+    || item.webState !== "ready")) {
+    throw new Error("app-owned profile cannot claim a managed Native session");
   }
   const internalMcpUrl = new URL(string("internalMcpUrl"));
   const bridgePreviewUrl = new URL(string("bridgePreviewUrl"));
@@ -194,8 +208,14 @@ function childReady(value: unknown, expected: {
       throw new Error("profile child readiness exposed a non-loopback endpoint");
     }
   }
+  if (expected.appOwnedIngress
+    && responsesUrl.href !== `http://127.0.0.1:${expected.appOwnedIngress.port}/${expected.appOwnedIngress.capability}/v1/`) {
+    throw new Error("app-owned profile Responses route does not match installed ownership");
+  }
   const fingerprint = string("responsesRouteFingerprint");
-  if (!/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("profile child route fingerprint is invalid");
+  if (!/^[a-f0-9]{64}$/.test(fingerprint)) {
+    throw new Error("profile child route fingerprint is invalid");
+  }
   if (!Number.isSafeInteger(item.runtimeProcessId) || (item.runtimeProcessId as number) < 1) {
     throw new Error("profile runtime process identity is invalid");
   }
@@ -205,7 +225,7 @@ function childReady(value: unknown, expected: {
     throw new Error("profile child target process id is invalid");
   }
   return Object.freeze({
-    stage: "product-profile-ready",
+    stage: appOwned ? "app-owned-profile-ready" : "product-profile-ready",
     runtimeProcessId: item.runtimeProcessId as number,
     slot: expected.slot,
     routeId: expected.routeId,
@@ -221,7 +241,7 @@ function childReady(value: unknown, expected: {
     responsesUrl: responsesUrl.href,
     responsesRouteFingerprint: fingerprint,
     ...(targetProcessId === undefined ? {} : { targetProcessId: targetProcessId as number }),
-    nativeReady: true,
+    nativeReady: !appOwned,
     webState: item.webState as CodexWebState,
   });
 }
@@ -283,6 +303,7 @@ function nativeTargetRouteMatches(
   owned: OwnedProfile | undefined,
 ): boolean {
   if (!owned) return false;
+  if (owned.mode === "app-owned") return false;
   if (target.adapterKind === "default-desktop") {
     return owned.targetProcessId !== undefined
       && session.desktopProcessId === owned.targetProcessId;
@@ -303,7 +324,8 @@ function nativeTargetDetached(target: CodexNativeTarget, session: CodexNativeTar
 
 function statusFor(target: CodexNativeTarget, slot: number, session: CodexNativeTargetSession, owned?: OwnedProfile): CodexProfileStatus {
   const childAlive = owned?.child.exitCode === null && owned.child.signalCode === null;
-  const ownershipMatches = ownsNativeTargetSession(target, session, owned);
+  const appOwned = owned?.mode === "app-owned";
+  const ownershipMatches = appOwned ? childAlive : ownsNativeTargetSession(target, session, owned);
   const controlState: CodexProfileStatus["controlState"] = owned
     ? (childAlive && ownershipMatches ? "running" : "orphaned")
     : session.state === "available"
@@ -314,12 +336,12 @@ function statusFor(target: CodexNativeTarget, slot: number, session: CodexNative
     targetId: target.id,
     targetDisplayName: target.displayName,
     targetState: target.state,
-    targetSessionState: ownershipMatches ? "ready" : session.state,
+    targetSessionState: appOwned ? session.state : ownershipMatches ? "ready" : session.state,
     ...(ownershipMatches && owned ? { webModelsReady: owned.webModelsReady, webState: owned.webState,
       ...(owned.webSignIn === undefined ? {} : { webSignIn: owned.webSignIn }),
       ...(owned.accountManagementActive ? { accountManagementActive: true } : {}) } : {}),
     controlState,
-    ...(session.desktopProcessId ? { desktopProcessId: session.desktopProcessId } : {}),
+    ...(!appOwned && session.desktopProcessId ? { desktopProcessId: session.desktopProcessId } : {}),
     ...(owned ? { childProcessId: owned.runtimeProcessId } : {}),
     ...(owned ? { responsesRouteFingerprint: owned.responsesRouteFingerprint } : {}),
   });
@@ -351,6 +373,11 @@ export async function startCodexService(input: {
   });
   const routedBridge = new RoutedCodexTurnBridge();
   const owned = new Map<number, OwnedProfile>();
+  const appOwnedIngress = (slot: number) => input.config.appOwnedResponses?.find(profile => profile.slot === slot);
+  const appOwnedTarget: CodexNativeTarget = { slot: 1, adapterKind: "default-desktop",
+    id: "default", displayName: "ChatGPT", state: "independent", managed: false };
+  const appOwnedStatus = (profile?: OwnedProfile) => statusFor(appOwnedTarget, profile?.slot ?? 1,
+    { targetId: appOwnedTarget.id, state: profile ? "independent" : "available" }, profile);
   const starting = new Map<number, {
     readonly settled: Promise<void>;
     readonly expectedDesktopProcessId: number | undefined;
@@ -399,6 +426,7 @@ export async function startCodexService(input: {
     // stopOwned/runtime cleanup separately prove ownership before quitting an app.
     // The built-in Desktop adapter reports process identity, not the routed
     // app-server. Use the same owned endpoint as terminalSession for all targets.
+    if (profile.mode === "managed") {
     const session = await targets.session(profile.target.id, signal);
     try {
       if (!profile.terminalEndpoint) throw new Error("native endpoint unavailable");
@@ -406,6 +434,7 @@ export async function startCodexService(input: {
     } catch (error) {
       if (!nativeTargetDetached(profile.target, session, profile)) throw error;
       emitDiagnosticEvent("chatgpt_tela_codex", "detached_native_observation_unavailable", { slot: profile.slot, phase: "readiness" });
+    }
     }
     // A replaced Desktop no longer belongs to this runtime. Drain its Web work
     // below, but do not require its obsolete Native connection to recover.
@@ -442,8 +471,9 @@ export async function startCodexService(input: {
     let phase = "ownership";
     profile.stopping = (async () => {
       // Startup cancellation must not cancel normal cleanup of already-owned resources.
-      const session = await targets.session(profile.target.id);
-      const ownsTargetRoute = ownsNativeTargetSession(profile.target, session, profile);
+      const session: CodexNativeTargetSession = profile.mode === "app-owned"
+        ? { targetId: profile.target.id, state: "independent" } : await targets.session(profile.target.id);
+      const ownsTargetRoute = profile.mode === "managed" && ownsNativeTargetSession(profile.target, session, profile);
       if (ownsTargetRoute && profile.target.adapterKind === "multi-profile") {
         phase = "native_work_settlement";
         if (interruptTurns) await interruptNativeTurns(profile.slot, session);
@@ -520,11 +550,13 @@ export async function startCodexService(input: {
     const slot = slotNumber(slotValue);
     const profile = owned.get(slot);
     if (!profile || profile.stopping || profile.child.exitCode !== null || profile.child.signalCode !== null) throw new Error("Native profile is not running");
+    if (profile.mode === "app-owned") return profile;
     const session = await targets.session(profile.target.id, input.signal);
     if (owned.get(slot) !== profile || profile.stopping || !ownsNativeTargetSession(profile.target, session, profile)) throw new Error("Native profile ownership changed");
     return profile;
   }
   async function profileStatus(profile: OwnedProfile): Promise<CodexProfileStatus> {
+    if (profile.mode === "app-owned") return appOwnedStatus(profile);
     const session = await targets.session(profile.target.id, input.signal);
     return statusFor(profile.target, profile.slot, session, owned.get(profile.slot));
   }
@@ -564,6 +596,7 @@ export async function startCodexService(input: {
         if (starting.size > 0 || stopping || stoppingProfiles.size > 0) throw new CodexShutdownNotStartedError();
         for (const profile of owned.values()) {
           if (stopping || profile.stopping) throw new CodexShutdownNotStartedError();
+          if (profile.mode === "app-owned") continue;
           slot = profile.slot; phase = "native_ownership";
           const session = await targets.session(profile.target.id, observation);
           phase = "native_completion";
@@ -600,16 +633,24 @@ export async function startCodexService(input: {
       }
     },
     async profiles() {
-      const inventory = await targets.profiles(input.signal);
-      return Object.freeze(await Promise.all(inventory.map(async ({ target, session }) => {
+      const inventory = new Map((await targets.profiles(input.signal)).map(profile => [profile.target.slot, profile]));
+      for (const ingress of input.config.appOwnedResponses ?? []) inventory.set(ingress.slot, {
+        target: appOwnedTarget, session: { targetId: appOwnedTarget.id, state: "independent" },
+      });
+      const profiles = await Promise.all([...inventory.values()].map(async ({ target, session }) => {
         const profile = owned.get(target.slot);
+        if (appOwnedIngress(target.slot)) return Object.freeze({
+          ...appOwnedStatus(profile?.mode === "app-owned" ? profile : undefined),
+          connectionInProgress: starting.has(target.slot),
+        });
         if (profile && !profile.stopping && ownsNativeTargetSession(target, session, profile)) {
           await refreshWebStatus(profile);
 
         }
         return Object.freeze({ ...statusFor(target, target.slot, session, owned.get(target.slot)),
           connectionInProgress: starting.has(target.slot) });
-      })));
+      }));
+      return Object.freeze(profiles);
     },
     startProfile(slotValue: number, options?: ProfileStartOptions) {
       if (stopping || input.signal?.aborted) return Promise.reject(new Error("Tela Codex is stopping"));
@@ -652,8 +693,16 @@ export async function startCodexService(input: {
       const promise: Promise<CodexProfileStatus> = Promise.resolve().then(async () => {
       try {
       progress("checking");
+      const ingress = appOwnedIngress(slot);
+      if (ingress && (options?.expectedDesktopProcessId !== undefined || options?.requireStopped)) {
+        throw new Error("App-owned provider cannot reopen or stop an official Desktop");
+      }
       const existing = owned.get(slot);
       const existingRunning = existing && existing.child.exitCode === null && existing.child.signalCode === null;
+      if (ingress && existingRunning && existing?.mode === "app-owned") {
+        input.onProfileConnectionChanged?.(appOwnedTarget.id, true);
+        return appOwnedStatus(existing);
+      }
       // A stopped launch with no live owned child performs its fresh state check below, immediately
       // before preparation. Early discovery is needed only to protect a possible live-owner transition
       // or explicit PID-bound reopen consent; do not duplicate cold-launch adapter work.
@@ -670,10 +719,12 @@ export async function startCodexService(input: {
         }
       }
       if (existingRunning) {
-        const current = await targets.session(existing.target.id, input.signal);
-        if (ownsNativeTargetSession(existing.target, current, existing)) {
-          input.onProfileConnectionChanged?.(existing.target.id, true);
-          return statusFor(existing.target, slot, current, existing);
+        if (existing?.mode === "managed") {
+          const current = await targets.session(existing.target.id, input.signal);
+          if (ownsNativeTargetSession(existing.target, current, existing)) {
+            input.onProfileConnectionChanged?.(existing.target.id, true);
+            return statusFor(existing.target, slot, current, existing);
+          }
         }
         progress("closing");
         await stopOwned(existing, true);
@@ -683,7 +734,9 @@ export async function startCodexService(input: {
         await existing.bridge.close().catch(() => {});
         owned.delete(slot);
       }
-      const { target, session: initialSession } = await targetAndSession(slot);
+      const { target, session: initialSession } = ingress
+        ? { target: appOwnedTarget, session: { targetId: appOwnedTarget.id, state: "independent" } as CodexNativeTargetSession }
+        : await targetAndSession(slot);
       let session = initialSession;
       if (options?.expectedDesktopProcessId !== undefined && session.desktopProcessId !== options.expectedDesktopProcessId) {
         throw new Error("ChatGPT has changed since you chose to reopen it; the current app was kept open");
@@ -691,9 +744,9 @@ export async function startCodexService(input: {
       if (options?.requireStopped && (session.state !== "available" || target.state === "running")) {
         throw new Error("Work restoration requires a stopped target; existing app preserved");
       }
-      const mustQuit = session.state === "restart-required"
+      const mustQuit = !ingress && (session.state === "restart-required"
         || (session.state === "ready" && (session.responsesRouteFingerprint === undefined
-          || options?.expectedDesktopProcessId !== undefined));
+          || options?.expectedDesktopProcessId !== undefined)));
       if (mustQuit) {
         // Ownership preparation must fail before any quit of the existing Desktop.
         progress("preparing");
@@ -705,7 +758,7 @@ export async function startCodexService(input: {
         if (options?.expectedDesktopProcessId === undefined) await interruptNativeTurns(slot, session);
         session = await targets.quit(target.id, input.signal, options?.expectedDesktopProcessId);
       }
-      if (session.state !== "available") {
+      if (!ingress && session.state !== "available") {
         throw new Error(`${target.displayName} must be normally quit before Tela Codex can attach its route (state=${session.state})`);
       }
       if (!mustQuit) {
@@ -750,6 +803,7 @@ export async function startCodexService(input: {
           routeId: route,
           targetId: target.id,
           nativeTargetKind: target.adapterKind,
+          ...(ingress ? { appOwnedIngress: ingress } : {}),
         });
         await verifyProfileRuntimeProcess(launch, ready.runtimeProcessId, child.pid);
         child.stdout.resume();
@@ -765,6 +819,7 @@ export async function startCodexService(input: {
           clientName: "chatgpt-tela-codex-service" });
         const unmount = routedBridge.mount(route, bridge);
         const profile: OwnedProfile = {
+          mode: ingress ? "app-owned" : "managed",
           runtimeProcessId: ready.runtimeProcessId,
           slot,
           target,
@@ -779,7 +834,7 @@ export async function startCodexService(input: {
           uiToken,
           unmount,
           webState: ready.webState,
-          webModelsReady: false,
+          webModelsReady: ingress !== undefined && ready.webState === "ready",
           accountManagementActive: false,
           stopping: undefined,
         };
@@ -792,11 +847,13 @@ export async function startCodexService(input: {
           void profile.bridge.close().catch(() => {});
           void (async () => {
             try {
-              const session = await targets.session(profile.target.id);
-              if (nativeTargetRouteMatches(profile.target, session, profile)) {
-                const afterQuit = await targets.quit(profile.target.id);
-                if (afterQuit.state === "ready") {
-                  throw new Error("native target remained ready after unexpected profile child exit");
+              if (profile.mode === "managed") {
+                const session = await targets.session(profile.target.id);
+                if (nativeTargetRouteMatches(profile.target, session, profile)) {
+                  const afterQuit = await targets.quit(profile.target.id);
+                  if (afterQuit.state === "ready") {
+                    throw new Error("native target remained ready after unexpected profile child exit");
+                  }
                 }
               }
               emitDiagnosticEvent("chatgpt_tela_codex", "profile_child_exit_cleanup_complete", { slot });
@@ -807,7 +864,8 @@ export async function startCodexService(input: {
             }
           })();
         });
-        const status = statusFor(target, slot, await targets.session(target.id, input.signal), profile);
+        const status = ingress ? appOwnedStatus(profile)
+          : statusFor(target, slot, await targets.session(target.id, input.signal), profile);
         progress("ready");
         input.onProfileConnectionChanged?.(target.id, true);
         return status;
@@ -834,6 +892,10 @@ export async function startCodexService(input: {
       const slot = slotNumber(slotValue);
       const profile = owned.get(slot);
       if (profile) await stopOwned(profile, true);
+      if (appOwnedIngress(slot)) {
+        input.onProfileConnectionChanged?.(appOwnedTarget.id, false);
+        return appOwnedStatus();
+      }
       const { target, session } = await targetAndSession(slot);
       if (!profile && session.state === "ready") {
         throw new Error(`${target.displayName} is routed by another owner; refusing to stop it`);
@@ -869,6 +931,7 @@ export async function startCodexService(input: {
       if (!profile || profile.stopping || profile.child.exitCode !== null || profile.child.signalCode !== null) {
         throw new Error("terminal requires a running Tela profile");
       }
+      if (profile.mode === "app-owned") throw new Error("App-owned provider does not own a Native terminal");
       const session = await targets.session(profile.target.id, input.signal);
       if (owned.get(slot) !== profile || profile.stopping || !ownsNativeTargetSession(profile.target, session, profile)) {
         throw new Error("terminal profile route ownership changed");

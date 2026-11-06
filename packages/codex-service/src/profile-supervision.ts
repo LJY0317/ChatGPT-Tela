@@ -88,7 +88,7 @@ export async function createProfileSupervisorLease(input: { readonly onProgress?
             if (value.stage === "product-profile-progress" && typeof value.phase === "string"
               && ["browser", "account", "connector", "models", "opening"].includes(value.phase)) {
               input.onProgress?.(value.phase);
-            } else if (value.stage === "product-profile-ready") {
+            } else if (value.stage === "product-profile-ready" || value.stage === "app-owned-profile-ready") {
               observe("ready");
               readyReceived = true; resolveReady(value);
             } else throw new Error("invalid lifecycle publication");
