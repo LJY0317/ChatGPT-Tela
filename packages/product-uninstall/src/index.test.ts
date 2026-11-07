@@ -87,6 +87,85 @@ test("owned Desktop provider register, re-register and selected uninstall restor
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("uninstall detaches and removes the install-owned startup catalog after restoring the Desktop config", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-catalog-uninstall-"));
+  try {
+    const installId = randomUUID();
+    const fixture = await binaryFixture(root, false, installId);
+    const catalogDirectory = join(fixture.paths.stateRoot, "install", "desktop-model-catalog");
+    await prepareOwnedDirectory({ manifestPath: fixture.paths.installManifest, installId,
+      productVersion: "1.0.0", resource: { kind: "directory", id: "app-owned-desktop-model-catalog",
+        owner: "product", path: catalogDirectory, dataClass: "config" } });
+    const catalogPath = join(catalogDirectory, "models.json");
+    writeFileSync(catalogPath, JSON.stringify({ models: [{ id: "native" }, { id: "web" }] }), { mode: 0o600 });
+    mkdirSync(join(fixture.home, ".codex"));
+    const configPath = join(fixture.home, ".codex", "config.toml");
+    const original = 'model_provider = "openai"\nmodel = "native-choice"\n# preserve me\n';
+    writeFileSync(configPath, original);
+    const capability = "c".repeat(48);
+    mkdirSync(fixture.paths.configRoot, { recursive: true });
+    writeFileSync(join(fixture.paths.configRoot, "product-v1.json"), JSON.stringify({ version: 1,
+      publicMcpAbi: "stable", exposure: { kind: "existing-https", publicUrl: "https://example.test/mcp",
+        localPort: 18743, authentication: "none", allowUnauthenticatedPublicEndpoint: true },
+      appOwnedResponses: [{ slot: 1, port: 18744, capability }],
+    }));
+    const registration = { configPath, installId, baseUrl: `http://127.0.0.1:18744/${capability}/v1`, catalogPath };
+    expect(editOfficialCodexProviderFile({ ...registration, action: "register", mode: "apply" })).toBe(true);
+    const selected = readFileSync(configPath, "utf8").replace('model_provider = "openai"', 'model_provider = "chatgpt_tela_local"');
+    writeFileSync(configPath, selected);
+    const dry = await runProductUninstall({ mode: "dry-run", removeData: true, ...fixture.options });
+    expect(dry.providerRestore).toMatchObject({ status: "planned", catalogStatus: "removed" });
+    expect(readFileSync(configPath, "utf8")).toBe(selected);
+    expect(existsSync(catalogPath)).toBe(true);
+    const activityPath = productActivityPath(fixture.paths.runtimeRoot, "profile-setup", "1");
+    const activity = acquireProductActivity({ path: activityPath, installId, kind: "profile-setup", scope: "1" });
+    try {
+      const blocked = await runProductUninstall({ mode: "apply", removeData: true, ...fixture.options });
+      expect(blocked).toMatchObject({ applied: false, status: "uninstall-blocked" });
+      expect(readFileSync(configPath, "utf8")).toBe(selected);
+      expect(existsSync(catalogPath)).toBe(true);
+    } finally { releaseProductActivity({ path: activityPath, expected: activity }); }
+    const applied = await runProductUninstall({ mode: "apply", removeData: true, ...fixture.options });
+    expect(applied.providerRestore).toMatchObject({ status: "restored", catalogStatus: "removed" });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    expect(existsSync(catalogDirectory)).toBe(false);
+    expect(applied.manifestRemoved).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("uninstall preserves an owned catalog directory while an edited provider config still references it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-catalog-preserve-"));
+  try {
+    const installId = randomUUID();
+    const fixture = await binaryFixture(root, false, installId);
+    const catalogDirectory = join(fixture.paths.stateRoot, "install", "desktop-model-catalog");
+    await prepareOwnedDirectory({ manifestPath: fixture.paths.installManifest, installId,
+      productVersion: "1.0.0", resource: { kind: "directory", id: "app-owned-desktop-model-catalog",
+        owner: "product", path: catalogDirectory, dataClass: "config" } });
+    const catalogPath = join(catalogDirectory, "models.json");
+    writeFileSync(catalogPath, JSON.stringify({ models: [{ id: "native" }] }));
+    mkdirSync(join(fixture.home, ".codex"));
+    const configPath = join(fixture.home, ".codex", "config.toml");
+    writeFileSync(configPath, 'model_provider = "openai"\n');
+    const capability = "d".repeat(48);
+    mkdirSync(fixture.paths.configRoot, { recursive: true });
+    writeFileSync(join(fixture.paths.configRoot, "product-v1.json"), JSON.stringify({ version: 1,
+      publicMcpAbi: "stable", exposure: { kind: "existing-https", publicUrl: "https://example.test/mcp",
+        localPort: 18743, authentication: "none", allowUnauthenticatedPublicEndpoint: true },
+      appOwnedResponses: [{ slot: 1, port: 18744, capability }],
+    }));
+    editOfficialCodexProviderFile({ configPath, installId,
+      baseUrl: `http://127.0.0.1:18744/${capability}/v1`, catalogPath, action: "register", mode: "apply" });
+    const edited = readFileSync(configPath, "utf8").replace("supports_websockets = false", "supports_websockets = true");
+    writeFileSync(configPath, edited);
+    const result = await runProductUninstall({ mode: "apply", removeData: true, ...fixture.options });
+    expect(result).toMatchObject({ applied: true, providerRestore: { status: "preserved", selected: false }, manifestRemoved: false });
+    expect(readFileSync(configPath, "utf8")).toBe(edited);
+    expect(existsSync(catalogPath)).toBe(true);
+    expect(existsSync(fixture.paths.installManifest)).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("uninstall preserves edited external provider and installed resources with an exact reason", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-provider-preserve-"));
   try {

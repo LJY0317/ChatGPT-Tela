@@ -24,6 +24,7 @@ import {
   planUninstall,
   productActivityPath,
   readOwnershipManifest,
+  readOwnershipMarker,
   observeLocalMarketplaceEntry,
   removeLocalMarketplaceEntry,
   readPackagedRepairJournal,
@@ -106,7 +107,9 @@ export function profileSetupActivityBlockers(paths: ProductPaths, installId: str
 }
 
 /** External Codex config remains user-owned; only the exact install-marked stanza is touched. */
-function restoreOwnedDesktopProvider(input: ProductUninstallOptions, paths: ProductPaths, installId: string) {
+const APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID = "app-owned-desktop-model-catalog";
+
+function restoreOwnedDesktopProvider(input: ProductUninstallOptions, paths: ProductPaths, installId: string, manifest: OwnershipManifest) {
   const configPath = officialCodexConfigPath(input.home);
   const productPath = join(paths.configRoot, "product-v1.json");
   const selectedByUser = () => {
@@ -133,12 +136,22 @@ function restoreOwnedDesktopProvider(input: ProductUninstallOptions, paths: Prod
     const ingress = config.appOwnedResponses?.find(item => item.slot === 1);
     if (!ingress) return withoutOwnedRoute();
     if (!existsSync(configPath)) return { status: "already-absent" as const };
-    const changed = editOfficialCodexProviderFile({
+    const catalogResource = manifest.resources.find(resource => resource.id === APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID);
+    const catalogPath = catalogResource?.kind === "directory" && catalogResource.owner === "product"
+      && catalogResource.dataClass === "config"
+      && catalogResource.path === join(paths.stateRoot, "install", "desktop-model-catalog")
+      && readOwnershipMarker(catalogResource)?.installId === installId
+      && readOwnershipMarker(catalogResource)?.resourceId === catalogResource.id
+      ? join(catalogResource.path, "models.json") : undefined;
+    const result = editOfficialCodexProviderFile({
       configPath, action: "restore", mode: input.mode, restoreSelected: true,
       installId, baseUrl: `http://127.0.0.1:${ingress.port}/${ingress.capability}/v1`,
+      ...(catalogPath ? { catalogPath } : {}), result: "detailed",
     });
+    const changed = result.changed;
     return { status: changed ? input.mode === "apply" ? "restored" as const : "planned" as const
-      : "already-absent" as const };
+      : "already-absent" as const,
+      catalogStatus: result.catalogStatus };
   } catch (error) {
     let selected = true;
     try { selected = selectedByUser(); }
@@ -177,7 +190,7 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
       throw new Error(`packaged repair for ${repairJournal.productVersion} is incomplete; resume it before uninstall apply`);
     }
   }
-  const providerPlan = restoreOwnedDesktopProvider({ ...input, mode: "dry-run" }, paths, manifest.installId);
+  const providerPlan = restoreOwnedDesktopProvider({ ...input, mode: "dry-run" }, paths, manifest.installId, manifest);
 
   const filesystemObserver = new FilesystemOwnershipObserver();
   const hasManagedWorktrees = manifest.resources.some(resource => resource.kind === "managed-worktree");
@@ -229,6 +242,15 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
     observe(resource: OwnedResource, currentManifest: OwnershipManifest) {
       if (resource.kind === "directory" && resource.id !== "transition-coordinator"
         && inside(resource.path, coordinatorResource(paths).path)) return "dirty" as const;
+      if (resource.kind === "directory" && resource.id === APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID
+        && (providerPlan as { readonly catalogStatus?: string }).catalogStatus !== "removed") {
+        try {
+          if (existsSync(officialCodexConfigPath(input.home))) {
+            const config = Bun.TOML.parse(readFileSync(officialCodexConfigPath(input.home), "utf8")) as Record<string, unknown>;
+            if (config.model_catalog_json === join(resource.path, "models.json")) return "dirty" as const;
+          }
+        } catch { return "dirty" as const; }
+      }
       if (resource.kind === "directory" && hasPendingFileImports(join(paths.serviceState("chat"), "imports-v2"))
         && (inside(resource.path, join(paths.serviceState("chat"), "imports-v2")) || inside(resource.path, paths.installManifest))) {
         return "dirty" as const;
@@ -291,7 +313,7 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
       activityBlockers, shutdownFailures, removedCount: 0, preservedCount: 0,
       failedCount: shutdownFailures.length, destructiveActions: 0 });
   }
-  const providerRestore = restoreOwnedDesktopProvider(input, paths, manifest.installId);
+  const providerRestore = restoreOwnedDesktopProvider(input, paths, manifest.installId, manifest);
   if (providerRestore.status === "preserved" && providerRestore.selected) {
     return Object.freeze({ applied: false, status: "uninstall-blocked", providerRestore,
       activityBlockers, shutdownFailures, removedCount: 0, preservedCount: 1,
