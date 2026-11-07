@@ -305,6 +305,7 @@ test("profile readiness retires expired replaced-account results within its owne
   const root = dirname(dirname(options.directory));
   const userDataDir = join(root, "Canary-Profile2");
   const accountBindingPath = join(root, "account-bindings", "Profile2.json");
+  await FileNativeVisiblePrefixStageJournal.pruneProfileResults({ userDataDir, accountBindingPath });
   const scope = (accountFingerprint: string, slot = 2) => ({
     directory: join(root, `Canary-Profile${slot}`, "native-visible-prefix-executions", accountFingerprint),
     initializationPath: join(root, "account-bindings", `Profile${slot}.json.native-prefix-${accountFingerprint}`),

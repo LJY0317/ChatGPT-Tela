@@ -145,7 +145,10 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
    * accounts replaced since the last launch. Never create historical ledgers. */
   static async pruneProfileResults(input: { readonly userDataDir: string; readonly accountBindingPath: string }): Promise<void> {
     const prefix = `${basename(input.accountBindingPath)}.native-prefix-`;
-    const receipts = await readdir(dirname(input.accountBindingPath), { withFileTypes: true });
+    const receipts = await readdir(dirname(input.accountBindingPath), { withFileTypes: true }).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    });
     let failed: unknown;
     for (const receipt of receipts) {
       if (!receipt.isFile() || !receipt.name.startsWith(prefix)) continue;
