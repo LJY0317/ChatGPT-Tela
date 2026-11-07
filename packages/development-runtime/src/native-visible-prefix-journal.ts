@@ -38,7 +38,8 @@ export interface SuppliedCompletedResult {
   readonly requestFingerprint: string;
   readonly answer: string;
 }
-interface StoredSuppliedResult extends SuppliedCompletedResult {
+interface StoredSuppliedResult extends Omit<SuppliedCompletedResult, "answer"> {
+  readonly answer?: string;
   readonly answerHash: string;
   readonly updatedAt: number;
 }
@@ -51,6 +52,11 @@ function validSupplied(value: SuppliedCompletedResult): boolean {
     && typeof value.turnId === "string" && value.turnId.length > 0 && value.turnId.length <= 256
     && /^[a-f0-9]{64}$/.test(value.requestFingerprint)
     && typeof value.answer === "string" && !!value.answer.trim();
+}
+function validStoredSupplied(value: StoredSuppliedResult): boolean {
+  return validSupplied({ ...value, answer: value.answer ?? "preserved completion" })
+    && (value.answer === undefined || sha(value.answer) === value.answerHash)
+    && /^[a-f0-9]{64}$/.test(value.answerHash);
 }
 function suppliedKey(value: Pick<SuppliedCompletedResult, "profileSlot" | "accountFingerprint" | "threadId" | "turnId">): string {
   return JSON.stringify([value.profileSlot, value.accountFingerprint, value.threadId, value.turnId]);
@@ -101,7 +107,7 @@ function validate(value: unknown): State {
     const seen = new Set<string>();
     for (const item of state.suppliedResults) {
       const key = suppliedKey(item);
-      if (!validSupplied(item) || item.answerHash !== sha(item.answer)
+      if (!validStoredSupplied(item)
         || !Number.isSafeInteger(item.updatedAt) || item.updatedAt < 0 || seen.has(key)) {
         throw Error("Invalid preserved supplied result");
       }
@@ -206,38 +212,34 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     } finally { await handle.close(); }
   }
   async #write(state: State): Promise<void> {
-    // Published heads are derived data, unlike pending execution claims. Reuse
-    // the existing retention window and byte budget without another cache owner.
-    if (state.checkpoints) {
-      const now = Date.now();
-      const checkpoints = state.checkpoints.filter(item => now - item.updatedAt <= RETENTION_MS)
-        .sort((a, b) => a.updatedAt - b.updatedAt);
-      const sizes = checkpoints.map(item => Buffer.byteLength(JSON.stringify(item), "utf8"));
-      let size = 1 + Buffer.byteLength(JSON.stringify({ ...state, checkpoints: [] }), "utf8")
-        + sizes.reduce((total, bytes) => total + bytes, 0) + Math.max(0, sizes.length - 1)
-        + state.entries.filter(entry => entry.status === "pending").length * RESERVED_ENTRY_BYTES;
-      let first = 0;
-      while (size > MAX_BYTES && first < checkpoints.length) {
-        size -= sizes[first]! + (checkpoints.length - first > 1 ? 1 : 0);
-        first++;
+    // Expire both kinds before applying the shared byte budget. Keep a compact
+    // completion receipt when an answer body is evicted so a replay cannot send
+    // the same completed operation to the model a second time.
+    const now = Date.now();
+    if (state.checkpoints) state.checkpoints = state.checkpoints
+      .filter(item => now - item.updatedAt <= RETENTION_MS);
+    if (state.suppliedResults) state.suppliedResults = state.suppliedResults
+      .filter(item => now - item.updatedAt <= RETENTION_MS);
+    const occupied = () => 1 + Buffer.byteLength(JSON.stringify(state), "utf8")
+      + state.entries.filter(item => item.status === "pending").length * RESERVED_ENTRY_BYTES;
+    while (occupied() > MAX_BYTES) {
+      const heads = state.checkpoints ?? [];
+      const bodies = (state.suppliedResults ?? []).filter(item => item.answer !== undefined);
+      const oldestHead = heads.reduce<PublishedEntry | undefined>((old, item) =>
+        !old || item.updatedAt < old.updatedAt ? item : old, undefined);
+      const oldestBody = bodies.reduce<StoredSuppliedResult | undefined>((old, item) =>
+        !old || item.updatedAt < old.updatedAt ? item : old, undefined);
+      if (oldestHead && (!oldestBody || oldestHead.updatedAt <= oldestBody.updatedAt)) {
+        state.checkpoints = heads.filter(item => item !== oldestHead);
+      } else if (oldestBody) {
+        state.suppliedResults = state.suppliedResults!.map(item => {
+          if (item !== oldestBody) return item;
+          const { answer: _removed, ...receipt } = item;
+          return receipt;
+        });
+      } else {
+        throw new Error("Native checkpoint execution journal byte capacity exhausted");
       }
-      state.checkpoints = checkpoints.slice(first);
-    }
-    if (state.suppliedResults) {
-      const now = Date.now();
-      const retained = state.suppliedResults.filter(item => now - item.updatedAt <= RETENTION_MS)
-        .sort((a, b) => a.updatedAt - b.updatedAt);
-      // Completed results are derived recovery data. Keep the newest records
-      // inside the existing journal byte ceiling, without a count-based cap.
-      const sizes = retained.map(item => Buffer.byteLength(JSON.stringify(item), "utf8"));
-      let total = 1 + Buffer.byteLength(JSON.stringify({ ...state, suppliedResults: [] }), "utf8")
-        + sizes.reduce((sum, size) => sum + size, 0) + Math.max(0, sizes.length - 1);
-      let first = 0;
-      while (total > MAX_BYTES && first < retained.length) {
-        total -= sizes[first]! + (retained.length - first > 1 ? 1 : 0);
-        first++;
-      }
-      state.suppliedResults = retained.slice(first);
     }
     const bytes = JSON.stringify(state);
     if (1 + Buffer.byteLength(bytes, "utf8") > MAX_BYTES) throw new Error("Native checkpoint execution journal byte capacity exhausted");
@@ -287,8 +289,9 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
       const stored = state.suppliedResults?.find(item => suppliedKey(item) === suppliedKey(identity));
       if (!stored || Date.now() - stored.updatedAt > RETENTION_MS) return undefined;
       if (stored.requestFingerprint !== identity.requestFingerprint) throw Error("Web request changed within the same response operation");
+      if (stored.answer === undefined) throw Error("Completed Web response is no longer retained; resubmission denied");
       const { answerHash: _hash, updatedAt: _time, ...result } = stored;
-      return Object.freeze(result);
+      return Object.freeze(result) as SuppliedCompletedResult;
     });
   }
   async preserveSuppliedResult(result: SuppliedCompletedResult): Promise<boolean> {
@@ -302,7 +305,7 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
       state.suppliedResults = [...(state.suppliedResults ?? []).filter(item => suppliedKey(item) !== key),
         { ...result, answerHash: sha(result.answer), updatedAt: Date.now() }];
       await this.#write(state);
-      return state.suppliedResults.some(item => suppliedKey(item) === key);
+      return state.suppliedResults.some(item => suppliedKey(item) === key && item.answer === result.answer);
     });
   }
   async completedReceipts(): Promise<readonly NativeVisiblePrefixStageReceipt[]> {

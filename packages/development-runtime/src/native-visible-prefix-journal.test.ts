@@ -233,3 +233,46 @@ test("expired derived publications leave pending and completed execution receipt
   expect(await journal.claim(id, hash("expired-owner"), sourceRootDigest)).toMatchObject({ status: "completed", summary: "saved summary" });
   expect(await journal.pendingOperations()).toHaveLength(1);
 }));
+
+test("expired supplied bodies are removed before capacity prunes a valid checkpoint", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options);
+  const id = { ...identity(975), key: `native-visible-stage-v2-${hash("retained-checkpoint")}` };
+  const root = hash("retained-root"), owner = hash("retained-owner");
+  const claim = await journal.claim(id, owner, root);
+  if (claim.status !== "claimed") throw Error("fixture");
+  await journal.complete({ ...id, claimId: claim.claimId, status: "completed", summary: "retained" });
+  const content = JSON.stringify({ type: "tela_native_request_prefix_checkpoint_v1",
+    sourceDigest: root, completedStageKey: id.key, summary: "retained" });
+  const scope = hash("retained-scope");
+  await journal.publishCheckpoint({ scopeFingerprint: scope,
+    revisionId: `native_${hash("retained-revision").slice(0, 20)}`,
+    sourceRootDigest: root, stageKey: id.key, content,
+    estimatedTokens: Math.ceil(Buffer.byteLength(content, "utf8") / 4) });
+  const path = join(options.directory, "state.json");
+  const state = JSON.parse((await readFile(path, "utf8")).slice(1));
+  const expired = "x".repeat(16 * 1024 * 1024 - 12_000);
+  state.suppliedResults = [{ profileSlot: 2, accountFingerprint: hash("account"),
+    threadId: "expired-thread", turnId: "expired-turn", requestFingerprint: hash("expired-request"),
+    answer: expired, answerHash: hash(expired), updatedAt: Date.now() - 29 * 24 * 60 * 60 * 1000 }];
+  expect(Buffer.byteLength(JSON.stringify(state), "utf8")).toBeLessThan(16 * 1024 * 1024);
+  await writeFile(path, "=" + JSON.stringify(state));
+  const current = { profileSlot: 2, accountFingerprint: hash("account"),
+    threadId: "current-thread", turnId: "current-turn", requestFingerprint: hash("current-request") };
+  expect(await journal.preserveSuppliedResult({ ...current, answer: "y".repeat(20_000) })).toBe(true);
+  expect(await journal.publishedCheckpoints(scope)).toHaveLength(1);
+  expect((await journal.readSuppliedResult(current))?.answer).toHaveLength(20_000);
+}), 30_000);
+
+test("capacity evicts a completed body but keeps its exact replay receipt", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options);
+  const scope = { profileSlot: 2, accountFingerprint: hash("owned-account") };
+  const first = { ...scope, threadId: "one", turnId: "one", requestFingerprint: hash("first") };
+  const second = { ...scope, threadId: "two", turnId: "two", requestFingerprint: hash("second") };
+  expect(await journal.preserveSuppliedResult({ ...first, answer: "A".repeat(9 * 1024 * 1024) })).toBe(true);
+  expect(await journal.preserveSuppliedResult({ ...second, answer: "B".repeat(9 * 1024 * 1024) })).toBe(true);
+  const restarted = new FileNativeVisiblePrefixStageJournal(options);
+  await expect(restarted.readSuppliedResult(first)).rejects.toThrow("resubmission denied");
+  await expect(restarted.readSuppliedResult({ ...first, requestFingerprint: hash("changed") }))
+    .rejects.toThrow("changed");
+  expect((await restarted.readSuppliedResult(second))?.answer).toHaveLength(9 * 1024 * 1024);
+}), 30_000);

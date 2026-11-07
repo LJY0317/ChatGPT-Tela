@@ -101,6 +101,72 @@ test("durably preserved final releases shutdown and replays after gateway restar
   } finally { await first.gateway.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test("two synthetic tool continuations persist their final request identity across gateway restart", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-final-multi-round-"));
+  const accountFingerprint = "c".repeat(64);
+  const storage = () => ({ profileSlot: 2, accountFingerprint,
+    store: new FileNativeVisiblePrefixStageJournal({ directory: join(root, "ledger"),
+      initializationPath: join(root, "receipt") }) });
+  const host: BrowserHost = {
+    async acquire({ taskId, epochId }) { return { leaseId: "round-surface", taskId, epochId,
+      async navigate() {}, async reveal() {}, async hide() {}, capability() { return undefined; } } as BrowserSurfaceLease; },
+    async release() {}, async close() {},
+  };
+  let gateway!: ReturnType<typeof createSuppliedRequestGateway>, capability = "", submissions = 0;
+  const provider: WebConversationProvider = {
+    async observeCapabilities() { throw Error("no preflight"); },
+    async observeTurn() { throw Error("no preflight"); },
+    async submitTurn(_surface, turn) {
+      submissions++; capability = turn.chatTools!.nativeGoalControl!;
+      return { state: "proven", evidence: ["fixture"], value: {
+        nativeTaskId: turn.nativeTaskId, nativeTurnId: turn.nativeTurnId, webEpochId: turn.webEpochId,
+        providerTurnId: "synthetic-multi-round" } };
+    },
+    async armToolContinuation(_surface, handle, callId) {
+      return { state: "proven", evidence: ["fixture"], value: { providerTurnId: handle.providerTurnId, callId } };
+    },
+    async waitForTurnEvent(_surface, handle) {
+      for (const callId of ["synthetic-one", "synthetic-two"]) {
+        const pending = gateway.toolBridge.invoke(capability, {
+          callId, wireName: "get_goal", mode: "structured", arguments: {},
+        });
+        expect((await pending).callId).toBe(callId);
+      }
+      return { state: "proven", evidence: ["fixture"], value: {
+        kind: "completed", providerTurnId: handle.providerTurnId, answer: "Synthetic tool rounds complete." } };
+    },
+  };
+  const body = { ...request(), tools: [{ type: "function", name: "get_goal",
+    parameters: { type: "object" } }] };
+  gateway = createSuppliedRequestGateway({ browserHost: host, provider, completedResults: storage(),
+    async prepareForSubmit() {} });
+  try {
+    let current = body;
+    for (const callId of ["synthetic-one", "synthetic-two"]) {
+      const event = await gateway.handle(current);
+      expect(event).toMatchObject({ type: "tool-call", item: { call_id: callId } });
+      gateway.commit(event);
+      if (event.type !== "tool-call") throw Error("expected synthetic tool call");
+      current = { ...current, input: [...current.input, event.item,
+        { type: "function_call_output", call_id: callId, output: "{}" }] };
+    }
+    expect(await gateway.handle(current)).toMatchObject({ type: "final", answer: "Synthetic tool rounds complete." });
+    expect(gateway.shutdownReadiness()).toBe("ready");
+    gateway.prepareShutdown();
+    await gateway.close();
+
+    const restarted = createSuppliedRequestGateway({ browserHost: host, provider,
+      completedResults: storage(), async prepareForSubmit() {} });
+    try {
+      expect(await restarted.handle(current)).toMatchObject({
+        type: "final", answer: "Synthetic tool rounds complete." });
+      expect(submissions).toBe(1);
+      await expect(restarted.handle(body)).rejects.toThrow("changed");
+      expect(submissions).toBe(1);
+    } finally { await restarted.close(); }
+  } finally { await gateway.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("failed final preservation leaves undelivered completion blocking shutdown", async () => {
   const f = fixture({ completedResults: { profileSlot: 2, accountFingerprint: "b".repeat(64),
     store: { async readSuppliedResult() { return undefined; }, async preserveSuppliedResult() { return false; } } } });

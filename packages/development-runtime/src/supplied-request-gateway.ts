@@ -242,7 +242,11 @@ export function createSuppliedRequestGateway(input: {
                     && input.completedResults()?.accountFingerprint !== resultIdentity.accountFingerprint) {
                     throw Error("App-owned Web result storage account binding changed");
                   }
-                  owned.preserved = await completedResults!.store.preserveSuppliedResult({ ...resultIdentity, answer });
+                  // Continuations replace the host request body for the same
+                  // turn. Preserve the final exact body, not its first frame.
+                  owned.preserved = await completedResults!.store.preserveSuppliedResult({
+                    ...resultIdentity, requestFingerprint: owned.fingerprint, answer,
+                  });
                 } catch (error) {
                   emitDiagnosticEvent("chatgpt_tela_work", "provider_result_preservation_failed", {
                     scope_fingerprint: diagnosticFingerprint(identity.threadId), ...diagnosticFailureFields(error),
