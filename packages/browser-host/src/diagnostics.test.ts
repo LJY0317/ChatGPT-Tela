@@ -40,7 +40,7 @@ test("failure viewport evidence reads bounded geometry without scrolling or raw 
   expect(result).toMatchObject({turn_viewport_observed:true,turn_scroll_above_px:1300,turn_scroll_below_px:100,turn_viewport_height_px:600});
   expect(result.html).toBeUndefined();
 });
-test.each(["approval_anomaly", "approval_preparation_failed", "progress_description_missing", "progress_prose_unmapped", "completion_deferred"] as const)("%s DOM/screenshot require opt-in and auth-safe surface; duplicate failure is coalesced",async reason=>{
+test.each(["turn_failure", "approval_anomaly", "approval_preparation_failed", "progress_description_missing", "progress_prose_unmapped", "completion_deferred"] as const)("%s DOM/screenshot require opt-in and auth-safe surface; duplicate failure is coalesced",async reason=>{
   const root=mkdtempSync(join(tmpdir(),"tela-browser-diagnostics-"));roots.push(root);process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=join(root,"events.jsonl");
   let evaluations=0, previews=0;const privateFlags:unknown[]=[];let safe=true;
   const surface={taskId:"task",epochId:"epoch",leaseId:"lease",async navigate(){},async reveal(){},async hide(){},capability(cap:unknown){
@@ -53,7 +53,7 @@ test.each(["approval_anomaly", "approval_preparation_failed", "progress_descript
   safe=true;await capture("enabled");await capture("enabled");expect(previews).toBe(1);expect(evaluations).toBe(3);expect(readdirSync(join(root,"diagnostics","private"))).toHaveLength(4);
   const metadata = readdirSync(join(root,"diagnostics","private")).filter(name => name.endsWith(".meta.json"))
     .map(name => JSON.parse(readFileSync(join(root,"diagnostics","private",name),"utf8")));
-  expect(metadata.every(item => item.evidenceClass === "failure")).toBe(reason === "completion_deferred");
+  expect(metadata.every(item => item.evidenceClass === "failure")).toBe(reason === "turn_failure" || reason === "completion_deferred");
   const retained=readDiagnosticTail(join(root,"events.jsonl")).events.filter(row=>row.stage==="private_capture_recorded");
   expect(retained).toHaveLength(1);
   expect(retained[0]).toMatchObject({retained_count:2,omitted_count:0,operation_fingerprint:diagnosticFingerprint("enabled")});

@@ -25,7 +25,8 @@ export function retainRendererNetworkDiagnostics(
     try {
       if (details.resourceType !== "xhr" && details.resourceType !== "webSocket") return;
       const httpStatus = "statusCode" in details ? details.statusCode : undefined;
-      if (phase === "settled" && httpStatus !== undefined && httpStatus < 400 && details.method !== "POST") return;
+      const requestFailed = "error" in details;
+      if (phase === "settled" && !requestFailed && httpStatus !== undefined && httpStatus < 400 && details.method !== "POST") return;
       const url = new URL(details.url);
       const originClass = url.hostname === "chatgpt.com" || url.hostname.endsWith(".chatgpt.com") ? "chatgpt"
         : url.hostname === "openai.com" || url.hostname.endsWith(".openai.com") ? "openai" : "other";
@@ -55,7 +56,7 @@ export function retainRendererNetworkDiagnostics(
         || (key === "surface_fingerprint" && !!target)));
       withDiagnosticContext(rendererContext, () => {
         emitDiagnosticEvent("chatgpt_tela_browser", phase === "sent" ? "renderer_request_sent" : phase === "response" ? "renderer_response_started"
-          : httpStatus === undefined ? "renderer_request_failed" : completedProviderPost ? "renderer_api_request_completed" : "renderer_http_failed", {
+          : requestFailed || httpStatus === undefined ? "renderer_request_failed" : completedProviderPost ? "renderer_api_request_completed" : "renderer_http_failed", {
           network_request_fingerprint: diagnosticFingerprint(JSON.stringify([details.webContentsId ?? null, details.id])),
           domain_class: originClass, origin_fingerprint: diagnosticFingerprint(url.origin),
           route_fingerprint: diagnosticFingerprint(url.pathname),

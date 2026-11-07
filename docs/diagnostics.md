@@ -40,8 +40,11 @@ coalesce; shared byte/age retention applies without a per-request witness-count 
 diagnostic evidence, not additional execution conditions or proof that inspection caused a failure.
 
 The renderer records failed XHR/fetch or WebSocket requests and HTTP responses >=400.
-Owned provider-API POST completions also record status as `renderer_api_request_completed`;
-HTTP completion does not prove JavaScript consumption or semantic stream completion.
+An error event remains `renderer_request_failed` even when response headers already supplied
+an HTTP status such as 200; this distinguishes a stream aborted after headers from a
+completed provider request. Only successful provider-API POST completion is recorded as
+`renderer_api_request_completed`; HTTP completion does not prove JavaScript consumption or
+semantic stream completion.
 Owned provider requests also record passive `renderer_request_sent` and
 `renderer_response_started` boundaries with their shared request fingerprint and timestamp.
 Only response Content-Type is reduced to `browser_response` (event_stream/json/other/unknown);

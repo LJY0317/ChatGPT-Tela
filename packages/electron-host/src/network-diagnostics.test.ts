@@ -64,6 +64,12 @@ test("shared renderer network observation records provider POST completion and f
     completed!({ ...request, webContentsId: 99, statusCode: 200 });
     failed!({ ...request, resourceType: "image", error: "net::ERR_ABORTED" });
     expect(rows).toHaveLength(count + 1);
+    failed!({ ...request, timestamp: 1300, statusCode: 200, responseHeaders: headers, error: "net::ERR_ABORTED" });
+    expect(rows.at(-1)).toMatchObject({ stage: "renderer_request_failed", browser_response: "event_stream",
+      request_role: "stream_candidate", failure_class: "err_aborted", http_status: 200,
+      network_request_fingerprint: responseRequest });
+    failed!({ ...request, method: "GET", timestamp: 1400, statusCode: 200, error: "net::ERR_ABORTED" });
+    expect(rows.at(-1)).toMatchObject({ stage: "renderer_request_failed", failure_class: "err_aborted", http_status: 200 });
     const text = JSON.stringify(rows);
     for (const value of ["secret", "private-conversation", "chatgpt.com", "old-request", "unrelated-request"])
       expect(text).not.toContain(value);
