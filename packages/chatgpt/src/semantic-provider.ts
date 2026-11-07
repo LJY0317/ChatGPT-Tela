@@ -1266,14 +1266,6 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           await withDiagnosticContext({
             operation_fingerprint: diagnosticFingerprint([surface.taskId, surface.epochId].join("\n")),
           }, async () => {
-            emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_receipt_mismatch", {
-              assistant_chars: assistant.text?.length ?? 0,
-              receipt_present: assistant.text?.includes(stage.acknowledgement) === true,
-              parent_matches: assistant.parentUserTurnKey === userTurnKey,
-              logical_anchor_present: assistant.lineageAnchor !== undefined,
-              plain_body_observed: assistant.plainBodyFingerprint !== undefined,
-              preload_ms: Math.max(0, Date.now() - startedAt),
-            });
             capturePrivateDiagnosticValue("context_preload_failure", {
               expectedReceipt: stage.acknowledgement,
               assistantText: assistant.text ?? "",
@@ -1283,6 +1275,14 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
               plainBodyFingerprint: assistant.plainBodyFingerprint,
             });
             await captureBrowserDiagnosticEvidence(surface, "turn_failure");
+            emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_receipt_mismatch", {
+              assistant_chars: assistant.text?.length ?? 0,
+              receipt_present: assistant.text?.includes(stage.acknowledgement) === true,
+              parent_matches: assistant.parentUserTurnKey === userTurnKey,
+              logical_anchor_present: assistant.lineageAnchor !== undefined,
+              plain_body_observed: assistant.plainBodyFingerprint !== undefined,
+              preload_ms: Math.max(0, Date.now() - startedAt),
+            });
           });
           return {
             state: "probable",
@@ -1322,15 +1322,15 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       await withDiagnosticContext({
         operation_fingerprint: diagnosticFingerprint([surface.taskId, surface.epochId].join("\n")),
       }, async () => {
-        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_preload_failed", {
-          phase, preload_ms: Math.max(0, Date.now() - startedAt),
-          reason_class: signal?.aborted ? "owner_cancelled" : deadline.timeout.aborted ? "deadline" : "preload_boundary_failed",
-        });
         capturePrivateDiagnosticValue("context_preload_failure", {
           phase, errorName: error instanceof Error ? error.name : "unknown",
           errorMessage: error instanceof Error ? error.message : undefined,
         });
         await captureBrowserDiagnosticEvidence(surface, "turn_failure");
+        emitDiagnosticEvent("chatgpt_tela_work", "context_attachment_preload_failed", {
+          phase, preload_ms: Math.max(0, Date.now() - startedAt),
+          reason_class: signal?.aborted ? "owner_cancelled" : deadline.timeout.aborted ? "deadline" : "preload_boundary_failed",
+        });
       });
       throw error;
     }

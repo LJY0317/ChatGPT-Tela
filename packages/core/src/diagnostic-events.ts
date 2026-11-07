@@ -136,8 +136,9 @@ function emitDiagnosticEventResult(
       const authenticationBoundary = event === "chatgpt_tela_web_auth"
         && (stage === "auth_session_signed_out"
           || (stage === "auth_entry_removed" && normalized.removal_cause !== "overwrite"));
+      const contextReceiptMismatch = event === "chatgpt_tela_work" && stage === "context_attachment_receipt_mismatch";
       if (options.scheduleIncident !== false && root
-        && (authenticationBoundary || /(?:failed|error|timeout|crashed|unresponsive|rejected|anomaly)$/.test(stage))) {
+        && (authenticationBoundary || contextReceiptMismatch || /(?:failed|error|timeout|crashed|unresponsive|rejected|anomaly)$/.test(stage))) {
         // Failure-triggered only. Never scan raw files, poll, capture payloads or block recovery.
         scheduleIncident(root, safe);
       }

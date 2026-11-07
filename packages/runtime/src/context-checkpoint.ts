@@ -1,5 +1,5 @@
 import { BROWSER_DOCUMENT_LIFETIME, BROWSER_INPUT_OWNERSHIP, captureBrowserDiagnosticEvidence, type BrowserHost, type BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
-import { emitDiagnosticEvent, webObservationFailureReason, diagnosticFailureClass } from "@chatgpt-tela/core";
+import { diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, webObservationFailureReason, diagnosticFailureClass } from "@chatgpt-tela/core";
 import {
   requireProven,
   WebCheckpointOperationClosed,
@@ -105,7 +105,7 @@ export async function runBrowserContextCheckpoint(
     return verified;
   } catch (error) {
     failed = true; failure = error;
-    emitDiagnosticEvent("chatgpt_tela_work", "context_checkpoint_failed", {
+    const fields = {
       observation_failure: webObservationFailureReason(error) ?? "none",
       failure_class: diagnosticFailureClass(error),
       reason_class: input.signal?.aborted ? "owner_cancelled"
@@ -113,10 +113,16 @@ export async function runBrowserContextCheckpoint(
       surface_acquired: surface !== undefined,
       provider_invoked: invoked,
       input_revoked_observed: inputBoundary?.available === true && inputBoundary.signal.aborted,
-    });
-    // Keep the opt-in diagnostic snapshot for this isolated failed operation.
-    // It cannot change the original failure or authorize a new submission.
-    if (surface) await captureBrowserDiagnosticEvidence(surface, "turn_failure");
+    };
+    if (surface) {
+      const failedSurface = surface;
+      const operation = diagnosticContext().operation_fingerprint
+        ?? diagnosticFingerprint([failedSurface.taskId, failedSurface.epochId].join("\n"));
+      await withDiagnosticContext({ operation_fingerprint: operation }, async () => {
+        await captureBrowserDiagnosticEvidence(failedSurface, "turn_failure");
+        emitDiagnosticEvent("chatgpt_tela_work", "context_checkpoint_failed", fields);
+      });
+    } else emitDiagnosticEvent("chatgpt_tela_work", "context_checkpoint_failed", fields);
   } finally {
     // A failed close must override cancellation: no receipt may authorize a new
     // attempt while the old isolated operation's physical ownership is uncertain.
