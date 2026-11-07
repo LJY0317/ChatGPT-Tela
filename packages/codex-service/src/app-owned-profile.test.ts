@@ -6,7 +6,9 @@ import { execFileSync } from "node:child_process";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
 import { startCodexService } from "./controller";
 import { startCodexServiceHttpServer } from "./http-server";
-import { resolveProductPaths } from "../../product-lifecycle/src/index";
+import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "../../product-lifecycle/src/index";
+import { appOwnedDesktopCatalogPath, readPreparedAppOwnedDesktopCatalog } from "../../development-runtime/src/app-owned-desktop-catalog";
+import { editOfficialCodexProviderFile, TELA_APP_OWNED_PROVIDER_ID } from "@chatgpt-tela/default-desktop-target";
 import { writeServiceRuntimeDescriptor } from "../../service-protocol/src/index";
 import { ownedServiceShutdown } from "../../../apps/packaged-launcher/src/service-shutdown";
 import type { CodexNativeTargetAdapter } from "./native-target";
@@ -16,7 +18,6 @@ import { bindChatGptTelaAccount } from "../../development-runtime/src/browser-pr
 import { createSuppliedRequestGateway } from "../../development-runtime/src/supplied-request-gateway";
 import { startLocalResponsesServer } from "../../local-server/src/server";
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "@chatgpt-tela/responses";
-import { augmentNativeCodexModelCatalog } from "../../development-runtime/src/web-model-catalog";
 
 test("app-owned parent restarts an idle provider on its fixed Responses route without owning the Desktop", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-parent-"));
@@ -385,6 +386,12 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
   const webModel = chatGptWebModelId(family);
   const marker = "TELA_NATIVE_ORIGINAL_TOOL_OK";
   mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, "auth.json"), JSON.stringify({
+    auth_mode: "apikey", OPENAI_API_KEY: "isolated-fixture-only", tokens: null,
+  }));
+  const paths = resolveProductPaths({ platform: "linux", home: root, environment: {} });
+  const install = createOwnershipManifest("official-fixture", new Date(), "11111111-2222-4333-8444-555555555555");
+  writeOwnershipManifest(paths.installManifest, install);
   const nativeCatalog = JSON.parse(execFileSync(officialEngine!, ["debug", "models"], {
     encoding: "utf8", env: { PATH: process.env.PATH!, HOME: root,
       CODEX_HOME: home, OPENAI_API_KEY: "isolated-fixture-only", TMPDIR: root },
@@ -478,7 +485,8 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
   let engine: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined;
   try {
     expect(execFileSync(officialEngine!, ["--version"], { encoding: "utf8" })).toContain("0.167.");
-    owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter, nativeFetch });
+    owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter, nativeFetch,
+      catalogPreparation: { paths, installId: install.installId, async readNativeCatalog() { return nativeCatalog; } } });
     // Cold app-server: there is no model_catalog_json and no prior Native/Web
     // cache. Query its public model/list while the product /models route exists.
     const coldHome = join(root, "cold-codex-home");
@@ -545,7 +553,8 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
     } finally {
       coldEngine.stdin.end();await coldEngine.exited;await coldReading;
     }
-    const catalogFile = join(home, "models.json");
+    const catalogFile = appOwnedDesktopCatalogPath(paths);
+    expect(readPreparedAppOwnedDesktopCatalog({ paths, installId: install.installId })).toBe(catalogFile);
     const catalogResponse = await fetch(new URL("models", owned.responses.baseUrl), {
       headers: { authorization: "Bearer isolated-fixture-only" },
     });
@@ -554,20 +563,21 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
     expect(providerCatalog.models.map(item => item.slug)).toEqual([nativeModel, webModel]);
     expect(providerCatalog.models[0]).toEqual(nativeEntry);
     expect(providerCatalog.models[1]).toMatchObject({ slug: webModel, tool_mode: null });
-    const assembledCatalog = augmentNativeCodexModelCatalog(nativeCatalog, [
-      { key: family, label: "Official assembly", availableEfforts: ["medium"] },
-    ]);
+    const assembledCatalog = JSON.parse(readFileSync(catalogFile, "utf8"));
     expect((assembledCatalog.models as any[]).map(item => item.slug)).toContain(nativeModel);
     expect((assembledCatalog.models as any[]).map(item => item.slug)).toContain(webModel);
-    writeFileSync(catalogFile, JSON.stringify(assembledCatalog));
     const endpoint = owned.responses.baseUrl.href;
-    writeFileSync(join(home, "config.toml"), [
-      `model = ${JSON.stringify(webModel)}`, 'model_provider = "fixture"',
-      `model_catalog_json = ${JSON.stringify(catalogFile)}`,
-      '[model_providers.fixture]', 'name = "OpenAI"',
-      `base_url = ${JSON.stringify(endpoint.slice(0, -1))}`,
-      'wire_api = "responses"', 'requires_openai_auth = false', 'env_key = "OPENAI_API_KEY"',
-    ].join("\n"));
+    const configPath = join(home, "config.toml");
+    const originalConfig = 'model = "user-native-model"\nmodel_provider = "openai"\n';
+    writeFileSync(configPath, originalConfig);
+    expect(editOfficialCodexProviderFile({ configPath, action: "register", mode: "apply",
+      installId: install.installId, baseUrl: endpoint.slice(0, -1), catalogPath: catalogFile, result: "detailed" }))
+      .toMatchObject({ changed: true, catalogStatus: "installed" });
+    expect(readFileSync(configPath, "utf8")).toContain(originalConfig);
+    // This explicit selection is a separate user action; registration preserves
+    // the existing Native provider choice until this point.
+    writeFileSync(configPath, readFileSync(configPath, "utf8")
+      .replace(originalConfig, `model = ${JSON.stringify(webModel)}\nmodel_provider = ${JSON.stringify(TELA_APP_OWNED_PROVIDER_ID)}\n`));
     engine = Bun.spawn([officialEngine!, "app-server", "--stdio"], {
       cwd: root, env: { PATH: process.env.PATH!, HOME: root, CODEX_HOME: home,
         OPENAI_API_KEY: "isolated-fixture-only", TMPDIR: root },
@@ -615,12 +625,12 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       engine.stdin.write(JSON.stringify({ method: "initialized" }) + "\n");
       const catalog = await rpc("model/list", { includeHidden: true });
       const effective = await rpc("config/read", { includeLayers: true });
-      expect(effective.config).toMatchObject({ model_provider: "fixture", model_catalog_json: catalogFile });
-      expect(effective.config.model_providers.fixture).toMatchObject({
-        base_url: endpoint.slice(0, -1), env_key: "OPENAI_API_KEY",
+      expect(effective.config).toMatchObject({ model_provider: TELA_APP_OWNED_PROVIDER_ID, model_catalog_json: catalogFile });
+      expect(effective.config.model_providers[TELA_APP_OWNED_PROVIDER_ID]).toMatchObject({
+        base_url: endpoint.slice(0, -1),
       });
       expect(catalog.data.map((entry: any) => entry.model)).toEqual(expect.arrayContaining([webModel, nativeModel]));
-      const thread = await rpc("thread/start", { model: webModel, modelProvider: "fixture",
+      const thread = await rpc("thread/start", { model: webModel, modelProvider: TELA_APP_OWNED_PROVIDER_ID,
         cwd: root, approvalPolicy: "never", sandbox: "danger-full-access", historyMode: "paginated",
         ephemeral: false, baseInstructions: "Run only the isolated fixture tasks." });
       const threadId = thread.thread.id;
@@ -632,7 +642,8 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       await rpc("turn/start", { threadId, model: nativeModel, effort: "medium",
         input: [{ type: "text", text: "Execute the original Native fixture tool." }] });
       const nativeCompletion = await notification("turn/completed");
-      expect(nativeCompletion.params.turn.status).toBe("completed");
+      expect({ turn: nativeCompletion.params.turn, nativeRequestCount: nativeRequests.length })
+        .toMatchObject({ turn: { status: "completed" }, nativeRequestCount: 2 });
       expect(nativeRequests).toHaveLength(2);
       expect(webRequests).toHaveLength(1);
       expect(nativeRequests[1].input.some((item: any) =>
@@ -655,6 +666,12 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       await engine.exited;
       await reading;
     }
+    writeFileSync(configPath, readFileSync(configPath, "utf8").replace(
+      `model = ${JSON.stringify(webModel)}\nmodel_provider = ${JSON.stringify(TELA_APP_OWNED_PROVIDER_ID)}\n`, originalConfig));
+    expect(editOfficialCodexProviderFile({ configPath, action: "restore", mode: "apply",
+      installId: install.installId, baseUrl: endpoint.slice(0, -1), catalogPath: catalogFile, result: "detailed" }))
+      .toMatchObject({ changed: true, catalogStatus: "removed" });
+    expect(readFileSync(configPath, "utf8")).toBe(originalConfig);
   } finally {
     await owned?.stop();
     rmSync(root, { recursive: true, force: true });

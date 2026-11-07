@@ -8,7 +8,10 @@
     "catalogUninstallCleanup": "6da82bdf",
     "webFailureAndPrivateEvidence": ["82ed9368", "f1de768c", "d648ceb9", "84943ac1", "2fcf9e43", "726ac9e6", "290666d3", "71bf315f", "5694e12f", "ea2a941f", "f7e0fb47", "2bd481dc"],
     "suppliedResultAndOwnedCleanup": ["ee1860f2", "ce4be1eb", "1855ffef", "173f0287", "527f9ca2", "00730032", "3030b27a", "a8c5a466", "837ff49b", "b5c0d951", "baf4e961"],
-    "catalogDocumentation": "167ff7a0"
+    "catalogDocumentation": "167ff7a0",
+    "consumerExplicitActivationAndStartup": ["d86c7a4c", "e70c9a4f", "8ca1ced1", "0fd7f6df", "5346d6c9", "3dfbdcb6", "4734a89f"],
+    "failureCaptureIncidentOrdering": ["d7552368", "0358198a", "fddff17f"],
+    "updateNativeOwnershipBoundary": "540190e5"
   },
   "deduplicated": {
     "identicalPatchAlreadyIncluded": ["f8e4c49a", "9319b68e", "b5ecbdb0", "e083c0df", "9ee9141d", "d68c2f38", "bacc9578", "c127f3dd"],
@@ -16,16 +19,17 @@
     "reconciledIntoCandidate": ["27863aba", "e6506d4d", "7ea5dc82"]
   },
   "verification": {
-    "typecheck": "passed after integration conflict fixes",
-    "relatedTests": "113 passed, 2 initial integration-test defects corrected; both affected files then passed 26 tests",
-    "officialEngineAcceptance": "Previously verified against isolated 0.167.0-alpha.3.2 at baseline 1827459d; not rerun in this consolidation; assembly test skipped without explicit engine fixture",
-    "productionInstallation": "not performed"
+    "typecheck": "passed after A/B/D integration and acceptance fixture change",
+    "priorCandidateTests": "b09fe4a7: 113 related tests plus 26 corrected-boundary tests passed",
+    "changedBoundaryTests": "selected packaged launcher, service shutdown, app-owned producer, browser diagnostics and Codex profile tests passed; lifecycle 2 passed after the ownership-error expectation was reconciled",
+    "officialEngineAcceptance": "passed on isolated codex-cli 0.167.0-alpha.3.2: startup producer publishes install-owned Native/Web catalog, shared official provider editor registers without selecting, explicit fixture selection loads both models, Web and original Native tool roundtrip complete, selection returns to prior choice, editor restores exact prior settings; synthetic first-party auth only",
+    "packagingEntry": "package payload lifecycle fixture passed without real services; compiled standalone artifact compiled but exited 137 when executed; full package smoke unavailable because local Electron distribution is absent",
+    "productionInstallation": "not performed; not authorized"
   },
-  "releaseReadiness": "candidate only; not approved for automatic consumer activation",
+  "releaseReadiness": "single integration candidate; isolated validation only; not approved for automatic consumer activation or operating-system installation",
   "remaining": [
-    "Integrate and verify A's completed explicit configure/activation ordering work after its independent completion report",
-    "Perform packaging-resource and consumer install/upgrade/uninstall acceptance on the assembled candidate",
-    "Exercise current full candidate with an explicit isolated official engine acceptance fixture when release gating requires it",
+    "Run the real package builder and physical application resource smoke when an Electron distribution and macOS packaging resources are available; compiled standalone lifecycle fixture emitted a binary but its execution exited 137, while its uncompiled lifecycle contract passed",
+    "Perform consumer install/upgrade/uninstall acceptance only with separate operational approval",
     "Verify actual consumer account and Desktop interaction only under separate operational authorization"
   ]
 }

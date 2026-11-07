@@ -220,7 +220,7 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     const marker = readFileSync(markerPath, "utf8");
     writeFileSync(markerPath, JSON.stringify({ version: 1, installId: "foreign-install", resourceId: "app-owned-desktop-model-catalog" }));
     await expect(runPackagedDesktopProviderCommand(["desktop-provider", "register", "--apply"], providerOptions))
-      .rejects.toThrow("catalog is not prepared");
+      .rejects.toThrow("Desktop model catalog ownership changed");
     expect(readFileSync(codexConfig, "utf8")).toBe(codexOriginal);
     writeFileSync(markerPath, marker);
     // Ordinary reconfiguration without the opt-in preserves the existing route.
