@@ -1,4 +1,5 @@
 import { lstatSync, readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import { parseProductConfig, readProductConfig, writeProductConfig } from "@chatgpt-tela/product-config";
 import {
@@ -60,15 +61,17 @@ export async function runPackagedBootstrapCommand(args: readonly string[], optio
     return { configuration: "configured", publicUrl: config.exposure.publicUrl };
   }
   if (command === "configure") {
-    const fromStdin = args[1] === "--stdin" && (args.length === 2 || (args.length === 3 && args[2] === "--if-missing"));
-    const fromFile = args.length === 3 && args[1] === "--file";
-    if (!fromStdin && !fromFile) throw new Error("usage: configure --file <product-config.json> | --stdin [--if-missing]");
+    const enableAppOwned = args.includes("--enable-app-owned-desktop");
+    const commandArgs = args.filter(argument => argument !== "--enable-app-owned-desktop");
+    const fromStdin = commandArgs[1] === "--stdin" && (commandArgs.length === 2 || (commandArgs.length === 3 && commandArgs[2] === "--if-missing"));
+    const fromFile = commandArgs.length === 3 && commandArgs[1] === "--file";
+    if (!fromStdin && !fromFile) throw new Error("usage: configure --file <product-config.json> | --stdin [--if-missing] [--enable-app-owned-desktop]");
     let text: string;
     if (fromStdin) {
       if (options.configurationInput === undefined) throw new Error("configuration input is missing");
       text = options.configurationInput;
     } else {
-      const configFile = regularFile(args[2]!);
+      const configFile = regularFile(commandArgs[2]!);
       if (lstatSync(configFile).size > CONFIGURATION_LIMIT) throw new Error("product configuration exceeds size limit");
       text = readFileSync(configFile, "utf8");
     }
@@ -76,7 +79,7 @@ export async function runPackagedBootstrapCommand(args: readonly string[], optio
     const config = parseProductConfig(JSON.parse(text));
     const { paths, ownership } = verifyInstalledPackage(options);
     const configPath = join(paths.configRoot, "product-v1.json");
-    if (args.includes("--if-missing") && configurationExists(configPath)) throw new Error("configuration already exists; first-use setup preserved it");
+    if (commandArgs.includes("--if-missing") && configurationExists(configPath)) throw new Error("configuration already exists; first-use setup preserved it");
     const existingAppOwnedResponses = config.appOwnedResponses === undefined && configurationExists(configPath)
       ? readProductConfig(configPath).appOwnedResponses
       : undefined;
@@ -93,13 +96,17 @@ export async function runPackagedBootstrapCommand(args: readonly string[], optio
         { id: `${service}-state`, owner: service, path: paths.serviceState(service), dataClass: "state" as const },
         { id: `${service}-runtime`, owner: service, path: paths.serviceRuntime(service), dataClass: "runtime" as const },
       ]),
+      ...(enableAppOwned || config.appOwnedResponses !== undefined || existingAppOwnedResponses !== undefined
+        ? [{ id: "app-owned-desktop-model-catalog", owner: "product" as const,
+        path: join(paths.stateRoot, "install", "desktop-model-catalog"), dataClass: "config" as const }] : []),
     ];
     for (const directory of directories) await prepareOwnedDirectory({ manifestPath: paths.installManifest,
       installId: ownership.installId, productVersion: ownership.productVersion, resource: { kind: "directory", ...directory } });
-    writeProductConfig(existingAppOwnedResponses
-      ? { ...config, appOwnedResponses: existingAppOwnedResponses }
-      : config, configPath);
-    return { configured: true, publicMcpAbi: config.publicMcpAbi, exposure: config.exposure.kind };
+    const appOwnedResponses = config.appOwnedResponses ?? existingAppOwnedResponses
+      ?? (enableAppOwned ? [{ slot: 1, port: 18744, capability: randomBytes(32).toString("base64url") }] : undefined);
+    writeProductConfig(appOwnedResponses ? { ...config, appOwnedResponses } : config, configPath);
+    return { configured: true, publicMcpAbi: config.publicMcpAbi, exposure: config.exposure.kind,
+      appOwnedDesktop: Boolean(appOwnedResponses?.some(route => route.slot === 1)) };
   }
   if (command !== "setup" || !(args.length === 1 || (args.length === 3 && args[1] === "--slot"))) {
     throw new Error("usage: setup [--slot <profile>]");

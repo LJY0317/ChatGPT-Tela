@@ -176,6 +176,18 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
       ...bootstrap, configurationInput: configurationInput.replace("18743", "18744"),
     })).rejects.toThrow("preserved");
     expect(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).toBe(productConfig);
+    // Consumer opt-in generates the private ingress and reserves its catalog resource in one configure call.
+    await runPackagedBootstrapCommand(["configure", "--file", configFile, "--enable-app-owned-desktop"], bootstrap);
+    const optedIn = JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8"));
+    expect(optedIn.appOwnedResponses).toHaveLength(1);
+    expect(optedIn.appOwnedResponses[0]).toMatchObject({ slot: 1, port: 18744 });
+    expect(optedIn.appOwnedResponses[0].capability).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const catalogResource = readOwnershipManifest(paths.installManifest)?.resources.find(resource => resource.id === "app-owned-desktop-model-catalog");
+    expect(catalogResource).toMatchObject({ kind: "directory", owner: "product", dataClass: "config", path: join(paths.stateRoot, "install", "desktop-model-catalog") });
+    expect(existsSync(join(paths.stateRoot, "install", "desktop-model-catalog", OWNERSHIP_MARKER))).toBe(true);
+    // Ordinary reconfiguration without the opt-in preserves the existing route.
+    await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
+    expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).appOwnedResponses).toEqual(optedIn.appOwnedResponses);
     // File input accepts an explicit app-owned route and later reconfiguration preserves it if omitted.
     const appOwnedResponses = [{ slot: 1, port: 18744, capability: "a".repeat(48) }];
     writeFileSync(configFile, JSON.stringify({ ...(JSON.parse(configurationInput) as object), appOwnedResponses }));

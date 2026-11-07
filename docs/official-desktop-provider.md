@@ -5,10 +5,24 @@ The official Codex user-level `config.toml` supports `model_provider`,
 Codex agent shares this configuration source with the CLI/IDE. Project-local
 `.codex/config.toml` is **not** the place to configure a provider.
 
-For an installed product configured with `appOwnedResponses` for slot 1,
-the packaged launcher exposes an **explicit**, opt-in registration:
+For a new installation, explicitly enable the optional app-owned route during
+the existing product configuration step. This generates its private slot-1
+capability and registers the catalog directory in the install ownership
+manifest without changing the default provider or model:
 
 ```text
+chatgpt-tela configure --file <product-config.json> --enable-app-owned-desktop
+```
+
+The option is also accepted with `configure --stdin`. Omitting it preserves the
+existing managed-only default. Reconfiguration preserves an existing route;
+an explicit `appOwnedResponses: []` in the supplied configuration disables it.
+After configuring, start the Codex service so the installed profile runtime
+can prepare the Native plus Web catalog. Then use the packaged launcher's
+explicit provider registration:
+
+```text
+chatgpt-tela services start codex
 chatgpt-tela desktop-provider register --dry-run
 chatgpt-tela desktop-provider register --apply
 chatgpt-tela desktop-provider restore --dry-run
