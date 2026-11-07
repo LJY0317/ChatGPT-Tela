@@ -16,8 +16,11 @@ export function privateDiagnosticFailureGuidance(root = configuredDiagnosticRoot
 function redact(value: unknown, depth=0): unknown {
   if (depth>8) return "[DEPTH LIMIT]";
   if (typeof value==="string") return value.slice(0,16384).replace(/Bearer\s+[^\s"<>]+/gi,"Bearer [REDACTED]").replace(/\bsk-[A-Za-z0-9_-]{16,}/g,"[REDACTED]");
+  if (value instanceof Error) return redact({ name: value.name, message: value.message,
+    ...("code" in value ? { code: value.code } : {}),
+    ...(value.cause === undefined ? {} : { cause: value.cause }) }, depth+1);
   if (Array.isArray(value)) return value.map(item=>redact(item,depth+1));
-  if (value && typeof value==="object") return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,/auth|token|secret|password|cookie|credential|api.?key/i.test(key)?"[REDACTED]":redact(item,depth+1)]));
+  if (value && typeof value==="object") return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,/auth|token|secret|password|cookie|credential|api.?key|capability|goal_control/i.test(key)?"[REDACTED]":redact(item,depth+1)]));
   return typeof value==="number" || typeof value==="boolean" || value===null ? value : undefined;
 }
 /** Explicit private capture only. Redaction is best effort; these files remain sensitive. */

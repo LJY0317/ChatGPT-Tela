@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { CONTEXT_HISTORY_TOOL, diagnosticFingerprint, emitDiagnosticEvent, isNativeGoalTool } from "@chatgpt-tela/core";
+import { CONTEXT_HISTORY_TOOL, capturePrivateDiagnosticValue, diagnosticFingerprint, emitDiagnosticEvent, isNativeGoalTool, withDiagnosticContext } from "@chatgpt-tela/core";
 import type {
   NativeToolCatalogEntry,
   NativeToolInvocation,
@@ -109,17 +109,34 @@ export class McpTurnBridge implements TurnBridgeBackend {
       } catch { return; }
       emitDiagnosticEvent("chatgpt_tela_work", stage, fields);
     };
+    const captureGoalFailure = (value: unknown) => {
+      if (!goalTool) return;
+      try {
+        withDiagnosticContext({
+          scope_fingerprint: diagnosticFingerprint(channel.binding.authority.threadId),
+          turn_fingerprint: diagnosticFingerprint(channel.binding.authority.turnId),
+          operation_fingerprint: diagnosticFingerprint(callId),
+          parent_fingerprint: diagnosticFingerprint(invocation.callId),
+        }, () => capturePrivateDiagnosticValue("tool_failure", value));
+      } catch { /* Diagnostics cannot alter the native result. */ }
+    };
     trace("native_tool_bridge_invoke_started");
     try {
       if (goalControl && (!tool || !isNativeGoalTool(tool))) throw Error("Goal control cannot invoke Native work tools");
       return channel.requestTool(goalControl ? { ...invocation, callId } : invocation).then(result => {
+        if (goalTool && result.isError) {
+          captureGoalFailure(result);
+        }
         trace("native_tool_bridge_invoke_returned", () => resultEvidence(result, goalTool));
+        if (goalTool && result.isError) trace("native_tool_bridge_result_error");
         return goalControl ? { ...result, callId: invocation.callId } : result;
       }, error => {
+        captureGoalFailure(error);
         trace("native_tool_bridge_invoke_failed");
         throw error;
       });
     } catch (error) {
+      captureGoalFailure(error);
       trace("native_tool_bridge_invoke_failed");
       throw error;
     }

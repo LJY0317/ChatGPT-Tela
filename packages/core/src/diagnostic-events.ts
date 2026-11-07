@@ -60,7 +60,7 @@ function scheduleIncident(root: string, event: StructuralDiagnosticEvent) {
       pendingIncidentBytes -= incident.bytes;
       try {
         const { root: target, bytes: _bytes, ...record } = incident;
-        const operation = incident.failure.operation_fingerprint;
+        const operation = incident.failure.operation_fingerprint ?? incident.failure.request_fingerprint;
         const capturedArtifactRefs = typeof operation === "string" ? [...(privateArtifactRefs.get(operation) ?? [])] : [];
         if (typeof operation === "string") privateArtifactRefs.delete(operation);
         writeDiagnosticIncident(target, { ...record, capturedArtifactRefs });

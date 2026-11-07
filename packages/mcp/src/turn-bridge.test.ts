@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   CONTEXT_HISTORY_TOOL,
   NativeToolInventory,
@@ -6,6 +9,10 @@ import {
   defineNativeTurnAuthority,
   diagnosticFingerprint,
   observeDiagnosticEvents,
+  setPrivateDiagnosticCapture,
+  readDiagnosticTail,
+  listDiagnosticIncidents,
+  readDiagnosticIncident,
   type NativeToolResult,
 } from "@chatgpt-tela/core";
 import type { NativeTurnBinding } from "@chatgpt-tela/codex";
@@ -17,6 +24,49 @@ import {
 import { McpTurnBridge } from "./turn-bridge";
 import { startCodexBridgeMcpHttpServer } from "./http-server";
 import { connectCodexTurnBridge } from "./remote-turn-bridge";
+
+test("Goal error returns and thrown failures retain opt-in private receipts without changing outcomes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-goal-errors-"));
+  const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  const log = join(root, "events.jsonl"), diagnostics = join(root, "diagnostics");
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = log;
+  try {
+    const turns = new ActiveTurnRegistry();
+    const owner = turns.register(binding([{ wireName: "update_goal", name: "update_goal", kind: "function", description: "Goal" }]));
+    const bridge = new McpTurnBridge(turns);
+    const control = turns.goalControl(owner.capability)!;
+    const invoke = (callId: string) => bridge.invoke(control, { callId, wireName: "update_goal", mode: "structured", arguments: { status: "complete" } });
+    const errorResult = { callId: "native", isError: true, content: JSON.stringify({ error: { code: "fixture_error", message: "PRIVATE_GOAL_ERROR" } }) };
+    owner.channel.requestTool = async () => errorResult;
+    setPrivateDiagnosticCapture(diagnostics, 0);
+    expect(await invoke("off")).toMatchObject({ callId: "off", isError: true, content: errorResult.content });
+    expect(readdirSync(join(diagnostics, "private"))).toHaveLength(0);
+
+    setPrivateDiagnosticCapture(diagnostics, 1);
+    expect(await invoke("returned")).toMatchObject({ callId: "returned", isError: true, content: errorResult.content });
+    const transportError = Object.assign(new Error("PRIVATE_TRANSPORT_ERROR"), { code: "fixture_transport" });
+    owner.channel.requestTool = async () => { throw transportError; };
+    await expect(invoke("thrown")).rejects.toBe(transportError);
+    await new Promise(resolve => setImmediate(resolve));
+    const files = readdirSync(join(diagnostics, "private"));
+    const bodies = files.filter(name => name.endsWith(".json") && !name.endsWith(".meta.json"))
+      .map(name => JSON.parse(readFileSync(join(diagnostics, "private", name), "utf8")));
+    expect(bodies).toHaveLength(2);
+    expect(JSON.stringify(bodies)).toContain("PRIVATE_GOAL_ERROR");
+    expect(JSON.stringify(bodies)).toContain("PRIVATE_TRANSPORT_ERROR");
+    expect(readFileSync(log, "utf8")).not.toMatch(/PRIVATE_GOAL_ERROR|PRIVATE_TRANSPORT_ERROR/);
+    const incidents = listDiagnosticIncidents(diagnostics);
+    const receipts = incidents.flatMap(item => (readDiagnosticIncident(diagnostics, item.ref) as { privateArtifacts: { ref: string }[] }).privateArtifacts);
+    expect(new Set(receipts.map(item => item.ref)).size).toBe(2);
+    const events = readDiagnosticTail(log).events;
+    expect(events.filter(event => event.stage === "native_tool_bridge_result_error")).toHaveLength(2);
+    expect(events.filter(event => event.stage === "native_tool_bridge_invoke_failed")).toHaveLength(1);
+  } finally {
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function binding(additional: readonly NativeToolDescriptor[] = [], turnId = "turn-1"): NativeTurnBinding {
   const tools = [{
