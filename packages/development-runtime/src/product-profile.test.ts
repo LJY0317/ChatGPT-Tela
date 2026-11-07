@@ -417,6 +417,37 @@ test("app-owned production shutdown resumes a failed browser close through the H
   }
 });
 
+test("app-owned startup failure releases its fixed Responses listener even if runtime cleanup rejects", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-app-owned-startup-close-"));
+  const config = loadProductProfileRuntimeConfig(common(root));
+  mkdirSync(config.browserProfile.userDataDir, { recursive: true });
+  const reserved = await startLocalResponsesServer({ requestRouter: async () => new Response(null, { status: 404 }) });
+  const ingress = { port: reserved.port, capability: "x".repeat(48) };
+  await reserved.stop();
+  let cleanupAttempts = 0;
+  const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
+    const responses = await startLocalResponsesServer({ ...options.responses,
+      requestRouter: async () => new Response(null, { status: 503 }) });
+    return { responses,
+      async prepareChatGptWebSession() { throw Error("initial readiness failed"); },
+      async stop() {
+        cleanupAttempts++;
+        await responses.stop();
+        throw Error("post-close observation failed");
+      },
+    } as unknown as ElectronDevelopmentRuntime;
+  }) as typeof import("./electron").startElectronDevelopmentRuntime;
+  try {
+    await expect(startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter }))
+      .rejects.toThrow("initial readiness failed");
+    expect(cleanupAttempts).toBe(1);
+    const rebound = await startLocalResponsesServer({ hostname: "127.0.0.1", port: ingress.port,
+      requestRouter: async () => new Response(null, { status: 204 }) });
+    try { expect(rebound.port).toBe(ingress.port); }
+    finally { await rebound.stop(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("app-owned first readiness binds durable results after login and isolates a changed account", async () => {
   const { createSuppliedRequestGateway } = await import("./supplied-request-gateway");
   const { chatGptWebModelId, chatGptWebFamilyKey } = await import("@chatgpt-tela/chatgpt");

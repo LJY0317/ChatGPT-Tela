@@ -282,8 +282,17 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       },
     });
   } catch (error) {
-    await internalMcp?.stop();
-    await runtime.stop();
+    // Startup owns both resources once created. An MCP close failure must not
+    // prevent the already-bound Responses listener and Web owner from closing.
+    const cleanup = await Promise.allSettled([
+      ...(internalMcp ? [internalMcp.stop()] : []),
+      runtime.stop(),
+    ]);
+    for (const result of cleanup) if (result.status === "rejected") {
+      emitDiagnosticEvent("chatgpt_tela_work", "app_owned_startup_cleanup_failed", {
+        ...diagnosticFailureFields(result.reason),
+      });
+    }
     throw error;
   }
 }
