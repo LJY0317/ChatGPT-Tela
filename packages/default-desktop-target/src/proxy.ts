@@ -209,14 +209,15 @@ export async function startDefaultDesktopAppServerProxy(input: {
     // Remote has its own small transition budget so earlier history traffic cannot hide its failure.
     const remote = remoteControlDiagnostics(fields => diagnostic(
       fields.status === "errored" || fields.status === "rpc_error" ? "desktop_remote_control_failed" : "desktop_remote_control_status", fields));
-    const transportFailure = (direction: "client_to_server" | "server_to_client", category: string, closeCode: number) => {
+    const transportFailure = (direction: "client_to_server" | "server_to_client", category: string, closeCode: number,
+      details: Readonly<Record<string, DiagnosticScalar>> = {}) => {
       if (state.closed || closing || transportFailureRecorded) return;
       transportFailureRecorded = true;
       let shutdownRequested = false;
       try { shutdownRequested = input.shutdownRequested?.() === true; } catch { /* Observation only. */ }
       const requestedClose = category === "peer_closed" && shutdownRequested;
       diagnostic(requestedClose ? "desktop_transport_closed" : "desktop_transport_failed", {
-        kind: direction, reason_class: category, close_code: closeCode,
+        ...details, kind: direction, reason_class: category, close_code: closeCode,
         shutdown_intent_observed: Boolean(input.shutdownRequested), shutdown_requested: shutdownRequested,
         client_ready_state: client.readyState, upstream_ready_state: upstream.readyState,
         pending_catalog_count: pendingCatalog.size, pending_history_count: pendingHistory.size,
@@ -430,8 +431,9 @@ export async function startDefaultDesktopAppServerProxy(input: {
         return;
       }
       let routed: string;
+      let handshake: any;
+      let routingPhase = "request_tracking";
       try {
-        let handshake: any;
         try { handshake = JSON.parse(message); } catch { /* Preserve unrelated upstream bytes. */ }
         remote.request(handshake);
         if (handshake?.method === "initialize") {
@@ -483,6 +485,7 @@ export async function startDefaultDesktopAppServerProxy(input: {
               });
             }
           }
+          routingPhase = "native_media";
           const media = prepareNativeIngressTurnMedia(handshake.params);
           if (media) {
             const key = jsonRpcIdKey(handshake.id);
@@ -492,10 +495,18 @@ export async function startDefaultDesktopAppServerProxy(input: {
             pendingMedia.set(key, { media, generation: ingressMedia.generation });
           }
         }
+        routingPhase = "route_rewrite";
         routed = rewriteDefaultDesktopAppServerRequest(message, input.route, { permissionProfiles });
       }
       catch {
-        transportFailure("client_to_server", "invalid_routed_request", 1008);
+        const shape = (value: unknown): string => value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+        const method = handshake?.method;
+        transportFailure("client_to_server", "invalid_routed_request", 1008, {
+          routing_phase: routingPhase,
+          method_class: ["initialize", "thread/read", "turn/start", "thread/start", "thread/resume", "thread/fork"].includes(method) ? method : "other",
+          params_shape: shape(handshake?.params), config_shape: shape(handshake?.params?.config),
+          providers_shape: shape(handshake?.params?.config?.model_providers),
+        });
         closeBoth(1008, "invalid routed app-server request");
         return;
       }
