@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { editAppOwnedDesktopProviderConfig, type AppOwnedProviderRegistration } from "./provider-configuration";
+import { editAppOwnedDesktopProviderConfig, type AppOwnedProviderRegistration, type CatalogRegistrationStatus } from "./provider-configuration";
+
+type ProviderFileEdit = AppOwnedProviderRegistration & {
+  readonly configPath: string;
+  readonly action: "register" | "restore";
+  readonly mode: "dry-run" | "apply";
+  readonly restoreSelected?: boolean;
+};
+type DetailedProviderFileEdit = ProviderFileEdit & { readonly result: "detailed" };
 
 /** The official Desktop uses the same user-level Codex home as its launcher. */
 export function officialCodexConfigPath(home?: string): string {
@@ -10,12 +18,9 @@ export function officialCodexConfigPath(home?: string): string {
 }
 
 /** Shared file operation for explicit registration and the owned uninstall lifecycle. */
-export function editOfficialCodexProviderFile(input: AppOwnedProviderRegistration & {
-  readonly configPath: string;
-  readonly action: "register" | "restore";
-  readonly mode: "dry-run" | "apply";
-  readonly restoreSelected?: boolean;
-}): boolean {
+export function editOfficialCodexProviderFile(input: DetailedProviderFileEdit): { readonly changed: boolean; readonly catalogStatus: CatalogRegistrationStatus };
+export function editOfficialCodexProviderFile(input: ProviderFileEdit): boolean;
+export function editOfficialCodexProviderFile(input: ProviderFileEdit & { readonly result?: "detailed" }): boolean | { readonly changed: boolean; readonly catalogStatus: CatalogRegistrationStatus } {
   const configHome = dirname(input.configPath);
   const homeStat = lstatSync(configHome);
   if (homeStat.isSymbolicLink() || !homeStat.isDirectory()) {
@@ -39,5 +44,7 @@ export function editOfficialCodexProviderFile(input: AppOwnedProviderRegistratio
       if (existsSync(temporary)) unlinkSync(temporary);
     }
   }
-  return result.changed;
+  return input.result === "detailed"
+    ? { changed: result.changed, catalogStatus: result.catalogStatus }
+    : result.changed;
 }
