@@ -218,7 +218,10 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
       prepareShutdown: () => gateway.prepareShutdown(),
       mcp: { kind: "external", abi: webMcpContract, async close() {} },
       browserRetention: surfaceId => gateway.browserRetention(surfaceId),
-      stop() { return stopping ??= (async () => { await responses.stop(); await gateway.close(); })(); },
+      stop() { return stopping ??= (async () => {
+        try { await responses.stop(); }
+        finally { await gateway.close(); }
+      })(); },
     };
   }
   const abortController = new AbortController();
