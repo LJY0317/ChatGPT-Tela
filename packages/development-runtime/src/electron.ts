@@ -358,6 +358,8 @@ export async function startElectronDevelopmentRuntime(
   });
 
   let stopping: Promise<void> | undefined;
+  let profileControlClosed = false;
+  let runtimeClosed = false;
   return Object.freeze({
     responses: runtime.responses,
     ...(runtime.suppliedToolBridge ? { suppliedToolBridge: runtime.suppliedToolBridge } : {}),
@@ -494,15 +496,13 @@ export async function startElectronDevelopmentRuntime(
         checkpointController.abort(new Error("Electron checkpoint runtime stopped"));
         await Promise.allSettled([...checkpointRuns]);
         const failures: unknown[] = [];
-        try {
-          await profileControl.close();
-        } catch (error) {
-          failures.push(error);
+        if (!profileControlClosed) {
+          try { await profileControl.close(); profileControlClosed = true; }
+          catch (error) { failures.push(error); }
         }
-        try {
-          await runtime.stop();
-        } catch (error) {
-          failures.push(error);
+        if (!runtimeClosed) {
+          try { await runtime.stop(); runtimeClosed = true; }
+          catch (error) { failures.push(error); }
         }
         if (failures.length > 0) {
           throw new AggregateError(failures, "Electron development runtime did not fully close owned state");

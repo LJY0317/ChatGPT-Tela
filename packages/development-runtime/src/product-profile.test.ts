@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
 import {
   loadProductProfileRuntimeConfig,
   prepareProductWebDiscovery,
@@ -13,6 +15,9 @@ import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import { appOwnedDesktopCatalogPath } from "./app-owned-desktop-catalog";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
+import { startProfileBridgePreviewServer } from "../../../apps/profile-runtime/src/bridge-preview-server";
+import { startDevelopmentRuntime } from "./runtime";
+import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
 
 function common(root: string): Record<string, string> {
   return {
@@ -334,6 +339,85 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
     expect(closes).toBe(2);
     expect(nativeRequests).toBe(4);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("app-owned production shutdown resumes a failed browser close through the HTTP receipt and rebinds the same route", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-app-owned-production-stop-"));
+  const config = loadProductProfileRuntimeConfig(common(root));
+  mkdirSync(config.browserProfile.userDataDir, { recursive: true });
+  bindChatGptTelaAccount(config.browserProfile, "a".repeat(64));
+  const temporary = await startLocalResponsesServer({ requestRouter: async () => new Response(null, { status: 404 }) });
+  const ingress = { port: temporary.port, capability: "s".repeat(48) };
+  await temporary.stop();
+  const realHost = new ControlledBrowserHost(async () => ({
+    async navigate() {}, async reveal() {}, async hide() {}, async close() {},
+  }));
+  let browserCloseAttempts = 0;
+  const browserHost = {
+    acquire: realHost.acquire.bind(realHost), release: realHost.release.bind(realHost),
+    async close() {
+      browserCloseAttempts++;
+      if (browserCloseAttempts === 1) throw Error("transient owned browser close failure");
+      await realHost.close();
+    },
+  };
+  const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
+    const actual = await startDevelopmentRuntime({
+      browserHost, mcp: options.mcp, planWebTurn: createNativeRequestDevelopmentWebTurnPlanner(),
+      ...(options.profileSlot !== undefined ? { profileSlot: options.profileSlot } : {}),
+      ...(options.routeId ? { routeId: options.routeId } : {}),
+      ...(options.completedResults ? { completedResults: options.completedResults } : {}),
+      ...(options.responses ? { responses: options.responses } : {}),
+    });
+    return { ...actual,
+      async prepareChatGptWebSession(input: any) {
+        input.onProfile?.({ account: { accountFingerprint: "a".repeat(64),
+          accountStructure: "personal", containerFingerprint: "fixture" } });
+        input.onFamilies?.([]); input.onConnectorStarting?.(); input.onConnectorProven?.();
+        return { families: [] };
+      },
+      async discoverChatGptWebModelFamilies() { return []; },
+    } as unknown as import("./electron").ElectronDevelopmentRuntime;
+  }) as typeof import("./electron").startElectronDevelopmentRuntime;
+  let owned: Awaited<ReturnType<typeof startAppOwnedProductResponsesRuntime>> | undefined;
+  let preview: Awaited<ReturnType<typeof startProfileBridgePreviewServer>> | undefined;
+  try {
+    owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
+      nativeFetch: async () => Response.json({ models: [] }) });
+    const firstUrl = owned.responses.baseUrl.href;
+    const receiptFingerprint = createHash("sha256").update(firstUrl).digest("hex");
+    preview = await startProfileBridgePreviewServer({ slot: config.slot, bearerToken: config.uiToken,
+      observe: async () => ({ activeSurfaceCount: 0 }),
+      shutdownReadiness: () => owned!.shutdownReadiness(),
+      shutdownProfile: async () => {
+        await owned!.stop();
+        return { responsesRouteFingerprint: receiptFingerprint };
+      },
+    });
+    const stop = () => fetch(new URL("v1/profile-stop", preview!.endpoint), {
+      method: "POST", headers: { authorization: `Bearer ${config.uiToken}` },
+    });
+    expect((await stop()).status).toBe(409);
+    expect(browserCloseAttempts).toBe(1);
+    expect((await fetch(new URL("v1/shutdown-readiness", preview.endpoint), {
+      headers: { authorization: `Bearer ${config.uiToken}` },
+    }).then(response => response.json())).shutdownReadiness).toBe("ready");
+    const resumed = await stop();
+    expect(resumed.status).toBe(200);
+    expect(await resumed.json()).toMatchObject({ contractVersion: 1, slot: config.slot,
+      phase: "cleanup-complete", responsesRouteFingerprint: receiptFingerprint });
+    expect(browserCloseAttempts).toBe(2);
+    expect((await stop()).status).toBe(200);
+    expect(browserCloseAttempts).toBe(2);
+    const fresh = await startAppOwnedProductResponsesRuntime({ config, ingress,
+      electronStarter: starter, nativeFetch: async () => Response.json({ models: [] }) });
+    try { expect(fresh.responses.baseUrl.href).toBe(firstUrl); }
+    finally { await fresh.stop(); }
+  } finally {
+    await preview?.close();
+    await owned?.stop().catch(() => {});
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("app-owned first readiness binds durable results after login and isolates a changed account", async () => {

@@ -212,16 +212,26 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
     try { responses = await startLocalResponsesServer({ ...input.responses, gateway }); }
     catch (error) { await gateway.close(); throw error; }
     let stopping: Promise<void> | undefined;
+    let responsesClosed = false;
+    let gatewayClosed = false;
     return { responses, turns,
       suppliedToolBridge: createProfileTurnBridge(new McpTurnBridge(turns), gateway),
       shutdownReadiness: () => gateway.shutdownReadiness(),
       prepareShutdown: () => gateway.prepareShutdown(),
       mcp: { kind: "external", abi: webMcpContract, async close() {} },
       browserRetention: surfaceId => gateway.browserRetention(surfaceId),
-      stop() { return stopping ??= (async () => {
-        try { await responses.stop(); }
-        finally { await gateway.close(); }
-      })(); },
+      stop() {
+        if (stopping) return stopping;
+        stopping = (async () => {
+          const failures = await Promise.allSettled([
+            ...(responsesClosed ? [] : [(async () => { await responses.stop(); responsesClosed = true; })()]),
+            ...(gatewayClosed ? [] : [(async () => { await gateway.close(); gatewayClosed = true; })()]),
+          ]);
+          const rejected = failures.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+          if (rejected.length) throw new AggregateError(rejected.map(result => result.reason), "Development runtime cleanup failed");
+        })().catch(error => { stopping = undefined; throw error; });
+        return stopping;
+      },
     };
   }
   const abortController = new AbortController();
@@ -554,6 +564,10 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
   }
 
   let stopping: Promise<void> | undefined;
+  let responsesClosed = false;
+  let gatewayClosed = false;
+  let mcpClosed = false;
+  let browserClosed = false;
   return Object.freeze({
     responses,
     mcp,
@@ -564,16 +578,22 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
       stopping = (async () => {
         const reason = new Error("ChatGPT Tela development runtime stopped");
         browserEpochs.dispose();
-        await responses.stop();
+        const ingress = await Promise.allSettled([
+          ...(responsesClosed ? [] : [(async () => { await responses.stop(); responsesClosed = true; })()]),
+        ]);
         abortController.abort(reason);
         turns.cancelAll(reason);
-        await gateway.close();
-        await Promise.allSettled([
-          mcp.close(),
-          input.browserHost.close(),
-          ...webRuns,
+        const cleanup = await Promise.allSettled([
+          ...(gatewayClosed ? [] : [(async () => { await gateway.close(); gatewayClosed = true; })()]),
+          ...(mcpClosed ? [] : [(async () => { await mcp.close(); mcpClosed = true; })()]),
+          ...(browserClosed ? [] : [(async () => { await input.browserHost.close(); browserClosed = true; })()]),
         ]);
-      })();
+        // Turn rejection after cancellation is an expected settlement, not an owned-resource close failure.
+        await Promise.allSettled([...webRuns]);
+        const rejected = [...ingress, ...cleanup]
+          .filter((result): result is PromiseRejectedResult => result.status === "rejected");
+        if (rejected.length) throw new AggregateError(rejected.map(result => result.reason), "Development runtime cleanup failed");
+      })().catch(error => { stopping = undefined; throw error; });
       return stopping;
     },
   });

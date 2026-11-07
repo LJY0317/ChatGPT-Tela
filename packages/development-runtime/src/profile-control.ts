@@ -428,8 +428,9 @@ export function createChatGptProfileControl(input: {
           surfaceClosed = true;
           for (const unsubscribe of subscriptions) unsubscribe();
           subscriptions.clear();
-          if (!setupLeases.delete(lease.leaseId)) return;
+          if (!setupLeases.has(lease.leaseId)) return;
           await input.browserHost.release(lease.leaseId);
+          setupLeases.delete(lease.leaseId);
         },
       });
     },
@@ -438,15 +439,17 @@ export function createChatGptProfileControl(input: {
       if (closed) return Promise.resolve();
       closing = (async () => {
         const leases = [...setupLeases];
-        setupLeases.clear();
-        const results = await Promise.allSettled(leases.map(leaseId => input.browserHost.release(leaseId)));
+        const results = await Promise.allSettled(leases.map(async leaseId => {
+          await input.browserHost.release(leaseId);
+          setupLeases.delete(leaseId);
+        }));
         const failures = results
           .filter((result): result is PromiseRejectedResult => result.status === "rejected")
           .map(result => result.reason);
-        closed = true;
         if (failures.length > 0) {
           throw new AggregateError(failures, `${failures.length} ChatGPT profile-control surface(s) failed to close`);
         }
+        closed = true;
       })().finally(() => {
         closing = undefined;
       });

@@ -736,6 +736,34 @@ describe("development runtime composition", () => {
       .rejects.toThrow("browser host is closed");
   });
 
+  test("Native production runtime retries only its unfinished owned browser closure", async () => {
+    const [, serverTransport] = InMemoryTransport.createLinkedPair();
+    const browser = new ControlledBrowserHost(async () => ({
+      async navigate() {}, async reveal() {}, async hide() {}, async close() {},
+    }));
+    let closeCalls = 0;
+    const browserHost = {
+      acquire: browser.acquire.bind(browser), release: browser.release.bind(browser),
+      async close() {
+        closeCalls++;
+        if (closeCalls === 1) throw Error("transient native browser release failure");
+        await browser.close();
+      },
+    };
+    const runtime = await startDevelopmentRuntime({
+      currentTurnSource: source, browserHost,
+      mcp: { kind: "transport", transport: serverTransport },
+      planWebTurn: () => { throw Error("No Web work should be submitted"); },
+    });
+    await expect(runtime.stop()).rejects.toThrow("Development runtime cleanup failed");
+    expect(closeCalls).toBe(1);
+    await runtime.stop();
+    await runtime.stop();
+    expect(closeCalls).toBe(2);
+    await expect(browser.acquire({ taskId: "after-shutdown", epochId: "new" }))
+      .rejects.toThrow("browser host is closed");
+  });
+
   test("optional Web turn deadline fails a hanging development turn closed", async () => {
     const diagnosticDirectory = mkdtempSync(join(tmpdir(), "tela-web-timeout-proof-"));
     const diagnosticFile = join(diagnosticDirectory, "events.jsonl");

@@ -260,6 +260,8 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     const ownedMcp = internalMcp;
     const owned = runtime;
     let stopping: Promise<void> | undefined;
+    let mcpClosed = false;
+    let runtimeClosed = false;
     return Object.freeze({
       runtime: owned,
       responses: owned.responses,
@@ -270,7 +272,10 @@ export async function startAppOwnedProductResponsesRuntime(input: {
         if (stopping) return stopping;
         owned.prepareShutdown!();
         return stopping = (async () => {
-          const failures = await Promise.allSettled([ownedMcp.stop(), owned.stop()]);
+          const failures = await Promise.allSettled([
+            ...(mcpClosed ? [] : [(async () => { await ownedMcp.stop(); mcpClosed = true; })()]),
+            ...(runtimeClosed ? [] : [(async () => { await owned.stop(); runtimeClosed = true; })()]),
+          ]);
           const rejected = failures.filter((result): result is PromiseRejectedResult => result.status === "rejected");
           if (rejected.length) throw new AggregateError(rejected.map(result => result.reason), "App-owned profile cleanup failed");
         })().catch(error => { stopping = undefined; throw error; });
@@ -694,6 +699,10 @@ export async function startProductProfileRuntime(
   }
 
   let stopping: Promise<void> | undefined;
+  let targetStopped = false;
+  let mcpClosed = false;
+  let runtimeClosed = false;
+  let overlayClosed = false;
   return Object.freeze({
     config,
     runtime,
@@ -703,13 +712,14 @@ export async function startProductProfileRuntime(
       if (stopping) return stopping;
       stopping = (async () => {
         if (turns.size > 0) throw new Error("Native/Web profile has an active turn; finish it before shutdown");
-        if (routedTarget?.session.endpoint
+        if (!targetStopped && routedTarget?.session.endpoint
           && await countLoadedAppServerActiveTurns(routedTarget.session.endpoint, options.signal ? { signal: options.signal } : {}) > 0) {
           throw new Error("Native profile has an active turn; finish it before shutdown");
         }
-        if (config.nativeTarget.kind === "default-desktop") {
+        if (!targetStopped && config.nativeTarget.kind === "default-desktop") {
           await defaultDesktopTarget!.stop();
-        } else {
+          targetStopped = true;
+        } else if (!targetStopped) {
           const session = await client!.targetSession(config.nativeTarget.targetId, options.signal);
           const ownsTargetRoute = session.state === "ready"
             && session.responsesRouteFingerprint === routedTarget!.session.responsesRouteFingerprint
@@ -718,12 +728,14 @@ export async function startProductProfileRuntime(
             const stopped = await client!.quitTarget(config.nativeTarget.targetId, options.signal);
             if (stopped.state === "ready") throw new Error("product target remained ready after normal quit");
           }
+          targetStopped = true;
         }
         // If route ownership was lost, preserve the now-unrelated target but still tear down this
         // child's Responses/browser/MCP resources. Stale product providers must not become immortal.
         const results = await Promise.allSettled([
-          internalMcp!.stop(), runtime!.stop(),
-          ...(modelListOverlay ? [modelListOverlay.close()] : []),
+          ...(mcpClosed ? [] : [(async () => { await internalMcp!.stop(); mcpClosed = true; })()]),
+          ...(runtimeClosed ? [] : [(async () => { await runtime!.stop(); runtimeClosed = true; })()]),
+          ...(modelListOverlay && !overlayClosed ? [(async () => { await modelListOverlay.close(); overlayClosed = true; })()] : []),
         ]);
         const failures = results
           .filter((result): result is PromiseRejectedResult => result.status === "rejected")

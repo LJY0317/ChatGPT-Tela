@@ -4,6 +4,25 @@ import {ChatGptConnectorCatalogUnavailableError,ChatGptWebModelPickerControlUnav
 import {createChatGptProfileControl, webPreparationFailureDetail} from './profile-control';
 import {observeDiagnosticEvents, type StructuralDiagnosticEvent} from '@chatgpt-tela/core';
 
+test('profile control retains failed surface release for the next owned shutdown', async () => {
+  let releases = 0;
+  const browserHost = {
+    async acquire({taskId, epochId}: {taskId: string; epochId: string}) {
+      return {taskId, epochId, leaseId: 'setup-fixture', async navigate(){}, async reveal(){}, async hide(){}, capability(){return undefined;}};
+    },
+    async release() { if (++releases === 1) throw Error('temporary surface release failure'); },
+    async close() {},
+  };
+  const control = createChatGptProfileControl({browserHost, provider: {
+    async observeCapabilities() {throw Error('unused');},
+  }});
+  await control.openProfileSetupSurface({reveal: false});
+  await expect(control.close()).rejects.toThrow('failed to close');
+  await control.close();
+  await control.close();
+  expect(releases).toBe(2);
+});
+
 test('failed account lease preserves failure and emits bounded phase evidence', async () => {
   const rows: StructuralDiagnosticEvent[] = [];
   const stop = observeDiagnosticEvents(row => rows.push(row));
