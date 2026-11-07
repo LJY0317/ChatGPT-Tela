@@ -30,6 +30,31 @@ describe("built-in default Desktop Responses route", () => {
     expect(args).not.toContain("OPENAI_ORGANIZATION");
   });
 
+  test("preserves the fixed app-owned capability prefix in existing provider configuration", () => {
+    const capability = "a".repeat(48);
+    const baseUrl = `http://127.0.0.1:18744/${capability}/v1`;
+    const owned = createDefaultDesktopResponsesRoute({
+      baseUrl: `${baseUrl}/`,
+      envKey: "CHATGPT_TELA_RUNTIME_TOKEN",
+      credential: "s".repeat(48),
+      appOwned: true,
+    });
+    expect(owned.baseUrl).toBe(baseUrl);
+    expect(owned.modelCatalogUrl).toBe(`${baseUrl}/models`);
+    expect(defaultDesktopCodexConfigArguments(owned)).toContain(`openai_base_url=${JSON.stringify(baseUrl)}`);
+    const rewritten = JSON.parse(rewriteDefaultDesktopAppServerRequest(
+      JSON.stringify({ method: "thread/start", params: {} }), owned,
+    ));
+    expect(rewritten.params.config.openai_base_url).toBe(baseUrl);
+    expect(rewritten.params.modelProvider).toBe(TELA_DEFAULT_DESKTOP_PROVIDER_ID);
+    expect(() => createDefaultDesktopResponsesRoute({
+      baseUrl: "http://127.0.0.1:18744/v1/",
+      envKey: "CHATGPT_TELA_RUNTIME_TOKEN",
+      credential: "s".repeat(48),
+      appOwned: true,
+    })).toThrow("fixed capability path");
+  });
+
   test("overlays only thread lifecycle requests and preserves unrelated JSON-RPC bytes", () => {
     const unrelated = '{"id":1,"method":"thread/read","params":{"threadId":"abc"}}';
     expect(rewriteDefaultDesktopAppServerRequest(unrelated, route)).toBe(unrelated);

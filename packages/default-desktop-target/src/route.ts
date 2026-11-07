@@ -14,7 +14,7 @@ export interface DefaultDesktopResponsesRoute {
 
 const ROUTED_METHODS = new Set(["thread/start", "thread/resume", "thread/fork"]);
 
-function normalizedBaseUrl(value: URL | string): string {
+function normalizedBaseUrl(value: URL | string, appOwned: boolean): string {
   const url = value instanceof URL ? new URL(value.href) : new URL(value);
   if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
     throw new Error("default Desktop Responses route must use loopback http://");
@@ -23,7 +23,13 @@ function normalizedBaseUrl(value: URL | string): string {
   if (url.username || url.password || url.search || url.hash) {
     throw new Error("default Desktop Responses route must not contain credentials, query, or fragment");
   }
-  url.pathname = "/v1";
+  if (appOwned) {
+    if (!/^\/[A-Za-z0-9_-]{43,128}\/v1\/?$/.test(url.pathname)) {
+      throw new Error("app-owned Desktop Responses route requires a fixed capability path ending in /v1");
+    }
+  } else {
+    url.pathname = "/v1";
+  }
   return url.href.replace(/\/$/, "");
 }
 
@@ -38,9 +44,11 @@ export function createDefaultDesktopResponsesRoute(input: {
   readonly baseUrl: URL | string;
   readonly envKey: string;
   readonly credential: string;
+  /** Explicit fixed ingress from product configuration; managed routes still normalize to /v1. */
+  readonly appOwned?: true;
 }): DefaultDesktopResponsesRoute {
   if (input.credential.length < 32) throw new Error("default Desktop Responses credential is too short");
-  const baseUrl = normalizedBaseUrl(input.baseUrl);
+  const baseUrl = normalizedBaseUrl(input.baseUrl, input.appOwned === true);
   const envKey = environmentKey(input.envKey);
   const runtimeHeaderName = TELA_DEFAULT_DESKTOP_RUNTIME_HEADER;
   const modelCatalogUrl = `${baseUrl}/models`;
