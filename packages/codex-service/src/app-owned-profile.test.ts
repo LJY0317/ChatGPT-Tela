@@ -12,6 +12,7 @@ import { bindChatGptTelaAccount } from "../../development-runtime/src/browser-pr
 import { createSuppliedRequestGateway } from "../../development-runtime/src/supplied-request-gateway";
 import { startLocalResponsesServer } from "../../local-server/src/server";
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "@chatgpt-tela/responses";
+import { augmentNativeCodexModelCatalog } from "../../development-runtime/src/web-model-catalog";
 
 test("app-owned parent restarts an idle provider on its fixed Responses route without owning the Desktop", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-parent-"));
@@ -349,19 +350,19 @@ const officialEngine = process.env.TELA_OFFICIAL_ENGINE;
 test.skipIf(!officialEngine)("official engine selects Web then original Native tools in one thread through app-owned assembly", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-official-app-owned-"));
   const home = join(root, "codex-home");
-  const nativeModel = "fixture-native";
   const family = chatGptWebFamilyKey("Official assembly");
   const webModel = chatGptWebModelId(family);
   const marker = "TELA_NATIVE_ORIGINAL_TOOL_OK";
-  const nativeEntry = {
-    slug: nativeModel, display_name: "Fixture Native", description: "Isolated native model",
-    visibility: "list", supported_in_api: true, default_reasoning_level: "medium",
-    supported_reasoning_levels: [{ effort: "medium", description: "Medium" }],
-    input_modalities: ["text"], tool_mode: "direct", context_window: 128000,
-    shell_type: "shell_command", priority: 1, support_verbosity: false,
-    truncation_policy: { mode: "tokens", limit: 10000 },
-    experimental_supported_tools: [], base_instructions: "Run only isolated fixture instructions.",
-  };
+  mkdirSync(home, { recursive: true });
+  const nativeCatalog = JSON.parse(execFileSync(officialEngine!, ["debug", "models"], {
+    encoding: "utf8", env: { PATH: process.env.PATH!, HOME: root,
+      CODEX_HOME: home, OPENAI_API_KEY: "isolated-fixture-only", TMPDIR: root },
+  })) as { models: { slug: string; visibility?: string; supported_reasoning_levels?: unknown[] }[] };
+  const nativeEntry = nativeCatalog.models.find(model =>
+    model.visibility === "list" && Array.isArray(model.supported_reasoning_levels)
+    && model.supported_reasoning_levels.length > 0)!;
+  expect(nativeEntry).toBeDefined();
+  const nativeModel = nativeEntry.slug;
   const ingressPort = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 404 }) });
   const ingress = { port: ingressPort.port!, capability: "p".repeat(48) };
   await ingressPort.stop();
@@ -373,7 +374,6 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
     CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN: "m".repeat(48),
     CHATGPT_TELA_PRODUCT_UI_TOKEN: "u".repeat(48),
   });
-  mkdirSync(home, { recursive: true });
   mkdirSync(config.browserProfile.userDataDir, { recursive: true });
   bindChatGptTelaAccount(config.browserProfile, "a".repeat(64));
   const webRequests: any[] = [], nativeRequests: any[] = [];
@@ -523,7 +523,12 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
     expect(providerCatalog.models.map(item => item.slug)).toEqual([nativeModel, webModel]);
     expect(providerCatalog.models[0]).toEqual(nativeEntry);
     expect(providerCatalog.models[1]).toMatchObject({ slug: webModel, tool_mode: null });
-    writeFileSync(catalogFile, JSON.stringify(providerCatalog));
+    const assembledCatalog = augmentNativeCodexModelCatalog(nativeCatalog, [
+      { key: family, label: "Official assembly", availableEfforts: ["medium"] },
+    ]);
+    expect((assembledCatalog.models as any[]).map(item => item.slug)).toContain(nativeModel);
+    expect((assembledCatalog.models as any[]).map(item => item.slug)).toContain(webModel);
+    writeFileSync(catalogFile, JSON.stringify(assembledCatalog));
     const endpoint = owned.responses.baseUrl.href;
     writeFileSync(join(home, "config.toml"), [
       `model = ${JSON.stringify(webModel)}`, 'model_provider = "fixture"',

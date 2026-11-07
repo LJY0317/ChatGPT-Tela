@@ -60,7 +60,13 @@ The app-owned production starter in
 only its Responses URL; it has no installation-owned catalog preparation or
 official-engine launch configuration contract. Integrating the existing
 prelaunch catalog preparation into the app-owned Desktop owner is still
-required. Its input must be the verified Native discovery and current
+required. The isolated official 0.167 fixture now also reads the full Native
+catalog from `codex debug models` in an empty home, merges discovered Web
+families using `augmentNativeCodexModelCatalog`, and starts the official
+app-server using the resulting catalog; Web and Native model selection and
+the original Native tool roundtrip succeed. These are existing assembly
+functions, but the production installation/launch connection remains absent.
+Its input must be the verified Native discovery and current
 account-bound Web families, and its output must be an owned catalog path
 provided to the official engine before the first model list. On restart, the
 owner must rebuild the projection from current discovery; Native entries must
