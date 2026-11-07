@@ -102,6 +102,37 @@ test("disconnect detaches only the observer; the accepted Web operation is neith
   } finally { release(); await f.gateway.close(); }
 });
 
+test("completed Web answer survives observer disconnect until an identical late replay", async () => {
+  let release!: () => void, markSettled!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  const settled = new Promise<void>(resolve => { markSettled = resolve; });
+  const original = createNativeRequestDevelopmentWebTurnPlanner();
+  const planner = Object.assign((...args: Parameters<typeof original>) => original(...args), {
+    retireSurface: (task: string, surface: string) => original.retireSurface(task, surface),
+    async planSuppliedRequest(...args: Parameters<typeof original.planSuppliedRequest>) {
+      const plan = await original.planSuppliedRequest(...args);
+      return { ...plan, settle: (outcome: Parameters<NonNullable<typeof plan.settle>>[0]) => {
+        plan.settle?.(outcome);
+        if (outcome.status === "completed") markSettled();
+      } };
+    },
+  });
+  const f = fixture({ wait, planner }), observer = new AbortController();
+  const body = { ...request(), tools: [] };
+  try {
+    const disconnected = f.gateway.handle(body, { signal: observer.signal });
+    observer.abort(new Error("Responses host disconnected"));
+    await expect(disconnected).rejects.toThrow("Responses host disconnected");
+    release();
+    // The browser result reached the planner with no attached HTTP observer.
+    await settled;
+    const rejoined = await f.gateway.handle(body);
+    expect(rejoined).toMatchObject({ type: "final", answer: "A inspected." });
+    expect(await f.gateway.handle(body)).toEqual(rejoined);
+    expect(f.submissions).toHaveLength(1);
+  } finally { release(); await f.gateway.close(); }
+});
+
 test("opaque input cannot acquire Native history or a browser through supplied identifiers", async () => {
   let nativeReads = 0;
   const planner = createNativeRequestDevelopmentWebTurnPlanner({
