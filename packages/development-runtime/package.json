@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./browser-profile": "./src/browser-profile.ts"
+    "./browser-profile": "./src/browser-profile.ts",
+    "./app-owned-desktop-catalog": "./src/app-owned-desktop-catalog.ts"
   },
   "dependencies": {
     "@chatgpt-tela/product-lifecycle": "workspace:*",

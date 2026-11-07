@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +10,8 @@ import {
   startAppOwnedProductResponsesRuntime,
 } from "./product-profile";
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
+import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
+import { appOwnedDesktopCatalogPath } from "./app-owned-desktop-catalog";
 
 function common(root: string): Record<string, string> {
   return {
@@ -389,6 +391,10 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
   const { chatGptWebModelId, chatGptWebFamilyKey } = await import("@chatgpt-tela/chatgpt");
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-startup-roundtrip-"));
   const family = { key: chatGptWebFamilyKey("Startup fixture"), label: "Startup fixture", availableEfforts: ["medium"] as const };
+  const paths = resolveProductPaths({ platform: "linux", home: root, environment: {} });
+  const manifest = createOwnershipManifest("fixture", new Date(), "11111111-2222-4333-8444-555555555555");
+  writeOwnershipManifest(paths.installManifest, manifest);
+  let nativeCatalogReads = 0;
   let client: InstanceType<typeof Client> | undefined;
   let owned: Awaited<ReturnType<typeof startAppOwnedProductResponsesRuntime>> | undefined;
   let control = "";
@@ -434,7 +440,18 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
       } as unknown as ElectronDevelopmentRuntime;
     }) as typeof import("./electron").startElectronDevelopmentRuntime;
     owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
-      nativeFetch: async () => Response.json({ models: [] }) });
+      nativeFetch: async () => Response.json({ models: [] }),
+      catalogPreparation: { paths, installId: manifest.installId, async readNativeCatalog() {
+        nativeCatalogReads++;
+        return { models: [{ slug: "official-native", visibility: "list", display_name: "Native",
+          supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] };
+      } },
+    });
+    expect(nativeCatalogReads).toBe(1);
+    const prepared = JSON.parse(readFileSync(appOwnedDesktopCatalogPath(paths), "utf8"));
+    expect(prepared.models.map((model: { slug: string }) => model.slug)).toEqual([
+      "official-native", chatGptWebModelId(family.key),
+    ]);
     client = new Client({ name: "startup-goal", version: "1.0.0" });
     await client.connect(new StreamableHTTPClientTransport(owned.internalMcp.endpointUrl, {
       requestInit: { headers: { authorization: `Bearer ${config.internalMcpToken}` } } }) as unknown as import("@modelcontextprotocol/sdk/shared/transport.js").Transport);
@@ -452,5 +469,10 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
     expect(JSON.stringify(final)).toContain("Startup host result received.");
     const retired = await client.callTool({ name: "chatgpt_tela_codex_tool_inventory", arguments: { turn_capability: control } });
     expect(retired.isError).toBe(true);
-  } finally { await client?.close(); await owned?.stop(); rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    await client?.close();
+    await owned?.stop();
+    if (nativeCatalogReads > 0) expect(readFileSync(appOwnedDesktopCatalogPath(paths), "utf8")).toContain("official-native");
+    rmSync(root, { recursive: true, force: true });
+  }
 });

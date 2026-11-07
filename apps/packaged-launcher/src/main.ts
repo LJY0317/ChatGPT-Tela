@@ -18,6 +18,7 @@ import { runPackagedWorkCommand } from "./work";
 import { readConfigurationInput, runPackagedBootstrapCommand } from "./bootstrap";
 import { runPackagedChatCommand } from "./chat";
 import { runPackagedServicesCommand } from "./services";
+import { runPackagedDesktopProviderCommand } from "./desktop-provider";
 import { runPackagedDiagnosticsCommand } from "./diagnostics";
 import { runMaintenanceCommand, openMaintenanceWindow, cleanupMaintenanceWindow } from "./maintenance";
 
@@ -34,6 +35,7 @@ Usage:
   chatgpt-tela services restart chat
   chatgpt-tela chat roots
   chatgpt-tela local-mcp [package <destination>|register]
+  chatgpt-tela desktop-provider <register|restore> <--dry-run|--apply>
   chatgpt-tela chat <allow-root|disallow-root> --path <folder>
   chatgpt-tela install (--dry-run | --apply) [--payload <package-directory>]
   chatgpt-tela repair  (--dry-run | --apply) [--payload <package-directory>]
@@ -199,6 +201,13 @@ async function main(): Promise<void> {
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     if (!result.success) process.exitCode = 1;
+    return;
+  }
+  if (args[0] === "desktop-provider") {
+    const result = await runPackagedDesktopProviderCommand(args, {
+      payloadRoot: payloadRootForLauncherExecutable(), launcherExecutablePath: process.execPath,
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
   if (args[0] === "uninstall") {

@@ -1,7 +1,7 @@
 import { checkpointPreparationPolicy, type CheckpointPreparationPolicy } from "./checkpoint-preparation-budget";
 import { verifyWebModelReadiness } from "./web-model-readiness";
 import { existsSync } from "node:fs";
-import { resolveOwnedNativeEngine, acquireNativeBackendOwnership } from "@chatgpt-tela/product-lifecycle";
+import { resolveOwnedNativeEngine, acquireNativeBackendOwnership, resolveProductPaths, type ProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import {
@@ -51,6 +51,7 @@ import {
 import type { NativeCodexFetch } from "./native-passthrough";
 import { augmentCodexAppServerModelList } from "./app-server-model-list";
 import { augmentNativeCodexModelCatalog } from "./web-model-catalog";
+import { publishAppOwnedDesktopCatalog } from "./app-owned-desktop-catalog";
 import { startModelListOverlayServer, type ModelListOverlayServer } from "./model-list-overlay-server";
 
 export const PRODUCT_RESPONSES_ENV_KEY = "CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN";
@@ -132,6 +133,12 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   readonly electronStarter?: typeof startElectronDevelopmentRuntime;
   readonly nativeFetch?: NativeCodexFetch;
   readonly signal?: AbortSignal;
+  /** Installed profile runtime publishes only to the exact install-owned resource. */
+  readonly catalogPreparation?: {
+    readonly paths: ProductPaths;
+    readonly installId: string;
+    readonly readNativeCatalog?: () => Promise<unknown>;
+  };
 }): Promise<{
   readonly runtime: ElectronDevelopmentRuntime;
   readonly responses: ElectronDevelopmentRuntime["responses"];
@@ -160,10 +167,18 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     return completedResults;
   };
   let runtime: ElectronDevelopmentRuntime | undefined;
+  let startupFamilies: readonly import("@chatgpt-tela/chatgpt").ChatGptWebModelFamily[] | undefined;
   const router = createDefaultProfileCompositeProviderRouter({
     runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
     ...(input.nativeFetch ? { fetchUpstream: input.nativeFetch } : {}),
-    discoverWebModelFamilies: signal => runtime?.discoverChatGptWebModelFamilies(signal) ?? Promise.resolve([]),
+    discoverWebModelFamilies: signal => {
+      if (startupFamilies) {
+        const observed = startupFamilies;
+        startupFamilies = undefined;
+        return Promise.resolve(observed);
+      }
+      return runtime?.discoverChatGptWebModelFamilies(signal) ?? Promise.resolve([]);
+    },
   });
   runtime = await (input.electronStarter ?? startElectronDevelopmentRuntime)({
     profileSlot: config.slot,
@@ -188,7 +203,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   let internalMcp: CodexBridgeMcpHttpServer | undefined;
   try {
     input.signal?.throwIfAborted();
-    await prepareProductWebDiscovery({
+    const webDiscovery = await prepareProductWebDiscovery({
       runtime, browserProfile: config.browserProfile, connectorName: identity.connectorName,
       signal: input.signal ?? new AbortController().signal, stage: () => {},
     });
@@ -201,7 +216,33 @@ export async function startAppOwnedProductResponsesRuntime(input: {
         initializationPath: `${config.browserProfile.accountBindingPath}.native-prefix-${binding.accountFingerprint}`,
       }),
     };
+    // Use this same readiness proof as the initial /models projection. A subsequent
+    // router refresh may mask a transient browser error by retaining older rows.
+    const families = webDiscovery.families;
+    startupFamilies = families;
     await router.refreshWebModelFamilies(input.signal);
+    const preparedCatalog: typeof input.catalogPreparation = input.catalogPreparation ?? (process.env.CHATGPT_TELA_INSTALL_ID
+      ? { paths: resolveProductPaths(), installId: process.env.CHATGPT_TELA_INSTALL_ID } : undefined);
+    if (preparedCatalog) {
+      const installation = preparedCatalog.readNativeCatalog ? undefined
+        : resolveDefaultDesktopInstallation({ environment: process.env });
+      const nativeCatalog = await (preparedCatalog.readNativeCatalog
+        ? preparedCatalog.readNativeCatalog()
+        : readDefaultDesktopNativeCatalog({ installation: installation!,
+          ...(input.signal ? { signal: input.signal } : {}) }));
+      await publishAppOwnedDesktopCatalog({
+        paths: preparedCatalog.paths,
+        installId: preparedCatalog.installId,
+        nativeCatalog,
+        webFamilies: families,
+        assertCurrentAccount: () => {
+          const current = readChatGptTelaAccountBinding(config.browserProfile);
+          if (!current || current.accountFingerprint !== binding.accountFingerprint) {
+            throw new Error("Desktop model catalog account binding changed during preparation");
+          }
+        },
+      });
+    }
     input.signal?.throwIfAborted();
     if (!runtime.suppliedToolBridge || !runtime.shutdownReadiness || !runtime.prepareShutdown)
       throw Error("App-owned runtime did not expose its operation lifecycle");
