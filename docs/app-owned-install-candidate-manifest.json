@@ -23,7 +23,7 @@
     "priorCandidateTests": "b09fe4a7: 113 related tests plus 26 corrected-boundary tests passed",
     "changedBoundaryTests": "selected packaged launcher, service shutdown, app-owned producer, browser diagnostics and Codex profile tests passed; lifecycle 2 passed after the ownership-error expectation was reconciled",
     "officialEngineAcceptance": "passed on isolated codex-cli 0.167.0-alpha.3.2: startup producer publishes install-owned Native/Web catalog, shared official provider editor registers without selecting, explicit fixture selection loads both models, Web and original Native tool roundtrip complete, selection returns to prior choice, editor restores exact prior settings; synthetic first-party auth only",
-    "packagingEntry": "package payload lifecycle fixture passed without real services; compiled standalone artifact compiled but exited 137 when executed; full package smoke unavailable because local Electron distribution is absent",
+    "packagingEntry": "independent package lifecycle fixture passed: source-restored, upgrade, complete removal, external fixtures preserved, zero real service/profile actions; six packaged-manifest contract tests passed (26 assertions); compiled standalone artifact was produced but exited 137 when run (cause unconfirmed); physical app package smoke not executed because node_modules/electron/dist is absent",
     "productionInstallation": "not performed; not authorized"
   },
   "releaseReadiness": "single integration candidate; isolated validation only; not approved for automatic consumer activation or operating-system installation",
