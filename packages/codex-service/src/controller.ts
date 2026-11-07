@@ -116,6 +116,7 @@ interface OwnedProfile {
   accountManagementActive: boolean;
   catalogCheck?: Promise<boolean>;
   stopping: Promise<void> | undefined;
+  cleanupAcknowledged?: boolean;
 }
 
 export interface CodexService {
@@ -414,6 +415,9 @@ export async function startCodexService(input: {
   };
 
   const profileShutdownReadiness = async (profile: OwnedProfile, duringStop = false): Promise<"ready" | "blocked"> => {
+    // A verified cleanup receipt retires the Web/Native admission endpoint.
+    // Only this same child's exit remains; never query its closed preview URL.
+    if (profile.cleanupAcknowledged) return "ready";
     // Cancelling service work must not cancel cleanup of already-owned resources.
     const signal = duringStop ? undefined : input.signal;
     const blocked = (reason_class: string) => {
@@ -487,15 +491,18 @@ export async function startCodexService(input: {
       // Process exit alone cannot attest successful Desktop cleanup. Keep the
       // exact control/supervision owner until its authenticated runtime receipt.
       phase = "runtime_cleanup";
-      const response = await fetch(new URL("v1/profile-stop", profile.bridgePreviewUrl), {
-        method: "POST", headers: { authorization: `Bearer ${profile.uiToken}` },
-        signal: AbortSignal.timeout(CHILD_STOP_TIMEOUT_MS),
-      });
-      if (!response.ok) throw new Error("Profile normal shutdown was not acknowledged; owner preserved");
-      const receipt = await response.json() as { contractVersion?: unknown; slot?: unknown; phase?: unknown; responsesRouteFingerprint?: unknown };
-      if (receipt.contractVersion !== 1 || receipt.slot !== profile.slot || receipt.phase !== "cleanup-complete"
-        || receipt.responsesRouteFingerprint !== profile.responsesRouteFingerprint) {
-        throw new Error("Profile shutdown receipt does not match its owned route");
+      if (!profile.cleanupAcknowledged) {
+        const response = await fetch(new URL("v1/profile-stop", profile.bridgePreviewUrl), {
+          method: "POST", headers: { authorization: `Bearer ${profile.uiToken}` },
+          signal: AbortSignal.timeout(CHILD_STOP_TIMEOUT_MS),
+        });
+        if (!response.ok) throw new Error("Profile normal shutdown was not acknowledged; owner preserved");
+        const receipt = await response.json() as { contractVersion?: unknown; slot?: unknown; phase?: unknown; responsesRouteFingerprint?: unknown };
+        if (receipt.contractVersion !== 1 || receipt.slot !== profile.slot || receipt.phase !== "cleanup-complete"
+          || receipt.responsesRouteFingerprint !== profile.responsesRouteFingerprint) {
+          throw new Error("Profile shutdown receipt does not match its owned route");
+        }
+        profile.cleanupAcknowledged = true;
       }
       profile.unmount();
       await profile.bridge.close().catch(() => {});
@@ -507,7 +514,6 @@ export async function startCodexService(input: {
       if (profile.child.exitCode !== 0 || profile.child.signalCode !== null) {
         throw new Error("Profile child did not exit successfully after acknowledged cleanup");
       }
-      await profile.supervisor.close().catch(() => {});
       owned.delete(profile.slot);
     })().catch(error => {
       emitDiagnosticEvent("chatgpt_tela_codex", "profile_stop_failed", {
@@ -703,7 +709,7 @@ export async function startCodexService(input: {
       }
       const existing = owned.get(slot);
       const existingRunning = existing && existing.child.exitCode === null && existing.child.signalCode === null;
-      if (ingress && existingRunning && existing?.mode === "app-owned") {
+      if (ingress && existingRunning && existing?.mode === "app-owned" && !existing.cleanupAcknowledged) {
         input.onProfileConnectionChanged?.(appOwnedTarget.id, true);
         return appOwnedStatus(existing);
       }
@@ -845,7 +851,9 @@ export async function startCodexService(input: {
         owned.set(slot, profile);
         child.once("exit", () => {
           if (owned.get(slot) !== profile) return;
-          if (profile.stopping) return;
+          // Keep a received cleanup receipt attached to this exact child until
+          // the parent validates its exit status, including after a timeout.
+          if (profile.stopping || profile.cleanupAcknowledged) return;
           profile.unmount();
           void profile.supervisor.close().catch(() => {});
           void profile.bridge.close().catch(() => {});

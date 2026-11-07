@@ -38,6 +38,9 @@ interface SessionEntry {
   readonly connectionFingerprint: string;
   readonly server: McpServer;
   closed: boolean;
+  transportClosed: boolean;
+  serverClosed: boolean;
+  closing?: Promise<void>;
   inFlightRequests: number;
   lastUsedAtMs: number;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -124,7 +127,9 @@ async function startMcpHttpServer(input: {
 
   const sessions = new Map<string, SessionEntry>();
   let pendingInitializations = 0;
-  let stopped = false;
+  let admissionClosed = false;
+  let stopping: Promise<void> | undefined;
+  let webClosed = false;
 
   const clearIdleTimer = (entry: SessionEntry): void => {
     if (!entry.idleTimer) return;
@@ -132,12 +137,19 @@ async function startMcpHttpServer(input: {
     entry.idleTimer = undefined;
   };
 
-  const closeEntry = async (sessionId: string, entry: SessionEntry): Promise<void> => {
-    if (entry.closed) return;
+  const closeEntry = (sessionId: string, entry: SessionEntry): Promise<void> => {
+    if (entry.closing) return entry.closing;
     entry.closed = true;
     clearIdleTimer(entry);
-    if (sessions.get(sessionId) === entry) sessions.delete(sessionId);
-    await Promise.allSettled([entry.transport.close(), entry.server.close()]);
+    return entry.closing = (async () => {
+      const results = await Promise.allSettled([
+        ...(entry.transportClosed ? [] : [(async () => { await entry.transport.close(); entry.transportClosed = true; })()]),
+        ...(entry.serverClosed ? [] : [(async () => { await entry.server.close(); entry.serverClosed = true; })()]),
+      ]);
+      if (entry.transportClosed && entry.serverClosed && sessions.get(sessionId) === entry) sessions.delete(sessionId);
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failures.length) throw new AggregateError(failures.map(result => result.reason), "MCP session cleanup failed");
+    })().catch(error => { delete entry.closing; throw error; });
   };
 
   const armIdleTimer = (sessionId: string, entry: SessionEntry): void => {
@@ -210,6 +222,8 @@ async function startMcpHttpServer(input: {
       transport,
       server,
       closed: false,
+      transportClosed: false,
+      serverClosed: false,
       inFlightRequests: 0,
       lastUsedAtMs: Date.now(),
       idleTimer: undefined,
@@ -218,11 +232,11 @@ async function startMcpHttpServer(input: {
       const sessionId = transport.sessionId;
       if (!sessionId) return;
       const owned = sessions.get(sessionId);
-      if (owned === entry) {
-        clearIdleTimer(entry!);
-        sessions.delete(sessionId);
-        entry!.closed = true;
-        void server.close().catch(() => {});
+      if (owned === entry && !entry!.closed) {
+        entry!.transportClosed = true;
+        void closeEntry(sessionId, entry!).catch(error => {
+          emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_session_close_failed", diagnosticFailureFields(error));
+        });
       }
     };
     try {
@@ -241,7 +255,7 @@ async function startMcpHttpServer(input: {
     maxRequestBodyBytes,
     requestTooLarge: () => errorResponse(413, "MCP request body is too large"),
     async fetch(request) {
-      if (stopped) return errorResponse(503, `ChatGPT Tela ${input.label} MCP server is stopping`);
+      if (admissionClosed) return errorResponse(503, `ChatGPT Tela ${input.label} MCP server is stopping`);
       const url = new URL(request.url);
       if (url.pathname !== path) return new Response(null, { status: 404 });
       if (request.headers.has("origin")) {
@@ -340,13 +354,17 @@ async function startMcpHttpServer(input: {
     authentication: bearerToken === undefined ? "none" : "bearer",
     ...(bearerToken !== undefined ? { bearerToken } : {}),
     get activeSessionCount() { return sessions.size; },
-    async stop() {
-      if (stopped) return;
-      stopped = true;
-      await webServer.stop();
-      const owned = [...sessions.entries()];
-      sessions.clear();
-      await Promise.allSettled(owned.map(([sessionId, entry]) => closeEntry(sessionId, entry)));
+    stop() {
+      if (stopping) return stopping;
+      admissionClosed = true;
+      return stopping = (async () => {
+        const cleanup = await Promise.allSettled([
+          ...(webClosed ? [] : [(async () => { await webServer.stop(); webClosed = true; })()]),
+          ...[...sessions.entries()].map(([sessionId, entry]) => closeEntry(sessionId, entry)),
+        ]);
+        const failed = cleanup.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+        if (failed.length) throw new AggregateError(failed.map(result => result.reason), "MCP HTTP cleanup failed");
+      })().catch(error => { stopping = undefined; throw error; });
     },
   };
 }

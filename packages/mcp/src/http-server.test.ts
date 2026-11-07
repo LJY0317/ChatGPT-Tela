@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Server as NodeHttpServer } from "node:http";
 import {
   NativeToolInventory,
   defineNativeTurnAuthority,
@@ -14,11 +16,75 @@ import {
   acceptNativeResponsesToolResult,
   nextNativeResponsesToolCall,
 } from "@chatgpt-tela/runtime";
-import { startCodexBridgeMcpHttpServer, startDevelopmentMcpHttpServer } from "./http-server";
+import { startCodexBridgeMcpHttpServer, startCustomMcpHttpServer, startDevelopmentMcpHttpServer } from "./http-server";
 import {
   CHATGPT_TELA_CODEX_TOOL_CALL,
   CHATGPT_TELA_CODEX_TOOL_INVENTORY,
 } from "./public-abi";
+
+test("MCP shutdown retains a failed owned session close and settles only the remaining resource", async () => {
+  let serverCloseAttempts = 0;
+  const server = await startCustomMcpHttpServer({ label: "partial-cleanup-fixture",
+    createServer() {
+      const mcp = new McpServer({ name: "shutdown-fixture", version: "1" }, { capabilities: {} });
+      const originalClose = mcp.close.bind(mcp);
+      mcp.close = async () => {
+        serverCloseAttempts++;
+        if (serverCloseAttempts === 1) throw Error("owned MCP session close failed");
+        await originalClose();
+      };
+      return mcp;
+    },
+  });
+  const transport = new StreamableHTTPClientTransport(server.endpointUrl, {
+    requestInit: { headers: { authorization: `Bearer ${server.bearerToken}` } },
+  });
+  const client = new Client({ name: "shutdown-fixture", version: "1" }, { capabilities: {} });
+  try {
+    await client.connect(transport as unknown as Transport);
+    expect(server.activeSessionCount).toBe(1);
+    await expect(server.stop()).rejects.toThrow("MCP HTTP cleanup failed");
+    expect(server.activeSessionCount).toBe(1);
+    await server.stop();
+    await server.stop();
+    expect(server.activeSessionCount).toBe(0);
+    expect(serverCloseAttempts).toBe(2);
+  } finally {
+    await client.close().catch(() => {});
+    await server.stop().catch(() => {});
+  }
+});
+
+test("MCP listener close failure remains retryable without readmitting requests", async () => {
+  const server = await startDevelopmentMcpHttpServer({ turns: new ActiveTurnRegistry() });
+  const original = NodeHttpServer.prototype.close;
+  let closeAttempts = 0;
+  try {
+    NodeHttpServer.prototype.close = function (...args: Parameters<typeof original>) {
+      closeAttempts++;
+      if (closeAttempts === 1) {
+        const callback = args[0];
+        queueMicrotask(() => callback?.(new Error("MCP listener close failed")));
+        return this;
+      }
+      return original.apply(this, args);
+    };
+    await expect(server.stop()).rejects.toThrow("MCP HTTP cleanup failed");
+    const refusal = await fetch(server.endpointUrl, {
+      method: "POST", headers: { authorization: `Bearer ${server.bearerToken}` },
+    });
+    expect(refusal.status).toBe(503);
+    await server.stop();
+    await server.stop();
+    expect(closeAttempts).toBe(2);
+    const rebound = await startDevelopmentMcpHttpServer({ turns: new ActiveTurnRegistry(), port: server.port });
+    try { expect(rebound.port).toBe(server.port); }
+    finally { await rebound.stop(); }
+  } finally {
+    NodeHttpServer.prototype.close = original;
+    await server.stop().catch(() => {});
+  }
+});
 
 function binding(): NativeTurnBinding {
   const tools = [{

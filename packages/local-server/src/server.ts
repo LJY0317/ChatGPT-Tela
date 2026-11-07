@@ -137,9 +137,10 @@ export async function startLocalResponsesServer(input: {
     throw new Error("maxRequestBodyBytes must be a positive safe integer");
   }
 
-  let stopped = false;
+  let admissionClosed = false;
+  let stopping: Promise<void> | undefined;
   const handleRequest = async (request: Request): Promise<Response> => {
-    if (stopped) return Response.json({ error: { code: "tela_responses_closed", message: "Tela Responses ingress is closed" } }, { status: 503 });
+    if (admissionClosed) return Response.json({ error: { code: "tela_responses_closed", message: "Tela Responses ingress is closed" } }, { status: 503 });
     request.signal.throwIfAborted();
     const url = new URL(request.url);
     if (request.headers.has("origin")) return forbiddenBrowserOrigin();
@@ -196,10 +197,10 @@ export async function startLocalResponsesServer(input: {
     baseUrl,
     runtimeToken,
     handleRequest,
-    async stop() {
-      if (stopped) return;
-      stopped = true;
-      await server.stop();
+    stop() {
+      if (stopping) return stopping;
+      admissionClosed = true;
+      return stopping = server.stop().catch(error => { stopping = undefined; throw error; });
     },
   });
 }

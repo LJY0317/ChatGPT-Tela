@@ -1,11 +1,40 @@
 import { describe, expect, test } from "bun:test";
 import { zstdCompressSync } from "node:zlib";
+import { Server as NodeHttpServer } from "node:http";
 import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 import {
   ActiveTurnRegistry,
   NativeResponsesGateway,
 } from "@chatgpt-tela/runtime";
 import { startLocalResponsesServer } from "./server";
+
+test("Responses shutdown retries a failed actual listener close without admitting new work", async () => {
+  const server = await startLocalResponsesServer({ requestRouter: async () => new Response("owned", { status: 200 }) });
+  const original = NodeHttpServer.prototype.close;
+  let closeAttempts = 0;
+  try {
+    NodeHttpServer.prototype.close = function (...args: Parameters<typeof original>) {
+      closeAttempts++;
+      if (closeAttempts === 1) {
+        const callback = args[0];
+        queueMicrotask(() => callback?.(new Error("synthetic listener close failure")));
+        return this;
+      }
+      return original.apply(this, args);
+    };
+    await expect(server.stop()).rejects.toThrow("synthetic listener close failure");
+    expect((await server.handleRequest(new Request(new URL("models", server.baseUrl)))).status).toBe(503);
+    await server.stop();
+    await server.stop();
+    expect(closeAttempts).toBe(2);
+    const rebound = await startLocalResponsesServer({ port: server.port,
+      requestRouter: async () => new Response(null, { status: 204 }) });
+    await rebound.stop();
+  } finally {
+    NodeHttpServer.prototype.close = original;
+    await server.stop().catch(() => {});
+  }
+});
 
 const source: CanonicalCurrentTurnSource = {
   async currentTurn(threadId) {

@@ -17,13 +17,15 @@ import { augmentNativeCodexModelCatalog } from "../../development-runtime/src/we
 test("app-owned parent restarts an idle provider on its fixed Responses route without owning the Desktop", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-parent-"));
   const state = join(root, "state.json");
+  const receipts = join(root, "receipts.txt");
   writeFileSync(state, JSON.stringify({ busy: false }));
+  writeFileSync(receipts, "");
   const portOwner = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 404 }) });
   const ingress = { slot: 1, port: portOwner.port!, capability: "g".repeat(48) };
   await portOwner.stop();
   const child = join(root, "child.ts");
   writeFileSync(child, `
-import {readFileSync} from 'node:fs';
+import {readFileSync,appendFileSync} from 'node:fs';
 import {createProfileSupervisorLifecycle} from ${JSON.stringify(resolve(import.meta.dir, "../../../apps/profile-runtime/src/supervision.ts"))};
 import {startProfileBridgePreviewServer} from ${JSON.stringify(resolve(import.meta.dir, "../../../apps/profile-runtime/src/bridge-preview-server.ts"))};
 import {startCodexBridgeMcpHttpServer} from ${JSON.stringify(resolve(import.meta.dir, "../../mcp/src/http-server.ts"))};
@@ -33,12 +35,13 @@ const busy=()=>JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).busy;
 const preview=await startProfileBridgePreviewServer({slot,bearerToken:process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN,
  async observe(){return{activeSurfaceCount:0}},webState(){return{contractVersion:1,slot,webState:'ready',webModelIds:['chatgpt-tela-web/fixture']}},
  async waitForWeb(){},shutdownReadiness(){return busy()?'blocked':'ready'},
- async shutdownProfile(){if(busy())throw Error('active supplied work');return{responsesRouteFingerprint:'a'.repeat(64)}}});
+ async shutdownProfile(){if(busy())throw Error('active supplied work');appendFileSync(process.env.FIXTURE_RECEIPTS,'1');return{responsesRouteFingerprint:'a'.repeat(64)}}});
 await lifecycle.publishReady({stage:'app-owned-profile-ready',runtimeProcessId:process.pid,slot,
  routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:'default',nativeTargetKind:'default-desktop',
  nativeReady:false,webState:'ready',profileId:'fixture',internalMcpUrl:mcp.endpointUrl.href,
  bridgePreviewUrl:preview.endpoint.href,responsesUrl:process.env.FIXTURE_RESPONSES,responsesRouteFingerprint:'a'.repeat(64)});
 await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecycle.dispose();
+if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.exitCode=1;
 `);
   const built = await Bun.build({ entrypoints: [child], target: "bun", outdir: root, naming: "child.mjs" });
   expect(built.success).toBe(true);
@@ -46,7 +49,7 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
   const forbidden = async (): Promise<never> => { nativeCalls++; throw Error("Official Desktop is not owned"); };
   const adapter: CodexNativeTargetAdapter = {
     kind: "default-desktop", profiles: forbidden, resolve: forbidden, session: forbidden, quit: forbidden,
-    profileRuntimeEnvironment: () => ({ FIXTURE_STATE: state,
+    profileRuntimeEnvironment: () => ({ FIXTURE_STATE: state, FIXTURE_RECEIPTS: receipts,
       FIXTURE_RESPONSES: `http://127.0.0.1:${ingress.port}/${ingress.capability}/v1/` }),
   };
   const service = await startCodexService({ config: { appOwnedResponses: [ingress] },
@@ -68,6 +71,7 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
     await expect(service.stopProfile(1)).rejects.toThrow("not acknowledged");
     writeFileSync(state, JSON.stringify({ busy: false }));
     expect(await service.stopProfile(1)).toMatchObject({ controlState: "stopped" });
+    expect(readFileSync(receipts, "utf8")).toBe("1");
     expect(routed.routeCount).toBe(0);
     const restarted = await service.startProfile(1);
     expect(restarted).toMatchObject({ slot: 1, controlState: "running", webModelsReady: true,
@@ -78,9 +82,18 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
     expect(await service.shutdownReadiness()).toBe("ready");
     expect(await service.stopProfile(1)).toMatchObject({ controlState: "stopped" });
     expect(routed.routeCount).toBe(0);
+    expect(readFileSync(receipts, "utf8")).toBe("11");
+    writeFileSync(state, JSON.stringify({ busy: false, badExit: true }));
+    await service.startProfile(1);
+    await expect(service.stopProfile(1)).rejects.toThrow("did not exit successfully");
+    expect(service.activeProfileCount).toBe(1);
+    expect(readFileSync(receipts, "utf8")).toBe("111");
+    await expect(service.stopProfile(1)).rejects.toThrow("did not exit successfully");
+    expect(readFileSync(receipts, "utf8")).toBe("111");
+    expect(service.activeProfileCount).toBe(1);
     expect(nativeCalls).toBe(0);
     expect(delegationCalls).toBe(0);
-  } finally { await service.close(); rmSync(root, { recursive: true, force: true }); }
+  } finally { await service.close().catch(() => {}); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("app-owned primary keeps managed optional profiles in the inventory", async () => {
