@@ -301,6 +301,87 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("app-owned first readiness binds durable results after login and isolates a changed account", async () => {
+  const { createSuppliedRequestGateway } = await import("./supplied-request-gateway");
+  const { chatGptWebModelId, chatGptWebFamilyKey } = await import("@chatgpt-tela/chatgpt");
+  const root = mkdtempSync(join(tmpdir(), "tela-app-owned-late-binding-"));
+  const config = loadProductProfileRuntimeConfig(common(root));
+  const accountA = "a".repeat(64), accountB = "b".repeat(64);
+  const family = chatGptWebFamilyKey("Late binding fixture");
+  const body = { model: chatGptWebModelId(family), stream: false, reasoning: { effort: "medium" },
+    client_metadata: { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "late-thread", turn_id: "late-turn" } },
+    input: [{ role: "user", content: "Keep the exact synthetic completion." }], tools: [] };
+  let activeAccount = accountA, submissions = 0, gateway: ReturnType<typeof createSuppliedRequestGateway> | undefined;
+  const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
+    expect(typeof options.completedResults).toBe("function");
+    const host = { async acquire({ taskId, epochId }: any) {
+      return { taskId, epochId, leaseId: "late-binding-surface",
+        async navigate() {}, async reveal() {}, async hide() {}, capability() {} };
+    }, async release() {}, async close() {} } as any;
+    const provider = {
+      async submitTurn(_surface: unknown, turn: any) {
+        submissions++;
+        return { state: "proven", evidence: ["fixture"], value: {
+          nativeTaskId: turn.nativeTaskId, nativeTurnId: turn.nativeTurnId, webEpochId: turn.webEpochId, providerTurnId: "late-web",
+        } };
+      },
+      async waitForTurnEvent(_surface: unknown, handle: any) {
+        return { state: "proven", evidence: ["fixture"], value: {
+          kind: "completed", providerTurnId: handle.providerTurnId, answer: activeAccount === accountA ? "Answer A" : "Answer B",
+        } };
+      },
+    } as any;
+    gateway = createSuppliedRequestGateway({ browserHost: host, provider,
+      ...(options.routeId ? { routeId: options.routeId } : {}),
+      ...(options.completedResults ? { completedResults: options.completedResults } : {}),
+      async prepareForSubmit() {} });
+    const current = gateway;
+    const responses = await startLocalResponsesServer({ ...options.responses, gateway: current });
+    return { responses, suppliedToolBridge: current.toolBridge,
+      shutdownReadiness: () => current.shutdownReadiness(), prepareShutdown: () => current.prepareShutdown(),
+      async prepareChatGptWebSession(input: any) {
+        // Existing login/setup establishes the verified binding during readiness.
+        if (activeAccount === accountA) {
+          expect(typeof options.completedResults).toBe("function");
+          expect((options.completedResults as () => unknown)()).toBeUndefined();
+        }
+        bindChatGptTelaAccount(config.browserProfile, activeAccount);
+        input.onProfile?.({ account: { accountFingerprint: activeAccount,
+          accountStructure: "personal", containerFingerprint: "fixture" } });
+        input.onFamilies?.([]); input.onConnectorStarting?.(); input.onConnectorProven?.();
+        return { families: [] };
+      },
+      async discoverChatGptWebModelFamilies() { return []; },
+      async stop() { await responses.stop(); await current.close(); },
+    } as unknown as ElectronDevelopmentRuntime;
+  }) as typeof import("./electron").startElectronDevelopmentRuntime;
+  let owned: Awaited<ReturnType<typeof startAppOwnedProductResponsesRuntime>> | undefined;
+  try {
+    mkdirSync(config.browserProfile.userDataDir, { recursive: true });
+    const temporary = await startLocalResponsesServer({ requestRouter: async () => new Response(null, { status: 404 }) });
+    const ingress = { port: temporary.port, capability: "l".repeat(48) };
+    await temporary.stop();
+    owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
+      nativeFetch: async () => Response.json({ models: [] }) });
+    expect(await gateway!.handle(body)).toMatchObject({ type: "final", answer: "Answer A" });
+    expect(owned.shutdownReadiness()).toBe("ready");
+    bindChatGptTelaAccount(config.browserProfile, accountB);
+    await expect(gateway!.handle({ ...body, client_metadata: {
+      "x-codex-turn-metadata": { request_kind: "turn", thread_id: "late-thread", turn_id: "changed-account-turn" },
+    } })).rejects.toThrow("account binding changed");
+    expect(submissions).toBe(1);
+    bindChatGptTelaAccount(config.browserProfile, accountA);
+    await owned.stop(); owned = undefined;
+    bindChatGptTelaAccount(config.browserProfile, accountB);
+    activeAccount = accountB;
+    owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
+      nativeFetch: async () => Response.json({ models: [] }) });
+    expect(await gateway!.handle(body)).toMatchObject({ type: "final", answer: "Answer B" });
+    expect(submissions).toBe(2);
+    expect(owned.shutdownReadiness()).toBe("ready");
+  } finally { await owned?.stop(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("app-owned startup assembles its authenticated internal MCP with the supplied host operation", async () => {
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");

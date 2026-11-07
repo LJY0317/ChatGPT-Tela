@@ -20,6 +20,11 @@ export interface SuppliedResultStore {
   readSuppliedResult(identity: Omit<SuppliedCompletedResult, "answer">): Promise<SuppliedCompletedResult | undefined>;
   preserveSuppliedResult(result: SuppliedCompletedResult): Promise<boolean>;
 }
+export type SuppliedResultScope = {
+  readonly profileSlot: number;
+  readonly accountFingerprint: string;
+  readonly store: SuppliedResultStore;
+};
 
 interface Operation {
   readonly turnId: string;
@@ -59,7 +64,7 @@ export function createSuppliedRequestGateway(input: {
   readonly planner?: SuppliedRequestWebTurnPlanner;
   readonly profileSlot?: number;
   readonly routeId?: string;
-  readonly completedResults?: { readonly profileSlot: number; readonly accountFingerprint: string; readonly store: SuppliedResultStore };
+  readonly completedResults?: SuppliedResultScope | (() => SuppliedResultScope | undefined);
   readonly browserSurfaceTarget?: number;
   readonly webTurnTimeoutMs?: number;
   readonly prepareForSubmit?: (surface: BrowserSurfaceLease,
@@ -125,8 +130,10 @@ export function createSuppliedRequestGateway(input: {
       // Metadata is correlation scoped by this local ingress, never canonical Native authority.
       const identity = parseNativeTurnReplayIdentity(body);
       const hash = fingerprint(body);
-      const resultIdentity = input.completedResults ? {
-        profileSlot: input.completedResults.profileSlot, accountFingerprint: input.completedResults.accountFingerprint,
+      const completedResults = typeof input.completedResults === "function"
+        ? input.completedResults() : input.completedResults;
+      const resultIdentity = completedResults ? {
+        profileSlot: completedResults.profileSlot, accountFingerprint: completedResults.accountFingerprint,
         threadId: identity.threadId, turnId: identity.turnId, requestFingerprint: hash,
       } : undefined;
       const key = `${identity.threadId}\u0000${identity.turnId}`;
@@ -186,7 +193,7 @@ export function createSuppliedRequestGateway(input: {
               // Register this operation before the durable lookup. Concurrent
               // requests join one outcome; a recovered final never resubmits.
               if (resultIdentity) {
-                const saved = await input.completedResults!.store.readSuppliedResult(resultIdentity);
+                const saved = await completedResults!.store.readSuppliedResult(resultIdentity);
                 if (saved) {
                   owned.preserved = true;
                   return { type: "final", answer: saved.answer, delivery: { capability } } as const;
@@ -231,7 +238,11 @@ export function createSuppliedRequestGateway(input: {
               });
               if (resultIdentity) {
                 try {
-                  owned.preserved = await input.completedResults!.store.preserveSuppliedResult({ ...resultIdentity, answer });
+                  if (typeof input.completedResults === "function"
+                    && input.completedResults()?.accountFingerprint !== resultIdentity.accountFingerprint) {
+                    throw Error("App-owned Web result storage account binding changed");
+                  }
+                  owned.preserved = await completedResults!.store.preserveSuppliedResult({ ...resultIdentity, answer });
                 } catch (error) {
                   emitDiagnosticEvent("chatgpt_tela_work", "provider_result_preservation_failed", {
                     scope_fingerprint: diagnosticFingerprint(identity.threadId), ...diagnosticFailureFields(error),

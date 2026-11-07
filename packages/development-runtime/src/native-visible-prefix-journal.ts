@@ -50,8 +50,7 @@ function validSupplied(value: SuppliedCompletedResult): boolean {
     && typeof value.threadId === "string" && value.threadId.length > 0 && value.threadId.length <= 256
     && typeof value.turnId === "string" && value.turnId.length > 0 && value.turnId.length <= 256
     && /^[a-f0-9]{64}$/.test(value.requestFingerprint)
-    && typeof value.answer === "string" && !!value.answer.trim()
-    && Buffer.byteLength(value.answer, "utf8") <= 512 * 1024;
+    && typeof value.answer === "string" && !!value.answer.trim();
 }
 function suppliedKey(value: Pick<SuppliedCompletedResult, "profileSlot" | "accountFingerprint" | "threadId" | "turnId">): string {
   return JSON.stringify([value.profileSlot, value.accountFingerprint, value.threadId, value.turnId]);
