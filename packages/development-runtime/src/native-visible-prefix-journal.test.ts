@@ -276,3 +276,27 @@ test("capacity evicts a completed body but keeps its exact replay receipt", () =
     .rejects.toThrow("changed");
   expect((await restarted.readSuppliedResult(second))?.answer).toHaveLength(9 * 1024 * 1024);
 }), 30_000);
+
+test("owned readiness and expired replay retire raw finals and negative receipts without touching active work", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options);
+  const accountFingerprint = hash("retention-account"), scope = { profileSlot: 2, accountFingerprint };
+  const old = { ...scope, threadId: "expired", turnId: "expired", requestFingerprint: hash("expired") };
+  const active = { ...scope, threadId: "active", turnId: "active", requestFingerprint: hash("active") };
+  expect(await journal.preserveSuppliedResult({ ...old, answer: "old answer" })).toBe(true);
+  expect(await journal.preserveSuppliedResult({ ...active, answer: "current answer" })).toBe(true);
+  const file = join(options.directory, "state.json");
+  const state = JSON.parse((await readFile(file, "utf8")).slice(1));
+  state.suppliedResults.find((item: { turnId: string }) => item.turnId === "expired").updatedAt -= 29 * 24 * 60 * 60 * 1000;
+  await writeFile(file, "=" + JSON.stringify(state));
+  await new FileNativeVisiblePrefixStageJournal(options).pruneExpiredResults();
+  const retained = JSON.parse((await readFile(file, "utf8")).slice(1));
+  expect(retained.suppliedResults.map((item: { turnId: string }) => item.turnId)).toEqual(["active"]);
+  expect((await journal.readSuppliedResult(active))?.answer).toBe("current answer");
+  expect(await journal.readSuppliedResult(old)).toBeUndefined();
+  // An expired negative receipt is equally retired by the existing replay path.
+  retained.suppliedResults[0] = { ...retained.suppliedResults[0], answer: undefined,
+    updatedAt: Date.now() - 29 * 24 * 60 * 60 * 1000 };
+  await writeFile(file, "=" + JSON.stringify(retained));
+  expect(await journal.readSuppliedResult(active)).toBeUndefined();
+  expect(JSON.parse((await readFile(file, "utf8")).slice(1)).suppliedResults).toEqual([]);
+}));

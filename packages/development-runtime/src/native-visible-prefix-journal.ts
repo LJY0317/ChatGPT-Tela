@@ -287,11 +287,25 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     if (!validSupplied({ ...identity, answer: "placeholder" })) throw Error("Invalid supplied result identity");
     return this.#transaction(async state => {
       const stored = state.suppliedResults?.find(item => suppliedKey(item) === suppliedKey(identity));
-      if (!stored || Date.now() - stored.updatedAt > RETENTION_MS) return undefined;
+      if (stored && Date.now() - stored.updatedAt > RETENTION_MS) {
+        // A replay is an existing maintenance opportunity. Retire all expired
+        // derived data from the owned ledger, including the negative receipt.
+        await this.#write(state);
+        return undefined;
+      }
+      if (!stored) return undefined;
       if (stored.requestFingerprint !== identity.requestFingerprint) throw Error("Web request changed within the same response operation");
       if (stored.answer === undefined) throw Error("Completed Web response is no longer retained; resubmission denied");
       const { answerHash: _hash, updatedAt: _time, ...result } = stored;
       return Object.freeze(result) as SuppliedCompletedResult;
+    });
+  }
+  /** Called on owned profile readiness; no periodic worker or extra storage. */
+  async pruneExpiredResults(): Promise<void> {
+    await this.#transaction(async state => {
+      if (!(state.suppliedResults?.some(item => Date.now() - item.updatedAt > RETENTION_MS)
+        || state.checkpoints?.some(item => Date.now() - item.updatedAt > RETENTION_MS))) return;
+      await this.#write(state);
     });
   }
   async preserveSuppliedResult(result: SuppliedCompletedResult): Promise<boolean> {

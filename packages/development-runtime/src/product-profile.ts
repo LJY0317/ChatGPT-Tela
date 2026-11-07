@@ -19,7 +19,7 @@ import {
   TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
   type DefaultDesktopTargetRuntime,
 } from "@chatgpt-tela/default-desktop-target";
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider } from "@chatgpt-tela/chatgpt";
 import {
   CHATGPT_TELA_DISPLAY_NAME,
@@ -209,17 +209,25 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     });
     const binding = readChatGptTelaAccountBinding(config.browserProfile);
     if (!binding) throw Error("App-owned Web readiness did not establish a verified account binding");
+    const resultStore = new FileNativeVisiblePrefixStageJournal({
+      directory: resolve(config.browserProfile.userDataDir, "native-visible-prefix-executions", binding.accountFingerprint),
+      initializationPath: `${config.browserProfile.accountBindingPath}.native-prefix-${binding.accountFingerprint}`,
+    });
     completedResults = {
       profileSlot: config.slot, accountFingerprint: binding.accountFingerprint,
-      store: new FileNativeVisiblePrefixStageJournal({
-        directory: resolve(config.browserProfile.userDataDir, "native-visible-prefix-executions", binding.accountFingerprint),
-        initializationPath: `${config.browserProfile.accountBindingPath}.native-prefix-${binding.accountFingerprint}`,
-      }),
+      store: resultStore,
     };
     // Use this same readiness proof as the initial /models projection. A subsequent
     // router refresh may mask a transient browser error by retaining older rows.
     const families = webDiscovery.families;
     startupFamilies = families;
+    // Existing owned readiness is also a cleanup boundary for expired answers
+    // and negative receipts, even if the host never replays the old turn.
+    await resultStore.pruneExpiredResults().catch(error => {
+      emitDiagnosticEvent("chatgpt_tela_work", "provider_result_retention_failed", {
+        ...diagnosticFailureFields(error),
+      });
+    });
     await router.refreshWebModelFamilies(input.signal);
     const preparedCatalog: typeof input.catalogPreparation = input.catalogPreparation ?? (process.env.CHATGPT_TELA_INSTALL_ID
       ? { paths: resolveProductPaths(), installId: process.env.CHATGPT_TELA_INSTALL_ID } : undefined);
