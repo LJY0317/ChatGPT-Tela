@@ -36,6 +36,7 @@ import {
   startDevelopmentRuntime,
   type DevelopmentMcpConfiguration,
   type DevelopmentRuntime,
+  type DevelopmentRuntimeOptions,
   type DevelopmentWebTurnPlanner,
 } from "./runtime";
 import { createNativeLocalCompactionRouter } from "./native-local-compaction";
@@ -106,6 +107,7 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
 export interface ElectronDevelopmentRuntimeOptions {
   readonly profileSlot?: number;
   readonly routeId?: string;
+  readonly completedResults?: DevelopmentRuntimeOptions["completedResults"];
   readonly profileId: string;
   readonly connectorName?: string;
   readonly currentTurnSource?: CanonicalCurrentTurnSource;
@@ -296,6 +298,7 @@ export async function startElectronDevelopmentRuntime(
   }) : undefined;
 
   const runtime = await startDevelopmentRuntime({
+    ...(input.completedResults ? { completedResults: input.completedResults } : {}),
     ...(input.profileSlot !== undefined ? { profileSlot: input.profileSlot } : {}),
     ...(input.routeId ? { routeId: input.routeId } : {}),
     ...(input.currentTurnSource ? { currentTurnSource: input.currentTurnSource } : {}),

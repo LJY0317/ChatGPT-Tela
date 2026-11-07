@@ -1,11 +1,15 @@
 import { expect, test } from "bun:test";
 import { zstdCompressSync } from "node:zlib";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { BROWSER_DOCUMENT_LIFETIME, type BrowserHost, type BrowserSurfaceLease, type BrowserSurfaceCapability } from "@chatgpt-tela/browser-host";
 import { chatGptWebFamilyKey, chatGptWebModelId, type WebConversationProvider, type WebTurnRequest } from "@chatgpt-tela/chatgpt";
 import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { createProfileTurnBridge, createSuppliedRequestGateway } from "./supplied-request-gateway";
 import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
+import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 
 const model = chatGptWebModelId(chatGptWebFamilyKey("Supplied request fixture"));
 const firstInput = [{ type: "message", role: "user", content: "Inspect A." }];
@@ -16,7 +20,8 @@ function request(turn = "turn-1", input: unknown[] = firstInput) {
   };
 }
 
-function fixture(options: { wait?: Promise<void>; failure?: Error; planner?: ReturnType<typeof createNativeRequestDevelopmentWebTurnPlanner> } = {}) {
+function fixture(options: { wait?: Promise<void>; failure?: Error; planner?: ReturnType<typeof createNativeRequestDevelopmentWebTurnPlanner>;
+  completedResults?: Parameters<typeof createSuppliedRequestGateway>[0]["completedResults"] } = {}) {
   const submissions: WebTurnRequest[] = [], selections: unknown[] = [], released: string[] = [];
   let acquisitions = 0, closed = false;
   const signal = new AbortController().signal;
@@ -48,6 +53,7 @@ function fixture(options: { wait?: Promise<void>; failure?: Error; planner?: Ret
     },
   };
   const gateway = createSuppliedRequestGateway({ browserHost: host, provider, profileSlot: 2,
+    ...(options.completedResults ? { completedResults: options.completedResults } : {}),
     ...(options.planner ? { planner: options.planner } : {}),
     async prepareForSubmit(_surface, route) { selections.push(route); },
   });
@@ -68,6 +74,42 @@ test("input-only dispatch joins duplicate observers and reuses settled response 
     expect(f.submissions).toHaveLength(1);
   } finally { await f.gateway.close(); }
   expect(f.closed).toBe(true);
+});
+
+test("durably preserved final releases shutdown and replays after gateway restart without model submission", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-supplied-final-"));
+  const accountFingerprint = "a".repeat(64);
+  const storage = () => ({ profileSlot: 2, accountFingerprint,
+    store: new FileNativeVisiblePrefixStageJournal({ directory: join(root, "ledger"), initializationPath: join(root, "receipt") }) });
+  const first = fixture({ completedResults: storage() });
+  try {
+    const final = await first.gateway.handle(request());
+    expect(final).toMatchObject({ type: "final", answer: "A inspected." });
+    expect(first.gateway.shutdownReadiness()).toBe("ready");
+    first.gateway.prepareShutdown();
+    await first.gateway.close();
+
+    const restarted = fixture({ completedResults: storage() });
+    try {
+      const recovered = await restarted.gateway.handle(request());
+      expect(recovered).toMatchObject({ type: "final", answer: "A inspected." });
+      expect(restarted.submissions).toHaveLength(0);
+      await expect(restarted.gateway.handle(request("turn-1", [{ role: "user", content: "Changed" }])))
+        .rejects.toThrow("changed");
+      expect(restarted.submissions).toHaveLength(0);
+    } finally { await restarted.gateway.close(); }
+  } finally { await first.gateway.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("failed final preservation leaves undelivered completion blocking shutdown", async () => {
+  const f = fixture({ completedResults: { profileSlot: 2, accountFingerprint: "b".repeat(64),
+    store: { async readSuppliedResult() { return undefined; }, async preserveSuppliedResult() { return false; } } } });
+  try {
+    expect(await f.gateway.handle(request())).toMatchObject({ type: "final", answer: "A inspected." });
+    expect(f.gateway.shutdownReadiness()).toBe("blocked");
+    expect(() => f.gateway.prepareShutdown()).toThrow("Finish active Web work");
+    expect(f.submissions).toHaveLength(1);
+  } finally { await f.gateway.close(); }
 });
 
 test("input-only continuation uses the existing exact retained-delta planner and physical page", async () => {

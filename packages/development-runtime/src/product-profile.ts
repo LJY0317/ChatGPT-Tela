@@ -32,10 +32,12 @@ import {
 } from "@chatgpt-tela/setup";
 import {
   assertChatGptTelaAccountBinding,
+  readChatGptTelaAccountBinding,
   resolveChatGptTelaBrowserProfile,
   type ChatGptTelaBrowserProfile,
 } from "./browser-profile";
 import { FileContextCheckpointCache } from "./context-cache";
+import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 import { ConnectorProbeState } from "./connector-probe-state";
 import {
   createDefaultProfileCompositeProviderRouter,
@@ -146,6 +148,12 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     throw new Error("App-owned Responses requires an install-owned fixed port and URL capability");
   }
   const identity = productPublicMcpIdentity(config.publicMcpAbi);
+  const binding = readChatGptTelaAccountBinding(config.browserProfile);
+  if (!binding) throw Error("App-owned Web result storage requires a verified profile account binding");
+  const resultStore = new FileNativeVisiblePrefixStageJournal({
+    directory: resolve(config.browserProfile.userDataDir, "native-visible-prefix-executions", binding.accountFingerprint),
+    initializationPath: `${config.browserProfile.accountBindingPath}.native-prefix-${binding.accountFingerprint}`,
+  });
   let runtime: ElectronDevelopmentRuntime | undefined;
   const router = createDefaultProfileCompositeProviderRouter({
     runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
@@ -155,6 +163,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   runtime = await (input.electronStarter ?? startElectronDevelopmentRuntime)({
     profileSlot: config.slot,
     routeId: config.routeId,
+    completedResults: { profileSlot: config.slot, accountFingerprint: binding.accountFingerprint, store: resultStore },
     profileId: config.browserProfile.profileId,
     chatGptUrl: CHATGPT_TEMPORARY_CHAT_URL,
     connectorName: identity.connectorName,
@@ -178,6 +187,9 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       runtime, browserProfile: config.browserProfile, connectorName: identity.connectorName,
       signal: input.signal ?? new AbortController().signal, stage: () => {},
     });
+    if (readChatGptTelaAccountBinding(config.browserProfile)?.accountFingerprint !== binding.accountFingerprint) {
+      throw Error("App-owned Web result storage account binding changed during readiness");
+    }
     await router.refreshWebModelFamilies(input.signal);
     input.signal?.throwIfAborted();
     if (!runtime.suppliedToolBridge || !runtime.shutdownReadiness || !runtime.prepareShutdown)

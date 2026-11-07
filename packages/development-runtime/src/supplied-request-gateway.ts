@@ -14,6 +14,12 @@ import {
   nativeRequestContentSource, type SuppliedRequestWebTurnPlanner,
 } from "./native-request-planner";
 import type { DevelopmentWebTurnPlan } from "./runtime";
+import type { SuppliedCompletedResult } from "./native-visible-prefix-journal";
+
+export interface SuppliedResultStore {
+  readSuppliedResult(identity: Omit<SuppliedCompletedResult, "answer">): Promise<SuppliedCompletedResult | undefined>;
+  preserveSuppliedResult(result: SuppliedCompletedResult): Promise<boolean>;
+}
 
 interface Operation {
   readonly turnId: string;
@@ -27,6 +33,7 @@ interface Operation {
   offer: (outcome: NativeGatewayOutcome) => void;
   armContinuation?: (callId: string) => Promise<void>;
   failed?: true;
+  preserved?: boolean;
   finishedAt?: number;
   delivered: boolean;
   progress?: string;
@@ -52,6 +59,7 @@ export function createSuppliedRequestGateway(input: {
   readonly planner?: SuppliedRequestWebTurnPlanner;
   readonly profileSlot?: number;
   readonly routeId?: string;
+  readonly completedResults?: { readonly profileSlot: number; readonly accountFingerprint: string; readonly store: SuppliedResultStore };
   readonly browserSurfaceTarget?: number;
   readonly webTurnTimeoutMs?: number;
   readonly prepareForSubmit?: (surface: BrowserSurfaceLease,
@@ -98,7 +106,7 @@ export function createSuppliedRequestGateway(input: {
   };
 
   const shutdownReadiness = (): "ready" | "blocked" => [...operations.values()].some(op =>
-    op.finishedAt === undefined || !op.failed && !op.delivered) ? "blocked" : "ready";
+    op.finishedAt === undefined || !op.failed && !op.delivered && !op.preserved) ? "blocked" : "ready";
 
   return {
     toolBridge,
@@ -117,6 +125,10 @@ export function createSuppliedRequestGateway(input: {
       // Metadata is correlation scoped by this local ingress, never canonical Native authority.
       const identity = parseNativeTurnReplayIdentity(body);
       const hash = fingerprint(body);
+      const resultIdentity = input.completedResults ? {
+        profileSlot: input.completedResults.profileSlot, accountFingerprint: input.completedResults.accountFingerprint,
+        threadId: identity.threadId, turnId: identity.turnId, requestFingerprint: hash,
+      } : undefined;
       const key = `${identity.threadId}\u0000${identity.turnId}`;
       for (const [prior, retiredAt] of superseded) {
         if (Date.now() - retiredAt >= WEB_EPOCH_IDLE_RETENTION_MS) superseded.delete(prior);
@@ -171,6 +183,15 @@ export function createSuppliedRequestGateway(input: {
             let plan: DevelopmentWebTurnPlan | undefined;
             let acquired = false;
             try {
+              // Register this operation before the durable lookup. Concurrent
+              // requests join one outcome; a recovered final never resubmits.
+              if (resultIdentity) {
+                const saved = await input.completedResults!.store.readSuppliedResult(resultIdentity);
+                if (saved) {
+                  owned.preserved = true;
+                  return { type: "final", answer: saved.answer, delivery: { capability } } as const;
+                }
+              }
               plan = await planner.planSuppliedRequest(identity, body, { signal, onProgress: publish });
               const chatTools = { ...(input.profileSlot === undefined ? {} : { defaultProfileSlot: input.profileSlot }),
                 ...(owned.advertisedGoals.length ? { nativeGoalControl: capability } : {}) };
@@ -208,6 +229,15 @@ export function createSuppliedRequestGateway(input: {
                 logical_estimate: plan.physicalContext.logicalTokens, transfer_estimate: plan.physicalContext.transferTokens,
                 effort: route.effort,
               });
+              if (resultIdentity) {
+                try {
+                  owned.preserved = await input.completedResults!.store.preserveSuppliedResult({ ...resultIdentity, answer });
+                } catch (error) {
+                  emitDiagnosticEvent("chatgpt_tela_work", "provider_result_preservation_failed", {
+                    scope_fingerprint: diagnosticFingerprint(identity.threadId), ...diagnosticFailureFields(error),
+                  });
+                }
+              }
               return { type: "final", answer, delivery: { capability } } as const;
             } catch (error) {
               owned.failed = true;

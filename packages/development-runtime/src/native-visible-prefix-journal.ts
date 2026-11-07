@@ -30,8 +30,32 @@ interface PublishedEntry extends PublishedNativeWorkingCheckpoint {
   readonly contentHash: string;
   readonly updatedAt: number;
 }
-interface State { version: 1; entries: Entry[]; checkpoints?: PublishedEntry[] }
+export interface SuppliedCompletedResult {
+  readonly profileSlot: number;
+  readonly accountFingerprint: string;
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly requestFingerprint: string;
+  readonly answer: string;
+}
+interface StoredSuppliedResult extends SuppliedCompletedResult {
+  readonly answerHash: string;
+  readonly updatedAt: number;
+}
+interface State { version: 1; entries: Entry[]; checkpoints?: PublishedEntry[]; suppliedResults?: StoredSuppliedResult[] }
 function sha(value: string): string { return createHash("sha256").update(value).digest("hex"); }
+function validSupplied(value: SuppliedCompletedResult): boolean {
+  return Number.isSafeInteger(value.profileSlot) && value.profileSlot >= 1 && value.profileSlot <= 99
+    && /^[a-f0-9]{64}$/.test(value.accountFingerprint)
+    && typeof value.threadId === "string" && value.threadId.length > 0 && value.threadId.length <= 256
+    && typeof value.turnId === "string" && value.turnId.length > 0 && value.turnId.length <= 256
+    && /^[a-f0-9]{64}$/.test(value.requestFingerprint)
+    && typeof value.answer === "string" && !!value.answer.trim()
+    && Buffer.byteLength(value.answer, "utf8") <= 512 * 1024;
+}
+function suppliedKey(value: Pick<SuppliedCompletedResult, "profileSlot" | "accountFingerprint" | "threadId" | "turnId">): string {
+  return JSON.stringify([value.profileSlot, value.accountFingerprint, value.threadId, value.turnId]);
+}
 function validPublished(input: PublishedNativeWorkingCheckpoint): boolean {
   return ((input.prefixDigest === undefined && input.reuseScopeFingerprint === undefined)
       || (typeof input.prefixDigest === "string" && /^[a-f0-9]{64}$/.test(input.prefixDigest)
@@ -71,6 +95,18 @@ function validate(value: unknown): State {
         || !Number.isSafeInteger(checkpoint.updatedAt) || checkpoint.updatedAt < 0
         || keys.has(key)) throw Error("Invalid published Web checkpoint");
       keys.add(key);
+    }
+  }
+  if (state.suppliedResults !== undefined) {
+    if (!Array.isArray(state.suppliedResults)) throw Error("Invalid preserved supplied results");
+    const seen = new Set<string>();
+    for (const item of state.suppliedResults) {
+      const key = suppliedKey(item);
+      if (!validSupplied(item) || item.answerHash !== sha(item.answer)
+        || !Number.isSafeInteger(item.updatedAt) || item.updatedAt < 0 || seen.has(key)) {
+        throw Error("Invalid preserved supplied result");
+      }
+      seen.add(key);
     }
   }
   const keys = new Set<string>();
@@ -188,6 +224,22 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
       }
       state.checkpoints = checkpoints.slice(first);
     }
+    if (state.suppliedResults) {
+      const now = Date.now();
+      const retained = state.suppliedResults.filter(item => now - item.updatedAt <= RETENTION_MS)
+        .sort((a, b) => a.updatedAt - b.updatedAt);
+      // Completed results are derived recovery data. Keep the newest records
+      // inside the existing journal byte ceiling, without a count-based cap.
+      const sizes = retained.map(item => Buffer.byteLength(JSON.stringify(item), "utf8"));
+      let total = 1 + Buffer.byteLength(JSON.stringify({ ...state, suppliedResults: [] }), "utf8")
+        + sizes.reduce((sum, size) => sum + size, 0) + Math.max(0, sizes.length - 1);
+      let first = 0;
+      while (total > MAX_BYTES && first < retained.length) {
+        total -= sizes[first]! + (retained.length - first > 1 ? 1 : 0);
+        first++;
+      }
+      state.suppliedResults = retained.slice(first);
+    }
     const bytes = JSON.stringify(state);
     if (1 + Buffer.byteLength(bytes, "utf8") > MAX_BYTES) throw new Error("Native checkpoint execution journal byte capacity exhausted");
     const handle = await open(resolve(this.directory, "state.json"), constants.O_RDWR | (constants.O_NOFOLLOW ?? 0));
@@ -229,6 +281,30 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     queues.set(this.directory, run);
     void run.finally(() => { if (queues.get(this.directory) === run) queues.delete(this.directory); }).catch(() => {});
     return run;
+  }
+  async readSuppliedResult(identity: Omit<SuppliedCompletedResult, "answer">): Promise<SuppliedCompletedResult | undefined> {
+    if (!validSupplied({ ...identity, answer: "placeholder" })) throw Error("Invalid supplied result identity");
+    return this.#transaction(async state => {
+      const stored = state.suppliedResults?.find(item => suppliedKey(item) === suppliedKey(identity));
+      if (!stored || Date.now() - stored.updatedAt > RETENTION_MS) return undefined;
+      if (stored.requestFingerprint !== identity.requestFingerprint) throw Error("Web request changed within the same response operation");
+      const { answerHash: _hash, updatedAt: _time, ...result } = stored;
+      return Object.freeze(result);
+    });
+  }
+  async preserveSuppliedResult(result: SuppliedCompletedResult): Promise<boolean> {
+    if (!validSupplied(result)) return false;
+    return this.#transaction(async state => {
+      const key = suppliedKey(result);
+      const existing = state.suppliedResults?.find(item => suppliedKey(item) === key);
+      if (existing && (existing.requestFingerprint !== result.requestFingerprint || existing.answerHash !== sha(result.answer))) {
+        throw Error("Conflicting supplied response completion");
+      }
+      state.suppliedResults = [...(state.suppliedResults ?? []).filter(item => suppliedKey(item) !== key),
+        { ...result, answerHash: sha(result.answer), updatedAt: Date.now() }];
+      await this.#write(state);
+      return state.suppliedResults.some(item => suppliedKey(item) === key);
+    });
   }
   async completedReceipts(): Promise<readonly NativeVisiblePrefixStageReceipt[]> {
     return this.#transaction(async state => state.entries.filter(entry => entry.status === "completed")
