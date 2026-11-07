@@ -437,7 +437,12 @@ export function createElectronBrowserHost(input: {
         recordInspection("hide");
       },
       async close() {
-        if (closed) return;
+        // A previous close can have disposed observers but failed to destroy
+        // the owned window. Resume that last physical release on retry.
+        if (closed) {
+          if (!window.isDestroyed()) window.destroy();
+          return;
+        }
         closed = true;
         emitter.removeListener?.("page-title-updated", titleChanged);
         labelListeners.clear();

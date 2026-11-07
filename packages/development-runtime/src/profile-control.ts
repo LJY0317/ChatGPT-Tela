@@ -425,12 +425,13 @@ export function createChatGptProfileControl(input: {
         },
         async close() {
           if (surfaceClosed) return;
-          surfaceClosed = true;
           for (const unsubscribe of subscriptions) unsubscribe();
           subscriptions.clear();
-          if (!setupLeases.has(lease.leaseId)) return;
-          await input.browserHost.release(lease.leaseId);
-          setupLeases.delete(lease.leaseId);
+          if (setupLeases.has(lease.leaseId)) {
+            await input.browserHost.release(lease.leaseId);
+            setupLeases.delete(lease.leaseId);
+          }
+          surfaceClosed = true;
         },
       });
     },

@@ -496,14 +496,19 @@ export async function startElectronDevelopmentRuntime(
         checkpointController.abort(new Error("Electron checkpoint runtime stopped"));
         await Promise.allSettled([...checkpointRuns]);
         const failures: unknown[] = [];
+        let profileReleaseFailure: unknown;
         if (!profileControlClosed) {
           try { await profileControl.close(); profileControlClosed = true; }
-          catch (error) { failures.push(error); }
+          catch (error) { profileReleaseFailure = error; }
         }
         if (!runtimeClosed) {
           try { await runtime.stop(); runtimeClosed = true; }
           catch (error) { failures.push(error); }
         }
+        // Both layers own the same browser host. A successful runtime close
+        // drains remaining profile leases even if their earlier release failed.
+        if (runtimeClosed) profileControlClosed = true;
+        else if (profileReleaseFailure) failures.unshift(profileReleaseFailure);
         if (failures.length > 0) {
           throw new AggregateError(failures, "Electron development runtime did not fully close owned state");
         }

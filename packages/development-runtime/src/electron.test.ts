@@ -204,6 +204,31 @@ test("Electron input-only startup needs no Native source and exposes no Native M
   } finally { await runtime.stop(); }
 });
 
+test("Electron owned shutdown drains a failed window destroy before reporting cleanup complete", async () => {
+  let destroyAttempts = 0;
+  const windows: FakeWindow[] = [];
+  class FlakyWindow extends FakeWindow {
+    constructor(_input: BrowserWindowConstructorOptions) { super(); windows.push(this); }
+    override destroy() {
+      destroyAttempts++;
+      if (destroyAttempts === 1) throw Error("transient Electron window destroy failure");
+      super.destroy();
+    }
+  }
+  const runtime = await startElectronDevelopmentRuntime({
+    profileId: "failed-owned-window-fixture", mcp: {kind: "external", abi: "stable"},
+    electron: {async loadRuntime() {return {
+      app: {setPath() {}, async whenReady() {}}, BrowserWindow: FlakyWindow,
+    };}},
+  });
+  await runtime.openProfileSetupSurface({reveal: false});
+  await runtime.stop();
+  await runtime.stop();
+  expect(windows).toHaveLength(1);
+  expect(windows[0]?.destroyed).toBe(true);
+  expect(destroyAttempts).toBe(2);
+});
+
 describe("Electron development runtime composition", () => {
   test("context attachment canary owns one disposable non-Native surface and requires a proven receipt", async () => {
     const [, serverTransport] = InMemoryTransport.createLinkedPair();

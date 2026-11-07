@@ -23,6 +23,25 @@ test('profile control retains failed surface release for the next owned shutdown
   expect(releases).toBe(2);
 });
 
+test('a setup surface close can resume its own failed physical release', async () => {
+  let releases = 0;
+  const browserHost = {
+    async acquire({taskId, epochId}: {taskId: string; epochId: string}) {
+      return {taskId, epochId, leaseId: 'setup-retry', async navigate(){}, async reveal(){}, async hide(){}, capability(){return undefined;}};
+    },
+    async release() { if (++releases === 1) throw Error('transient close failure'); },
+    async close() {},
+  };
+  const control = createChatGptProfileControl({browserHost, provider: {
+    async observeCapabilities() {throw Error('unused');},
+  }});
+  const setup = await control.openProfileSetupSurface({reveal: false});
+  await expect(setup.close()).rejects.toThrow('transient close failure');
+  await setup.close();
+  await control.close();
+  expect(releases).toBe(2);
+});
+
 test('failed account lease preserves failure and emits bounded phase evidence', async () => {
   const rows: StructuralDiagnosticEvent[] = [];
   const stop = observeDiagnosticEvents(row => rows.push(row));
