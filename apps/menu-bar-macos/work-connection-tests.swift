@@ -12,14 +12,26 @@ let connected = TelaWorkProfile(slot: 1, targetDisplayName: "ChatGPT", targetSta
 state.loaded([connected]); precondition(state.error == nil && state.profiles[0].connected)
 precondition(connected.action == "stop")
 var appOwned = TelaWorkProfile(slot: 1, targetDisplayName: "ChatGPT", targetState: "running", targetSessionState: "independent", controlState: "running")
-precondition(!appOwned.connected)
+precondition(appOwned.connected && appOwned.action == "stop" && !appOwned.canReconnectWeb)
+precondition(TelaWebConnectionPresentation(profile: appOwned, wantedTargets: []).status != "Ready")
 appOwned.webState = "ready"; appOwned.webModelsReady = true
 precondition(appOwned.connected && appOwned.action == "stop")
 precondition(TelaWebConnectionPresentation(profile: appOwned, wantedTargets: []).status == "Ready")
 appOwned.webModelsReady = false
-precondition(!appOwned.connected)
-appOwned.webModelsReady = true; appOwned.webState = "failed"
-precondition(!appOwned.connected)
+precondition(appOwned.connected && appOwned.action == "stop" && appOwned.canReconnectWeb)
+precondition(appOwned.connectionLabel == "Models unavailable")
+precondition(TelaWebConnectionPresentation(profile: appOwned, wantedTargets: []).status == "Connection failed")
+appOwned.webState = "failed"
+precondition(appOwned.connected && appOwned.action == "stop" && appOwned.canReconnectWeb)
+precondition(appOwned.connectionLabel == "Connection failed")
+precondition(TelaWebConnectionPresentation(profile: appOwned, wantedTargets: []).buttonTitle == "Try Again")
+appOwned.webState = "login-required"
+precondition(appOwned.connected && appOwned.needsWebSignIn && appOwned.action == "stop")
+precondition(TelaWebPresentation(profile: appOwned).buttonTitle == "Sign in…")
+precondition(TelaWebConnectionPresentation(profile: appOwned, wantedTargets: []).status == "Sign-in required")
+appOwned.webState = "preparing"
+precondition(appOwned.connected && appOwned.action == "stop" && !appOwned.canReconnectWeb)
+precondition(TelaWebConnectionPresentation(profile: appOwned, wantedTargets: []).status == "Connecting…")
 let stoppedAppOwned = TelaWorkProfile(slot: 1, targetDisplayName: "ChatGPT", targetState: "running", targetSessionState: "independent", controlState: "stopped", webModelsReady: true, webState: "ready")
 precondition(!stoppedAppOwned.connected)
 precondition(TelaRequestBudget.seconds(path: "v1/codex/profiles", method: "GET") > 4)
