@@ -197,8 +197,9 @@ test("consented update interruption uses the owned Native endpoint and exact act
   const requestedSlots: number[] = [];
   const service = {
     serviceStatus: () => ({ contractVersion: 1, service: "codex", instanceId: "fixture-interrupt", state: "ready" }),
-    profiles: async () => [1, 2].map(slot => ({ slot, targetId: `target-${slot}`, targetDisplayName: `Profile ${slot}`,
-      targetState: "running", targetSessionState: "ready", controlState: slot === 1 ? "running" : "restart-required" })),
+    profiles: async () => [1, 2, 3].map(slot => ({ slot, targetId: `target-${slot}`, targetDisplayName: `Profile ${slot}`,
+      targetState: "running", targetSessionState: slot === 3 ? "independent" : "ready",
+      controlState: slot === 2 ? "restart-required" : "running" })),
     terminalSession: async (slot: number) => { requestedSlots.push(slot); return { contractVersion: 1, slot, endpoint: `ws://127.0.0.1:${native.port}` }; },
   } as unknown as CodexService;
   const http = await startCodexServiceHttpServer({ service });

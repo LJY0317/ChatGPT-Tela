@@ -5,6 +5,10 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
 import { startCodexService } from "./controller";
+import { startCodexServiceHttpServer } from "./http-server";
+import { resolveProductPaths } from "../../product-lifecycle/src/index";
+import { writeServiceRuntimeDescriptor } from "../../service-protocol/src/index";
+import { ownedServiceShutdown } from "../../../apps/packaged-launcher/src/service-shutdown";
 import type { CodexNativeTargetAdapter } from "./native-target";
 import { RoutedCodexTurnBridge } from "./routed-turn-bridge";
 import { startAppOwnedProductResponsesRuntime, loadProductProfileRuntimeConfig } from "../../development-runtime/src/product-profile";
@@ -56,6 +60,15 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     nativeTargetAdapter: adapter, profileRuntimeCommand: [process.execPath, join(root, "child.mjs")],
     webDelegationCapacity: async () => { delegationCalls++; return { total: { used: 1 }, uncertain: 1 }; } });
   const routed = service.tools as RoutedCodexTurnBridge;
+  const http = await startCodexServiceHttpServer({ service });
+  const paths = resolveProductPaths({ platform: "linux", home: root, environment: {} });
+  mkdirSync(paths.serviceRuntime("codex"), { recursive: true });
+  writeServiceRuntimeDescriptor(join(paths.serviceRuntime("codex"), "descriptor.json"), {
+    version: 1, service: "codex", instanceId: service.instanceId, installId: "fixture",
+    pid: process.pid, endpoint: http.endpoint.href, bearerToken: http.bearerToken,
+    startedAt: new Date().toISOString(),
+  });
+  const update = ownedServiceShutdown("fixture", paths);
   try {
     const first = await service.startProfile(1);
     expect(first).toMatchObject({ controlState: "running", webModelsReady: true,
@@ -66,10 +79,15 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     expect((await service.profiles())[0]).toMatchObject({ webModelsReady: true });
     expect(await service.shutdownReadiness()).toBe("ready");
     await service.waitForShutdownReadiness();
+    await update.prepare("codex");
+    await update.wait("codex");
     writeFileSync(state, JSON.stringify({ busy: true }));
     expect(await service.shutdownReadiness()).toBe("blocked");
+    await expect(update.prepare("codex")).rejects.toThrow();
+    await expect(update.wait("codex")).rejects.toThrow();
     await expect(service.stopProfile(1)).rejects.toThrow("not acknowledged");
     writeFileSync(state, JSON.stringify({ busy: false }));
+    await update.prepare("codex");
     expect(await service.stopProfile(1)).toMatchObject({ controlState: "stopped" });
     expect(readFileSync(receipts, "utf8")).toBe("1");
     expect(routed.routeCount).toBe(0);
@@ -93,7 +111,7 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     expect(service.activeProfileCount).toBe(1);
     expect(nativeCalls).toBe(0);
     expect(delegationCalls).toBe(0);
-  } finally { await service.close().catch(() => {}); rmSync(root, { recursive: true, force: true }); }
+  } finally { await http.close(); await service.close().catch(() => {}); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("app-owned primary keeps managed optional profiles in the inventory", async () => {

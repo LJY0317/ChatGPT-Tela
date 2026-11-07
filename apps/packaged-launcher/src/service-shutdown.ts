@@ -15,7 +15,9 @@ export async function interruptOwnedWork(installId: string, paths: ProductPaths,
     if (service === "codex") {
       const client = new CodexServiceClient(descriptorForService(current.descriptor, "codex"));
       for (const profile of await client.profiles()) {
-        if (profile.controlState !== "running") continue;
+        // An app-owned provider runs inside Tela, but its Native engine belongs
+        // to the official Desktop. It exposes no terminal that Tela may interrupt.
+        if (profile.controlState !== "running" || profile.targetSessionState === "independent") continue;
         const session = await client.terminalSession(profile.slot);
         count += await interruptLoadedAppServerTurns(session.endpoint, { signal: AbortSignal.timeout(PACKAGED_TRANSITION_TIMEOUT_MS) });
       }
