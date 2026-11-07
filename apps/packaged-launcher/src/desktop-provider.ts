@@ -50,7 +50,7 @@ export async function runPackagedDesktopProviderCommand(
     catalogStatus: result.catalogStatus,
     mode: mode.slice(2),
     providerId: TELA_APP_OWNED_PROVIDER_ID,
-    selection: "Registration does not change model_provider or the chosen model. "
+    selection: `Registration does not change model_provider or the chosen model. Catalog: ${result.catalogStatus}. `
       + "Select the provider explicitly in user-level Codex settings and normally restart Desktop to apply it.",
   });
 }
