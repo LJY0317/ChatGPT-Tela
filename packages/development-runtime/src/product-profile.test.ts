@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
@@ -14,6 +14,7 @@ import {
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import { appOwnedDesktopCatalogPath } from "./app-owned-desktop-catalog";
+import { readDefaultDesktopNativeCatalog, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
 import { startProfileBridgePreviewServer } from "../../../apps/profile-runtime/src/bridge-preview-server";
 import { startDevelopmentRuntime } from "./runtime";
@@ -537,14 +538,27 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-startup-roundtrip-"));
   const family = { key: chatGptWebFamilyKey("Startup fixture"), label: "Startup fixture", availableEfforts: ["medium"] as const };
   const preparationOrder: string[] = [];
-  const paths = resolveProductPaths({ platform: "linux", home: root, environment: {} });
-  const manifest = createOwnershipManifest("fixture", new Date(), "11111111-2222-4333-8444-555555555555");
-  writeOwnershipManifest(paths.installManifest, manifest);
+  const nativeReadMarker = join(root, ".codex", "catalog-read");
   let nativeCatalogReads = 0;
   let client: InstanceType<typeof Client> | undefined;
   let owned: Awaited<ReturnType<typeof startAppOwnedProductResponsesRuntime>> | undefined;
   let control = "";
   try {
+    mkdirSync(join(root, ".codex"), { recursive: true });
+    const chatExecutable = join(root, "ChatGPT");
+    const codexExecutable = join(root, "codex");
+    writeFileSync(chatExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    chmodSync(chatExecutable, 0o700);
+    const nativeCatalog = { object: "list", models: [{ slug: "official-native", visibility: "list", display_name: "Native",
+      supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] };
+    writeFileSync(codexExecutable, `#!/bin/sh\n: > "${nativeReadMarker}"\nprintf '%s\\n' '${JSON.stringify(nativeCatalog)}'\n`, { mode: 0o700 });
+    chmodSync(codexExecutable, 0o700);
+    const installation = resolveDefaultDesktopInstallation({ environment: {
+      CHATGPT_EXECUTABLE: chatExecutable, CODEX_EXECUTABLE: codexExecutable,
+    } });
+    const paths = resolveProductPaths({ platform: process.platform, home: root, environment: {} });
+    const manifest = createOwnershipManifest("fixture", new Date(), "11111111-2222-4333-8444-555555555555");
+    writeOwnershipManifest(paths.installManifest, manifest);
     const config = loadProductProfileRuntimeConfig(common(root));
     mkdirSync(config.browserProfile.userDataDir, { recursive: true });
     bindChatGptTelaAccount(config.browserProfile, "a".repeat(64));
@@ -578,6 +592,7 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
       return { responses, suppliedToolBridge: gateway.toolBridge,
         shutdownReadiness: () => gateway.shutdownReadiness(), prepareShutdown: () => gateway.prepareShutdown(),
         async prepareChatGptWebSession(input: any) {
+          preparationOrder.push(existsSync(nativeReadMarker) ? "native-catalog" : "native-catalog-missing");
           preparationOrder.push("web-account-and-discovery");
           input.onProfile?.({ account: { accountFingerprint: "a".repeat(64), accountStructure: "personal", containerFingerprint: "fixture" } });
           input.onFamilies?.([family]); input.onConnectorStarting?.(); input.onConnectorProven?.(); return { families: [family] };
@@ -588,12 +603,8 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
     }) as typeof import("./electron").startElectronDevelopmentRuntime;
     owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
       nativeFetch: async () => Response.json({ models: [] }),
-      catalogPreparation: { paths, installId: manifest.installId, async readNativeCatalog() {
-        nativeCatalogReads++;
-        preparationOrder.push("native-catalog");
-        return { models: [{ slug: "official-native", visibility: "list", display_name: "Native",
-          supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] };
-      } },
+      catalogPreparation: { paths, installId: manifest.installId,
+        async readNativeCatalog() { nativeCatalogReads++; return readDefaultDesktopNativeCatalog({ installation }); } },
     });
     expect(nativeCatalogReads).toBe(1);
     const prepared = JSON.parse(readFileSync(appOwnedDesktopCatalogPath(paths), "utf8"));
@@ -621,7 +632,6 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
   } finally {
     await client?.close();
     await owned?.stop();
-    if (nativeCatalogReads > 0) expect(readFileSync(appOwnedDesktopCatalogPath(paths), "utf8")).toContain("official-native");
     rmSync(root, { recursive: true, force: true });
   }
 });
