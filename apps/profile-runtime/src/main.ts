@@ -6,6 +6,7 @@ import {
   readChatGptTelaAccountBinding,
 } from "@chatgpt-tela/development-runtime";
 import { readProductConfigIfPresent } from "@chatgpt-tela/product-config";
+import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { app } from "electron";
 import { writeSync } from "node:fs";
 import { startProfileBridgePreviewServer, type ProfileBridgePreviewServer } from "./bridge-preview-server";
@@ -206,7 +207,11 @@ async function mainAppOwned(
     app.quit();
   })().catch(error => { stopping = undefined; throw error; });
   try {
-    runtime = await startAppOwnedProductResponsesRuntime({ config, ingress, signal: lifecycle.signal });
+    const installId = process.env.CHATGPT_TELA_INSTALL_ID;
+    runtime = await startAppOwnedProductResponsesRuntime({
+      config, ingress, signal: lifecycle.signal,
+      ...(installId ? { catalogPreparation: { paths: resolveProductPaths(), installId } } : {}),
+    });
     const owned = runtime;
     const web = owned.runtime;
     preview = await startProfileBridgePreviewServer({

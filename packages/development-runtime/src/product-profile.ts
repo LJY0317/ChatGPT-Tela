@@ -1,7 +1,7 @@
 import { checkpointPreparationPolicy, type CheckpointPreparationPolicy } from "./checkpoint-preparation-budget";
 import { verifyWebModelReadiness } from "./web-model-readiness";
 import { existsSync } from "node:fs";
-import { resolveOwnedNativeEngine, acquireNativeBackendOwnership, resolveProductPaths, type ProductPaths } from "@chatgpt-tela/product-lifecycle";
+import { resolveOwnedNativeEngine, acquireNativeBackendOwnership, type ProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import {
@@ -203,8 +203,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   let internalMcp: CodexBridgeMcpHttpServer | undefined;
   try {
     input.signal?.throwIfAborted();
-    const preparation = input.catalogPreparation ?? (process.env.CHATGPT_TELA_INSTALL_ID
-      ? { paths: resolveProductPaths(), installId: process.env.CHATGPT_TELA_INSTALL_ID } : undefined);
+    const preparation = input.catalogPreparation;
     const installation = preparation && !preparation.readNativeCatalog
       ? resolveDefaultDesktopInstallation({ environment: process.env }) : undefined;
     const nativeCatalog = preparation
