@@ -77,6 +77,51 @@ describe("controlled browser host", () => {
     expect(closes).toBe(1);
   });
 
+  test("failed close retains only unfinished surface ownership for the next shutdown", async () => {
+    const attempts: Record<string, number> = {};
+    const host = new ControlledBrowserHost(async ({taskId}) => ({
+      async navigate() {}, async reveal() {}, async hide() {},
+      async close() {
+        attempts[taskId] = (attempts[taskId] ?? 0) + 1;
+        if (taskId === "failed" && attempts[taskId] === 1) throw Error("temporary close failure");
+      },
+    }));
+    await host.acquire({ taskId: "failed", epochId: "one" });
+    await host.acquire({ taskId: "completed", epochId: "one" });
+    await expect(host.close()).rejects.toThrow("browser surface(s) failed to close");
+    expect(host.activeSurfaceCount).toBe(1);
+    expect(attempts).toEqual({failed: 1, completed: 1});
+    await host.close();
+    await host.close();
+    expect(host.activeSurfaceCount).toBe(0);
+    expect(attempts).toEqual({failed: 2, completed: 1});
+    await expect(host.acquire({taskId: "later", epochId: "one"})).rejects.toThrow("browser host is closed");
+  });
+
+  test("pending controller creation remains owned when its first shutdown close fails", async () => {
+    let completeCreation!: () => void;
+    const ready = new Promise<void>(resolve => { completeCreation = resolve; });
+    let closeAttempts = 0;
+    const host = new ControlledBrowserHost(async () => {
+      await ready;
+      return {async navigate() {}, async reveal() {}, async hide() {},
+        async close() {
+          closeAttempts++;
+          if (closeAttempts === 1) throw Error("first pending controller shutdown failed");
+        }};
+    });
+    const acquiring = host.acquire({taskId: "pending", epochId: "one"});
+    const refused = acquiring.then(() => false, () => true);
+    const first = host.close();
+    completeCreation();
+    expect(await refused).toBe(true);
+    await expect(first).rejects.toThrow("browser surface(s) failed to close");
+    expect(host.activeSurfaceCount).toBe(1);
+    await host.close();
+    expect(host.activeSurfaceCount).toBe(0);
+    expect(closeAttempts).toBe(2);
+  });
+
   test("owns one surface per task epoch and releases it through one lifecycle", async () => {
     const events: string[] = [];
     const fixtureCapability = createBrowserSurfaceCapability<{ value: string }>("fixture");

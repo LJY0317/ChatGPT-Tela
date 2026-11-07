@@ -109,7 +109,7 @@ export class ControlledBrowserHost implements BrowserHost {
       this.#leaseByKey.delete(owned.key);
       owned.detachLabel?.();
       this.#changed();
-    })();
+    })().catch(error => { delete owned.closing; throw error; });
     await owned.closing;
   }
 
@@ -126,14 +126,14 @@ export class ControlledBrowserHost implements BrowserHost {
           this.#creating.delete(key);
         }, () => { this.#creating.delete(key); })),
       ]);
-      this.#listeners.clear();
       const failures = results
         .filter((result): result is PromiseRejectedResult => result.status === "rejected")
         .map(result => result.reason);
       if (failures.length > 0) {
         throw new AggregateError(failures, `${failures.length} browser surface(s) failed to close`);
       }
-    })();
+      this.#listeners.clear();
+    })().catch(error => { this.#closing = undefined; throw error; });
     return this.#closing;
   }
 

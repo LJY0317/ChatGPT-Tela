@@ -349,18 +349,14 @@ test("app-owned production shutdown resumes a failed browser close through the H
   const temporary = await startLocalResponsesServer({ requestRouter: async () => new Response(null, { status: 404 }) });
   const ingress = { port: temporary.port, capability: "s".repeat(48) };
   await temporary.stop();
-  const realHost = new ControlledBrowserHost(async () => ({
-    async navigate() {}, async reveal() {}, async hide() {}, async close() {},
-  }));
   let browserCloseAttempts = 0;
-  const browserHost = {
-    acquire: realHost.acquire.bind(realHost), release: realHost.release.bind(realHost),
+  const browserHost = new ControlledBrowserHost(async () => ({
+    async navigate() {}, async reveal() {}, async hide() {},
     async close() {
       browserCloseAttempts++;
       if (browserCloseAttempts === 1) throw Error("transient owned browser close failure");
-      await realHost.close();
     },
-  };
+  }));
   const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
     const actual = await startDevelopmentRuntime({
       browserHost, mcp: options.mcp, planWebTurn: createNativeRequestDevelopmentWebTurnPlanner(),
@@ -384,6 +380,7 @@ test("app-owned production shutdown resumes a failed browser close through the H
   try {
     owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
       nativeFetch: async () => Response.json({ models: [] }) });
+    await browserHost.acquire({ taskId: "owned-browser-fixture", epochId: "one" });
     const firstUrl = owned.responses.baseUrl.href;
     const receiptFingerprint = createHash("sha256").update(firstUrl).digest("hex");
     preview = await startProfileBridgePreviewServer({ slot: config.slot, bearerToken: config.uiToken,
