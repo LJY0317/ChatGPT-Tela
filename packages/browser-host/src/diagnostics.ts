@@ -199,7 +199,7 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_pick
     // Reuse the existing failure-priority retention, with the same byte/age budget.
     const failure = (reason === "turn_failure" || reason === "completion_deferred" || reason === "identity_pending")
       ? { evidenceClass: "failure" as const } : {};
-    const record=(ref: string | undefined)=>{ if(ref) {retained++; capturedArtifactRefs.push(ref); registerPrivateDiagnosticArtifact(operation,ref);} else omitted++; };
+    const record=(ref: string | undefined)=>{ if(ref) {retained++; capturedArtifactRefs.push(ref); if (failure.evidenceClass === "failure") registerPrivateDiagnosticArtifact(operation,ref);} else omitted++; };
     if (typeof snapshot.html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.html),operationFingerprint:operation,captureScope:"document", ...failure }));
     if (typeof snapshot.focus_html==="string") record(writePrivateDiagnosticArtifact(root,{ kind:"html",bytes:Buffer.from(snapshot.focus_html),operationFingerprint:operation,captureScope:"latest_turn_shell", ...failure }));
     const preview=surface.capability(BROWSER_READ_ONLY_PREVIEW);

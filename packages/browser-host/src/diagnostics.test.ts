@@ -96,6 +96,26 @@ test("opt-in browser capture passes exact retained artifact refs into its incide
   expect(events.find(row=>row.stage==="private_capture_recorded")).toMatchObject({operation_fingerprint:operation,retained_count:3,omitted_count:0});
 });
 
+test("normal checkpoint capture does not register artifacts for a later failure incident", async () => {
+  const root=mkdtempSync(join(tmpdir(),"tela-checkpoint-registry-isolation-"));roots.push(root);
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=join(root,"events.jsonl");
+  const operation=diagnosticFingerprint("checkpoint-registry-isolation");
+  const surface={taskId:"checkpoint-task",epochId:"checkpoint-epoch",leaseId:"checkpoint-lease",async navigate(){},async reveal(){},async hide(){},
+    capability(cap:unknown){
+      if(cap===BROWSER_PAGE_AUTOMATION)return{async evaluate(){return{capture_safe:true,html:"<div>normal checkpoint</div>"};}};
+      if(cap===BROWSER_READ_ONLY_PREVIEW)return{async captureJpeg(){return new Uint8Array([5,6,7]);}};
+    }} as BrowserSurfaceLease;
+  const center=join(root,"diagnostics");setPrivateDiagnosticCapture(center,"until-disabled");
+  await withDiagnosticContext({operation_fingerprint:operation},()=>captureBrowserDiagnosticEvidence(surface,"before_submit"));
+  await withDiagnosticContext({operation_fingerprint:operation},()=>emitDiagnosticEvent("chatgpt_tela_work","web_turn_failed"));
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  const failure=listDiagnosticIncidents(center,true).find(item=>item.stage==="web_turn_failed");
+  expect(failure).toBeDefined();
+  const incident=readDiagnosticIncident(center,failure!.ref) as any;
+  expect(incident.privateArtifactCount).toBe(0);
+  expect(incident.availablePrivateArtifactCount).toBe(0);
+});
+
 
 test("approval checkpoints stay opt-in and pending/resolution each capture at most once per operation window", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-approval-capture-")); roots.push(root);
