@@ -175,6 +175,7 @@ export async function startDefaultDesktopAppServerProxy(input: {
       readonly media: NativeIngressPendingMedia;
       readonly generation: number;
     }>();
+    const seenMediaRpcIds = new Set<string>();
     const pendingLiveTurns = new Map<string, {
       readonly threadId: string;
       readonly generation: number;
@@ -238,7 +239,7 @@ export async function startDefaultDesktopAppServerProxy(input: {
         client_written_bytes: clientWrittenBytes, delivery: "socket_write_only" });
       pendingCatalog.clear(); pendingModelLists.clear(); pendingHistory.clear();
       remote.close();
-      pendingMedia.clear();
+      pendingMedia.clear(); seenMediaRpcIds.clear();
       pendingLiveTurns.clear(); seenLiveRpcIds.clear();
       finishedLiveTurns.clear(); startedLiveTurns.clear();
       liveTurnProof.retireOwner(state);
@@ -276,10 +277,12 @@ export async function startDefaultDesktopAppServerProxy(input: {
       }
       // Bind exactly one public turn/start submission to the app-server's
       // acknowledged turn identity. No bytes enter normal diagnostics or a file.
+      let observedKey: string | undefined;
       try {
         const parsed = JSON.parse(message);
+        observedKey = jsonRpcIdKey(parsed?.id);
         remote.response(parsed);
-        const key = jsonRpcIdKey(parsed?.id);
+        const key = observedKey;
         if (key) {
           const pendingLive = pendingLiveTurns.get(key);
           if (pendingLive) {
@@ -350,14 +353,14 @@ export async function startDefaultDesktopAppServerProxy(input: {
           && parsed.params.status.type !== "active") {
           liveTurnProof.retireThread(parsed.params.threadId);
         }
-      } catch (error) {
-        if (error instanceof SyntaxError) {
-          // Upstream transport still owns parsing unrelated JSON payloads.
-        } else {
-          transportFailure("server_to_client", "native_media_owner_unproven", 1008);
-          closeBoth(1008, "Native media owner cannot be established");
-          return;
+      } catch {
+        // Live-turn and media receipts are optional observations, not app-server
+        // response authority. Never disconnect Desktop for their failure.
+        if (observedKey) {
+          pendingLiveTurns.delete(observedKey);
+          pendingMedia.delete(observedKey);
         }
+        diagnostic("desktop_native_observation_unavailable", { direction: "server_to_client" });
       }
       message = augmentModelListResponse(message, pendingModelLists, input.augmentModelList);
       let catalogKey: string | undefined;
@@ -430,12 +433,17 @@ export async function startDefaultDesktopAppServerProxy(input: {
         closeBoth(isBinary ? 1003 : 1009, isBinary ? "text JSON required" : "message too large");
         return;
       }
-      let routed: string;
       let handshake: any;
-      let routingPhase = "request_tracking";
+      let observationKey: string | undefined;
       try {
         try { handshake = JSON.parse(message); } catch { /* Preserve unrelated upstream bytes. */ }
+        observationKey = jsonRpcIdKey(handshake?.id);
         remote.request(handshake);
+        const mediaIdAvailable = !!observationKey && !seenMediaRpcIds.has(observationKey)
+          && seenMediaRpcIds.size < 512;
+        // Any prior RPC with the same id can have a delayed reply. Never let
+        // such a reply authorize optional image evidence for a later turn.
+        if (mediaIdAvailable && observationKey) seenMediaRpcIds.add(observationKey);
         if (handshake?.method === "initialize") {
           permissionProfiles = handshake.params?.capabilities?.experimentalApi === true;
           clientKind = handshake.params?.clientInfo?.name === "chatgpt-tela" ? "tela_client" : "external_client";
@@ -456,6 +464,9 @@ export async function startDefaultDesktopAppServerProxy(input: {
         if (handshake?.method === "turn/start") {
           const key = jsonRpcIdKey(handshake.id);
           const threadId = handshake.params?.threadId;
+          // A reused request id cannot prove which of its acknowledgements owns media.
+          // Invalidate old pending evidence even if the new request has no images.
+          if (key && pendingMedia.has(key)) pendingMedia.delete(key);
           if (nativeLiveIdentity(threadId)) {
             // Starting a new Native turn on this exact thread invalidates an
             // older live Web owner even before the new RPC is acknowledged.
@@ -485,24 +496,42 @@ export async function startDefaultDesktopAppServerProxy(input: {
               });
             }
           }
-          routingPhase = "native_media";
           const media = prepareNativeIngressTurnMedia(handshake.params);
           if (media) {
-            const key = jsonRpcIdKey(handshake.id);
-            if (!key || pendingMedia.has(key) || pendingMedia.size >= 8) {
-              throw new Error("Native image ingress cannot bind one exact request");
+            if (!key || !mediaIdAvailable || pendingMedia.size >= 8) {
+              // Missing or ambiguous optional evidence must not reject the original turn/start.
+              diagnostic("desktop_native_media_owner_unavailable", { reason_class: "tracking_unavailable" });
+            } else {
+              pendingMedia.set(key, { media, generation: ingressMedia.generation });
             }
-            pendingMedia.set(key, { media, generation: ingressMedia.generation });
           }
+        } else if (observationKey) {
+          // An unrelated RPC reusing a pending id also makes its owner ambiguous.
+          pendingMedia.delete(observationKey);
+          pendingLiveTurns.delete(observationKey);
         }
-        routingPhase = "route_rewrite";
-        routed = rewriteDefaultDesktopAppServerRequest(message, input.route, { permissionProfiles });
+      } catch {
+        // Optional observation cannot turn a normal Native request into a failed
+        // routed request. Any uncertain receipt remains unproved.
+        if (observationKey) {
+          pendingMedia.delete(observationKey);
+          pendingLiveTurns.delete(observationKey);
+          if (seenMediaRpcIds.size < 512) seenMediaRpcIds.add(observationKey);
+          if (seenLiveRpcIds.size < 512) seenLiveRpcIds.add(observationKey);
+        }
+        if (handshake?.method === "turn/start" && nativeLiveIdentity(handshake.params?.threadId)) {
+          liveTurnProof.retireThread(handshake.params.threadId);
+        }
+        diagnostic("desktop_native_observation_unavailable", { direction: "client_to_server" });
       }
-      catch {
+      let routed: string;
+      try {
+        routed = rewriteDefaultDesktopAppServerRequest(message, input.route, { permissionProfiles });
+      } catch {
         const shape = (value: unknown): string => value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
         const method = handshake?.method;
         transportFailure("client_to_server", "invalid_routed_request", 1008, {
-          routing_phase: routingPhase,
+          routing_phase: "route_rewrite",
           method_class: ["initialize", "thread/read", "turn/start", "thread/start", "thread/resume", "thread/fork"].includes(method) ? method : "other",
           params_shape: shape(handshake?.params), config_shape: shape(handshake?.params?.config),
           providers_shape: shape(handshake?.params?.config?.model_providers),

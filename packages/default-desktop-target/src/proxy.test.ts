@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createDefaultDesktopResponsesRoute, TELA_DEFAULT_DESKTOP_PROVIDER_ID } from "./route";
 import { startDefaultDesktopAppServerProxy } from "./proxy";
+import { prepareNativeIngressTurnMedia } from "@chatgpt-tela/core";
 
 function openSocket(url: string): Promise<WebSocket> {
   const socket = new WebSocket(url);
@@ -37,6 +38,141 @@ test("official Remote replies pass unchanged and failures remain visible after h
 });
 
 describe("default Desktop route-preserving app-server proxy", () => {
+  test("full optional image registry never drops Native ACK or makes unowned evidence available", async () => {
+    const png = Buffer.from("89504e470d0a1a0a00000000", "hex");
+    const image = "data:image/png;base64," + png.toString("base64");
+    const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0,
+      fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, { status: 400 }); },
+      websocket: { message(socket, raw) {
+        const request = JSON.parse(String(raw));
+        socket.send(JSON.stringify({ id: request.id, result: {
+          turn: { id: "turn-" + request.id, threadId: request.params?.threadId },
+        } }));
+      } },
+    });
+    const events: string[] = [];
+    const proxy = await startDefaultDesktopAppServerProxy({
+      upstreamEndpoint: `ws://127.0.0.1:${upstream.port}/`,
+      route: createDefaultDesktopResponsesRoute({
+        baseUrl: "http://127.0.0.1:18741/v1", envKey: "TEST_KEY", credential: "x".repeat(48),
+      }),
+      onDiagnostic(stage) { events.push(stage); },
+    });
+    const socket = await openSocket(proxy.endpoint);
+    const exchange = (id: number, method: string, params: unknown) => {
+      const reply = new Promise<string>(resolve => socket.addEventListener("message",
+        event => resolve(String(event.data)), { once: true }));
+      socket.send(JSON.stringify({ id, method, params }));
+      return reply;
+    };
+    try {
+      // Exercise the real registry limit rather than stubbing an exception.
+      for (let i = 0; i < 8; i++) {
+        proxy.ingressMedia.accept(prepareNativeIngressTurnMedia({
+          threadId: "occupied-" + i, input: [{ type: "image", url: image }],
+        }), "occupied-turn-" + i);
+      }
+      const original = await exchange(91, "turn/start", {
+        threadId: "new-thread", input: [{ type: "image", url: image }],
+      });
+      expect(JSON.parse(original)).toEqual({
+        id: 91, result: { turn: { id: "turn-91", threadId: "new-thread" } },
+      });
+      expect(proxy.ingressMedia.current("new-thread", "turn-91")).toBeUndefined();
+      expect(events).toContain("desktop_native_observation_unavailable");
+      // The same socket still carries later official Native traffic.
+      expect(JSON.parse(await exchange(92, "thread/read", { threadId: "new-thread" })).id).toBe(92);
+      expect(events).not.toContain("desktop_transport_failed");
+    } finally { socket.close(); await proxy.close(); upstream.stop(true); }
+  });
+
+  test("reused turn/start RPC id drops ambiguous image ownership but forwards both ACKs", async () => {
+    const png = Buffer.from("89504e470d0a1a0a00000000", "hex");
+    const image = "data:image/png;base64," + png.toString("base64");
+    const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0,
+      fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, { status: 400 }); },
+      websocket: { message(socket, raw) {
+        const request = JSON.parse(String(raw));
+        socket.send(JSON.stringify({ id: request.id, result: { turn: {
+          id: "ack-" + request.params.threadId, threadId: request.params.threadId,
+        } } }));
+      } },
+    });
+    const events: string[] = [];
+    const proxy = await startDefaultDesktopAppServerProxy({
+      upstreamEndpoint: `ws://127.0.0.1:${upstream.port}/`,
+      route: createDefaultDesktopResponsesRoute({
+        baseUrl: "http://127.0.0.1:18741/v1", envKey: "TEST_KEY", credential: "x".repeat(48),
+      }),
+      onDiagnostic(stage) { events.push(stage); },
+    });
+    const socket = await openSocket(proxy.endpoint);
+    const exchange = (threadId: string) => {
+      const reply = new Promise<any>(resolve => socket.addEventListener("message",
+        event => resolve(JSON.parse(String(event.data))), { once: true }));
+      socket.send(JSON.stringify({ id: 9, method: "turn/start", params: {
+        threadId, input: [{ type: "image", url: image }],
+      } }));
+      return reply;
+    };
+    try {
+      expect((await exchange("first")).result.turn.id).toBe("ack-first");
+      expect(proxy.ingressMedia.current("first", "ack-first")?.assets).toHaveLength(1);
+      expect((await exchange("second")).result.turn.id).toBe("ack-second");
+      expect(proxy.ingressMedia.current("second", "ack-second")).toBeUndefined();
+      expect(events).toContain("desktop_native_media_owner_unavailable");
+      expect(events).not.toContain("desktop_transport_failed");
+    } finally { socket.close(); await proxy.close(); upstream.stop(true); }
+  });
+
+  test("optional request and response observation exceptions preserve original Native traffic", async () => {
+    const png = Buffer.from("89504e470d0a1a0a00000000", "hex");
+    const image = "data:image/png;base64," + png.toString("base64");
+    const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0,
+      fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, { status: 400 }); },
+      websocket: { message(socket, raw) {
+        const request = JSON.parse(String(raw));
+        socket.send(JSON.stringify({ id: request.id, result: { turn: {
+          id: "ack-" + request.id, threadId: request.params?.threadId,
+        } } }));
+      } },
+    });
+    const events: string[] = [];
+    const proxy = await startDefaultDesktopAppServerProxy({
+      upstreamEndpoint: `ws://127.0.0.1:${upstream.port}/`,
+      route: createDefaultDesktopResponsesRoute({
+        baseUrl: "http://127.0.0.1:18741/v1", envKey: "TEST_KEY", credential: "x".repeat(48),
+      }),
+      onDiagnostic(stage) { events.push(stage); },
+    });
+    const socket = await openSocket(proxy.endpoint);
+    const exchange = (id: number) => {
+      const reply = new Promise<any>(resolve => socket.addEventListener("message",
+        event => resolve(JSON.parse(String(event.data))), { once: true }));
+      socket.send(JSON.stringify({ id, method: "turn/start", params: {
+        threadId: "thread-" + id, input: [{ type: "image", url: image }],
+      } }));
+      return reply;
+    };
+    try {
+      Object.defineProperty(proxy.ingressMedia, "generation", {
+        configurable: true, get() { throw Error("simulated optional request observation failure"); },
+      });
+      expect((await exchange(101)).result.turn.id).toBe("ack-101");
+      expect(proxy.ingressMedia.current("thread-101", "ack-101")).toBeUndefined();
+      delete (proxy.ingressMedia as any).generation;
+      (proxy.ingressMedia as any).accept = () => {
+        throw Error("simulated optional response observation failure");
+      };
+      expect((await exchange(102)).result.turn.id).toBe("ack-102");
+      expect(proxy.ingressMedia.current("thread-102", "ack-102")).toBeUndefined();
+      expect((await exchange(103)).result.turn.id).toBe("ack-103");
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+      expect(events.filter(stage => stage === "desktop_native_observation_unavailable")).toHaveLength(3);
+      expect(events).not.toContain("desktop_transport_failed");
+    } finally { socket.close(); await proxy.close(); upstream.stop(true); }
+  });
+
   test("a reused JSON-RPC turn/start id cannot bind a delayed old engine ACK to a new Legacy thread", async () => {
     const diagnostics: Array<{ stage: string; reason: unknown }> = [];
     const upstream = Bun.serve({
