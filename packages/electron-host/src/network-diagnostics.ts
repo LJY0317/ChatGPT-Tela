@@ -53,7 +53,7 @@ export function retainRendererNetworkDiagnostics(
       // renderer and time, never attribute later requests to that original turn.
       const rendererContext = Object.fromEntries(Object.entries(context).filter(([key]) =>
         ["profile_fingerprint", "partition_fingerprint", "storage_fingerprint"].includes(key)
-        || (key === "surface_fingerprint" && !!target)));
+        || ((key === "surface_fingerprint" || key === "lease_fingerprint") && !!target)));
       withDiagnosticContext(rendererContext, () => {
         emitDiagnosticEvent("chatgpt_tela_browser", phase === "sent" ? "renderer_request_sent" : phase === "response" ? "renderer_response_started"
           : requestFailed || httpStatus === undefined ? "renderer_request_failed" : completedProviderPost ? "renderer_api_request_completed" : "renderer_http_failed", {

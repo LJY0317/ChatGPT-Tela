@@ -70,11 +70,14 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
     let key = directScope && directTurn ? `${directScope}:${directTurn}` : inferred;
     const surface = fp(row.surface_fingerprint);
     if (!key && row.event === "chatgpt_tela_browser" && surface) {
-      const owners = browserLeases.get(surface);
-      const owner = owners?.size === 1 ? [...owners][0] : undefined;
-      const plans = owner ? leasePlans.get(owner) : undefined;
-      const candidates = plans?.filter(plan => plan.at <= row.ts && plan.endAt !== undefined && row.ts <= plan.endAt);
-      if (candidates?.length === 1) key = candidates[0]!.key;
+      const lease = fp(row.lease_fingerprint);
+      const owners = [...(browserLeases.get(surface) ?? [])].filter(owner =>
+        !lease || owner.endsWith(`:${lease}`));
+      const scopes = new Set(owners.map(owner => owner.slice(0, 24)));
+      const candidates = (scopes.size === 1 ? owners : []).flatMap(owner => leasePlans.get(owner) ?? []);
+      const active = candidates
+        .filter(plan => plan.at <= row.ts && plan.endAt !== undefined && row.ts <= plan.endAt);
+      if (active.length === 1) key = active[0]!.key;
     }
     if (!key) { if(fp(row.operation_fingerprint)&&/^(mcp_native_result_projected|tool_settled)$/.test(row.stage))unattributedOperationEvents++; if (/checkpoint|web_turn_plan|http_transport_closed/.test(row.stage)) unattributedEvents++; continue; }
     const [scope, turn] = key.split(":");

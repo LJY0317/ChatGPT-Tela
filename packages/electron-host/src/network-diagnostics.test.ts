@@ -21,7 +21,7 @@ test("shared renderer network observation records provider POST completion and f
     origin: { profile_fingerprint: profile, surface_fingerprint: diagnosticFingerprint("first") } });
   const second = retainRendererNetworkDiagnostics(session as any, { webContentsId: 2,
     origin: { profile_fingerprint: profile, surface_fingerprint: diagnosticFingerprint("second"),
-      request_fingerprint: diagnosticFingerprint("old-request") } });
+      lease_fingerprint: diagnosticFingerprint("second-lease"), request_fingerprint: diagnosticFingerprint("old-request") } });
   try {
     expect(registrations).toBe(4);
     const request = { id: 9, webContentsId: 2, url: "https://chatgpt.com/backend-api/private-conversation?token=secret",
@@ -42,7 +42,7 @@ test("shared renderer network observation records provider POST completion and f
     });
     expect(rows.at(-1)).toMatchObject({ stage: "renderer_request_failed", domain_class: "chatgpt",
       route_class: "provider_api", route_fingerprint: diagnosticFingerprint("/backend-api/private-conversation"), failure_class: "err_connection_reset", surface_correlated: true,
-      surface_fingerprint: diagnosticFingerprint("second") });
+      surface_fingerprint: diagnosticFingerprint("second"), lease_fingerprint: expect.any(String) });
     expect(rows.at(-1)).not.toHaveProperty("request_fingerprint");
     expect(rows.at(-1)!.network_request_fingerprint).toBe(responseRequest);
     completed!({ ...request, statusCode: 429 });
