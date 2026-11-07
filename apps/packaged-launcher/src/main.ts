@@ -16,6 +16,7 @@ import { LIFECYCLE_WORKER_ENV, runIndependentLifecycleProcess } from "./lifecycl
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { runPackagedWorkCommand } from "./work";
 import { readConfigurationInput, runPackagedBootstrapCommand } from "./bootstrap";
+import { runPackagedDesktopProviderCommand } from "./desktop-provider";
 import { runPackagedChatCommand } from "./chat";
 import { runPackagedServicesCommand } from "./services";
 import { runPackagedDesktopProviderCommand } from "./desktop-provider";
@@ -28,6 +29,7 @@ Usage:
   chatgpt-tela configure --file <product-config.json>
   chatgpt-tela configure --stdin [--if-missing]
   chatgpt-tela setup [--slot <profile>]
+  chatgpt-tela desktop-provider <register|restore> <--dry-run|--apply>
   chatgpt-tela ingress status --public [--public-dns-url <DNS-JSON-URL>]
   chatgpt-tela services <start|stop>
   chatgpt-tela services start chat
@@ -182,6 +184,13 @@ async function main(): Promise<void> {
   if (args[0] === "install" || args[0] === "repair" || args[0] === "upgrade" || args[0] === "cancel-upgrade") {
     const result = await runPackagedLifecycleCommand(args, {
       defaultPayloadRoot: payloadRootForLauncherExecutable(),
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (args[0] === "desktop-provider") {
+    const result = await runPackagedDesktopProviderCommand(args, {
+      payloadRoot: payloadRootForLauncherExecutable(), launcherExecutablePath: process.execPath,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
