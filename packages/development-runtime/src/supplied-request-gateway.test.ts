@@ -178,6 +178,63 @@ test("failed final preservation leaves undelivered completion blocking shutdown"
   } finally { await f.gateway.close(); }
 });
 
+test("exact host rejoin preserves a completed final after a transient storage failure", async () => {
+  let writes = 0;
+  const stored: string[] = [];
+  const f = fixture({ completedResults: { profileSlot: 2, accountFingerprint: "b".repeat(64),
+    store: {
+      async readSuppliedResult() { return undefined; },
+      async preserveSuppliedResult(result) {
+        writes++;
+        if (writes === 1) throw Error("synthetic storage unavailable");
+        stored.push(result.answer);
+        return true;
+      },
+    },
+  } });
+  try {
+    const first = await f.gateway.handle(request());
+    expect(first).toMatchObject({ type: "final", answer: "A inspected." });
+    expect(f.gateway.shutdownReadiness()).toBe("blocked");
+    const replay = await f.gateway.handle(request());
+    expect(replay).toEqual(first);
+    expect(writes).toBe(2);
+    expect(stored).toEqual(["A inspected."]);
+    expect(f.submissions).toHaveLength(1);
+    expect(f.gateway.shutdownReadiness()).toBe("ready");
+  } finally { await f.gateway.close(); }
+});
+
+test("account changes during Web execution do not persist a final, while HTTP still returns success", async () => {
+  let release!: () => void, started!: () => void, account = "a".repeat(64), preserved = 0;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  const submitted = new Promise<void>(resolve => { started = resolve; });
+  const f = fixture({ wait, onSubmit: started, completedResults: () => ({
+    profileSlot: 2, accountFingerprint: account,
+    store: {
+      async readSuppliedResult() { return undefined; },
+      async preserveSuppliedResult() { preserved++; return true; },
+    },
+  }) });
+  const wire = new Request("http://127.0.0.1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...request(), stream: false }),
+  });
+  try {
+    const pending = handleNativeResponsesHttp(wire, f.gateway);
+    await submitted;
+    account = "b".repeat(64);
+    release();
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(f.gateway.shutdownReadiness()).toBe("blocked");
+    expect(JSON.stringify(await response.json())).toContain("A inspected.");
+    expect(preserved).toBe(0);
+    expect(f.gateway.shutdownReadiness()).toBe("ready");
+    expect(f.submissions).toHaveLength(1);
+  } finally { release(); await f.gateway.close(); }
+});
+
 test("input-only continuation uses the existing exact retained-delta planner and physical page", async () => {
   const f = fixture();
   try {

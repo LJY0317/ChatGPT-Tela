@@ -164,6 +164,22 @@ export function createSuppliedRequestGateway(input: {
           if (!operation.armContinuation) throw Error("Web tool continuation was not submitted");
           await operation.armContinuation(outstanding.invocation.callId);
           operation.round.release(outstanding.invocation.callId);
+        } else if (operation.finishedAt !== undefined && !operation.failed && !operation.preserved
+          && !operation.delivered && resultIdentity) {
+          // Exact reconnection can preserve an already completed result after
+          // a failed write; the Web model must not be submitted again.
+          const final = await operation.webRun;
+          if (final?.type === "final") {
+            try {
+              operation.preserved = await completedResults!.store.preserveSuppliedResult({
+                ...resultIdentity, answer: final.answer,
+              });
+            } catch (error) {
+              emitDiagnosticEvent("chatgpt_tela_work", "provider_result_preservation_failed", {
+                scope_fingerprint: diagnosticFingerprint(identity.threadId), ...diagnosticFailureFields(error),
+              });
+            }
+          }
         }
       } else {
         if (operation && operation.finishedAt === undefined) throw new Error("This Web conversation still has an unfinished response");
