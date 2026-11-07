@@ -16,10 +16,23 @@ chatgpt-tela desktop-provider restore --apply
 ```
 
 The command requires an installed product receipt, the configured fixed
-Responses port and capability, and an existing regular official Codex
-`config.toml` in its user-level home. It never creates or rewrites the
-user's default `model_provider`, `model`, `model_catalog_json`, or
-`openai_base_url`. It adds only the dedicated
+Responses port and capability, an existing regular official Codex
+`config.toml` in its user-level home, and a prepared install-owned model
+catalog. The installed profile runtime prepares that catalog after Native
+catalog reading and account-bound Web model discovery succeed. It is stored
+at the install state path `install/desktop-model-catalog/models.json`, tracked
+as the `app-owned-desktop-model-catalog` directory resource in the existing
+ownership manifest, and validated against its ownership marker before the
+registration command reads it. The producer is compiled into the installed
+profile runtime and the reader into the packaged launcher, so neither needs
+a development checkout or separately installed helper.
+
+Registration never changes the user's default `model_provider`, `model`, or
+`openai_base_url`. It installs the top-level `model_catalog_json` only when
+that key is unoccupied, and marks the exact value with the install ID and a
+path fingerprint. Existing foreign catalog values are preserved and reported
+as `foreign-preserved`; in that case registration does not claim the Web
+catalog was connected. It adds only the dedicated
 `[model_providers.chatgpt_tela_local]` stanza, with an install-ID comment
 marking its exact ownership. Unknown or edited provider definitions block
 registration/restoration. Reapplying the same owned stanza is a no-op;
@@ -35,8 +48,8 @@ this header does not verify Native compatibility.
 they must deliberately select `chatgpt_tela_local` in their user-level
 Codex configuration and choose a model admitted by that engine. The
 registration command cannot promise the Desktop UI exposes a provider
-picker, and it does not install a model catalog. The app-owned Responses
-runtime must also be running on its configured port. A normal Desktop
+picker. The app-owned Responses runtime must also be running on its configured
+port. A normal Desktop
 restart may be needed to load config changes; hot reload is not assumed.
 Tela's existing uninstall path now restores the exact install-marked provider
 stanza automatically. When top-level or named-profile `model_provider` selects

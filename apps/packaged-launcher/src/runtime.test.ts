@@ -254,6 +254,7 @@ describe("packaged service launcher", () => {
         pathOptions,
       });
       expect(codex.executable).toBe(join(installedRoot, "services", "codex"));
+      expect(codex.environment.CHATGPT_TELA_INSTALL_ID).toBe(readOwnershipManifest(paths.installManifest)!.installId);
       expect(codex.environment.CHATGPT_TELA_PRODUCT_PROFILE_RUNTIME_EXECUTABLE)
         .toBe(join(installedRoot, "electron", "bin", "electron"));
       expect(codex.environment.CHATGPT_TELA_PRODUCT_PROFILE_RUNTIME_ENTRYPOINT)
