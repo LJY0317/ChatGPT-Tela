@@ -19,7 +19,6 @@ import { readConfigurationInput, runPackagedBootstrapCommand } from "./bootstrap
 import { runPackagedDesktopProviderCommand } from "./desktop-provider";
 import { runPackagedChatCommand } from "./chat";
 import { runPackagedServicesCommand } from "./services";
-import { runPackagedDesktopProviderCommand } from "./desktop-provider";
 import { runPackagedDiagnosticsCommand } from "./diagnostics";
 import { runMaintenanceCommand, openMaintenanceWindow, cleanupMaintenanceWindow } from "./maintenance";
 

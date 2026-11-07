@@ -16,6 +16,9 @@ const option = (name: string): string | undefined => {
 };
 const engine = resolve(option("--engine")!);
 const catalogPath = resolve(option("--catalog")!);
+const configuredHome = option("--configured-home");
+const configuredModel = option("--configured-model");
+const expectedNativeModel = option("--expected-native-model");
 const imageEffort = process.argv.includes("--image-effort");
 const interrupt = process.argv.includes("--interrupt");
 const inspectTools = process.argv.includes("--inspect-tools");
@@ -36,11 +39,12 @@ assert(!(pluginEnabled && pluginDisabled), "select one plugin MCP enablement con
 assert(!pluginFixture || (!mcpEnabled && !mcpDisabled && inspectTools), "plugin case requires standalone tool inspection");
 assert(!(mcpEnabled || mcpDisabled) || inspectTools, "MCP control requires tool inspection");
 const root = mkdtempSync(join(tmpdir(), "tela-official-tool-roundtrip-"));
-const home = join(root, "home"); mkdirSync(home);
+const home = configuredHome ? resolve(configuredHome) : join(root, "home");
+if (!configuredHome) mkdirSync(home);
 if (firstPartyAuth) writeFileSync(join(home, "auth.json"), JSON.stringify({
   auth_mode: "apikey", OPENAI_API_KEY: "synthetic-fixture-key", tokens: null,
 }));
-const model = firstPartyAuth ? "gpt-6-sol" : chatGptWebModelId(chatGptWebFamilyKey("Official Tool Roundtrip Fixture"));
+const model = configuredModel ?? (firstPartyAuth ? "gpt-6-sol" : chatGptWebModelId(chatGptWebFamilyKey("Official Tool Roundtrip Fixture")));
 const providerId = firstPartyAuth ? "chatgpt_tela_local" : "fixture";
 const original = JSON.parse(readFileSync(catalogPath, "utf8")) as { models: Record<string, unknown>[] };
 const template = original.models[0]!;
@@ -80,7 +84,7 @@ let imageMatched = 0, effortMatched = 0, providerRequestClosed = false;
 let missingFirstPartyAuth = 0;
 let markBlocked!: () => void;
 const blockedRequest = new Promise<void>(resolve => { markBlocked = resolve; });
-const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+const server = Bun.serve({ hostname: "127.0.0.1", port: Number(option("--provider-port") ?? 0), async fetch(request) {
   if (firstPartyAuth && request.headers.get("authorization") !== "Bearer synthetic-fixture-key") {
     missingFirstPartyAuth++;
     return Response.json({ error: { message: "Fixture requires synthetic first-party authorization" } }, { status: 401 });
@@ -225,7 +229,7 @@ const providerConfig = [
     `enabled = ${pluginEnabled}`,
   ] : []),
 ].join("\n");
-writeFileSync(join(home, "config.toml"), firstPartyAuth
+if (!configuredHome) writeFileSync(join(home, "config.toml"), firstPartyAuth
   ? editAppOwnedDesktopProviderConfig(providerConfig, "register", {
     installId: "a7f1e18d-6020-4f0c-9684-c4370a8dd58f",
     baseUrl: `${server.url}${"a".repeat(48)}/v1`,
@@ -284,6 +288,8 @@ try {
   const catalog = await rpc("model/list", { includeHidden: true });
   assert(catalog.data.some((item: any) => item.model === model),
     `synthetic model not listed (available=${catalog.data.map((item: any) => item.model).join(",")})`);
+  if (expectedNativeModel) assert(catalog.data.some((item: any) => item.model === expectedNativeModel),
+    "the original Native model must coexist with the configured Web family");
   const started = await rpc("thread/start", { model, modelProvider: providerId, cwd: root,
     approvalPolicy: "never", sandbox: "danger-full-access", historyMode: "paginated",
     ephemeral: false, baseInstructions: "Execute only the supplied synthetic printf tool call." });
@@ -327,6 +333,7 @@ try {
   if (imageEffort) { assert.equal(imageMatched, 2); assert.equal(effortMatched, 2); }
   const proof = { engineVersion: execFileSync(engine, ["--version"], { encoding: "utf8" }).trim(),
     publicAppServer: true, syntheticProvider: true, firstPartyAuth, responseUsage: null, requestCount,
+    productionConfigConsumed: Boolean(configuredHome), nativeModelVisible: Boolean(expectedNativeModel),
     toolInspection: inspectTools, modelToolMode: defaultToolMode ? null : "direct",
     declaration,
     ...(inspectTools ? { modelVisibleToolNames: mcpDeclaredTools } : {}),
