@@ -1,5 +1,5 @@
 import { diagnosticContext } from "./diagnostic-context";
-import { configuredDiagnosticRoot, diagnosticFingerprint, emitDiagnosticEvent } from "./diagnostic-events";
+import { configuredDiagnosticRoot, diagnosticFingerprint, emitDiagnosticEvent, registerPrivateDiagnosticArtifact } from "./diagnostic-events";
 import { privateDiagnosticCaptureEnabled, privateDiagnosticCaptureStatus, writePrivateDiagnosticArtifact } from "./diagnostic-store";
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -44,6 +44,7 @@ export function capturePrivateDiagnosticValue(phase: "tool_request" | "tool_resu
     if(bytes.length>256*1024) { emitDiagnosticEvent("chatgpt_tela_diagnostics", "private_capture_omitted", { phase, reason_class: "byte_budget", requested_bytes: bytes.length }); return; }
     const ref=writePrivateDiagnosticArtifact(root,{kind:"json",bytes,operationFingerprint:operation,
       evidenceClass: failure ? "failure" : "trace"});
+    if (ref && failure) registerPrivateDiagnosticArtifact(operation, ref);
     // A writer return is a local retention claim, not model receipt. Verify only
     // private metadata and file size; never read the captured body into diagnostics.
     let verified = false;

@@ -30,7 +30,15 @@ export function observeDiagnosticEvents(observer: (event: StructuralDiagnosticEv
   return () => { observers.delete(observer); };
 }
 const pendingIncidents = new Map<string, { root: string; stage: string; observedAt: string; firstObservedAt: string; timeline: StructuralDiagnosticEvent[]; occurrences: number; failure: StructuralDiagnosticEvent; bytes: number }>();
+const privateArtifactRefs = new Map<string, Set<string>>();
 let pendingIncidentBytes = 0;
+/** Keep the exact local artifact receipt with the operation that produced it until its failure incident is written. */
+export function registerPrivateDiagnosticArtifact(operation: string, ref: string): void {
+  if (!/^[a-f0-9]{24,64}$/.test(operation) || !/^artifact_[0-9a-f-]{36}$/.test(ref)) return;
+  const refs = privateArtifactRefs.get(operation) ?? new Set<string>();
+  refs.add(ref);
+  privateArtifactRefs.set(operation, refs);
+}
 function scheduleIncident(root: string, event: StructuralDiagnosticEvent) {
   const key = `${root}\n${diagnosticFailureIncidentRef(event)}`;
   const previous = pendingIncidents.get(key);
@@ -50,7 +58,13 @@ function scheduleIncident(root: string, event: StructuralDiagnosticEvent) {
     const incident = pendingIncidents.get(key); pendingIncidents.delete(key);
     if (incident) {
       pendingIncidentBytes -= incident.bytes;
-      try { const { root: target, bytes: _bytes, ...record } = incident; writeDiagnosticIncident(target, record); } catch { /* Best effort. */ }
+      try {
+        const { root: target, bytes: _bytes, ...record } = incident;
+        const operation = incident.failure.operation_fingerprint;
+        const capturedArtifactRefs = typeof operation === "string" ? [...(privateArtifactRefs.get(operation) ?? [])] : [];
+        if (typeof operation === "string") privateArtifactRefs.delete(operation);
+        writeDiagnosticIncident(target, { ...record, capturedArtifactRefs });
+      } catch { /* Best effort. */ }
     }
   });
 }
