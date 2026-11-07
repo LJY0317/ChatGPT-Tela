@@ -17,6 +17,12 @@ export const DIAGNOSTIC_DOM_CAPTURE = String.raw`function(privateCapture) {
   // from a changed renderer marker without exposing text, attributes or turn identifiers.
   const groups = [...document.querySelectorAll('[data-turn-key]')];
   result.keyed_turn_count = groups.length;
+  // The host hashes this local renderer key before publishing structural evidence.
+  // It relates the focused HTML/JPEG to the accepted assistant failure witness.
+  const focused = groups.at(-1);
+  if (typeof focused?.getAttribute === 'function') {
+    result.focus_turn_key = focused.getAttribute('data-turn-key') || undefined;
+  }
   // Independent renderer facts help diagnose a stalled phase/lineage projection.
   // They do not prove task ownership or authorize completion or approval.
   const visible = node => node.getClientRects().length > 0
@@ -163,6 +169,9 @@ async function captureEvidence(surface: BrowserSurfaceLease, reason: "model_pick
     fields.html_truncated=snapshot.html_truncated===true;
     fields.focus_html_truncated=snapshot.focus_html_truncated===true;
     fields.focus_capture_present=typeof snapshot.focus_html==="string";
+    if (typeof snapshot.focus_turn_key==="string" && snapshot.focus_turn_key.length<=256) {
+      fields.focused_assistant_fingerprint=diagnosticFingerprint("assistant:"+snapshot.focus_turn_key);
+    }
     fields.shell_probe_available=snapshot.shell_probe_available===true;
     fields.progress_branch_probe_available=snapshot.progress_branch_probe_available===true;
     emitDiagnosticEvent("chatgpt_tela_browser","browser_snapshot_observed",fields);

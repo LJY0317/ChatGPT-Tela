@@ -86,6 +86,7 @@ function observeProviderFailure(detail: string | undefined, snapshot: ChatGptSur
   emitDiagnosticEvent("chatgpt_tela_work", "web_provider_failure_detail_classified", {
     ...tracked.diagnosticLineage,
     phase, assistant_phase: "failed",
+    ...(matched.length === 1 ? { assistant_fingerprint: diagnosticFingerprint(matched[0]!.key) } : {}),
     reason_class: webProviderFailureReason(detail),
     detail_chars: detail?.length ?? 0,
     detail_available: !!detail,

@@ -1126,6 +1126,47 @@ describe("current ChatGPT DOM surface driver", () => {
     },
   );
 
+  test("an alert inside a different authored answer branch cannot fail a completed turn", async () => {
+    const finalBody = new FixtureElement(); finalBody.textContent = "synthetic completed answer";
+    const alternateBody = new FixtureElement();
+    const authoredAlert = new FixtureElement({ role: "alert" });
+    authoredAlert.innerText = "synthetic quoted alert";
+    alternateBody.contains = node => node === alternateBody || node === authoredAlert;
+    const independentAlert = new FixtureElement({ role: "alert" });
+    independentAlert.innerText = "Failed to fetch";
+    const group = new FixtureElement({ "data-turn-key": "same-turn-branches" }, {
+      '[data-user-message-bubble]': [new FixtureElement()],
+      '[data-markdown-text-style="assistant-message"]': [finalBody, alternateBody],
+      '[role="alert"]': [authoredAlert],
+      'button[data-testid="copy-turn-action-button"]': [new FixtureElement()],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, {
+      '[data-turn-key]': [group],
+    })));
+    expect((await driver.observe()).turns.find(item => item.role === "assistant")).toMatchObject({
+      phase: "complete",
+    });
+    group.selectors['[role="alert"]'] = [authoredAlert, independentAlert];
+    expect((await driver.observe()).turns.find(item => item.role === "assistant")).toMatchObject({
+      phase: "failed", failureDetail: "Failed to fetch",
+    });
+  });
+
+  test("an alert inside alternate user authored content cannot fail the assistant", async () => {
+    const authoredUser = new FixtureElement({ "data-conversation-role": "user" });
+    const alert = new FixtureElement({ role: "alert" }); alert.innerText = "quoted warning";
+    authoredUser.contains = node => node === authoredUser || node === alert;
+    const group = new FixtureElement({ "data-turn-key": "user-authored" }, {
+      '[data-user-message-bubble]': [new FixtureElement()],
+      '[data-conversation-role="user"]': [authoredUser],
+      '[role="alert"]': [alert],
+    });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, {
+      '[data-turn-key]': [group],
+    })));
+    expect((await driver.observe()).turns.some(turn => turn.role === "assistant" && turn.phase === "failed")).toBe(false);
+  });
+
   test("retained assistant body survives hidden action controls during a follow-up", async () => {
     const body = new FixtureElement(); body.innerText = "synthetic committed answer";
     const copy = new FixtureElement();

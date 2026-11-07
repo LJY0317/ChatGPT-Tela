@@ -58,7 +58,7 @@ interface RawTurn {
   readonly text?: string;
   readonly failureDetail?: string;
   readonly publicProgress?: readonly string[];
-  readonly progressProbe?: { readonly failureCandidateCount?: number; readonly failureEligibleCount?: number; readonly failureApprovalCount?: number; readonly failureStopVisible?: boolean; readonly completionControlsPresent?: boolean; readonly failureSource?: "alert" | "provider_marker" | "none"; readonly answerBodyCount?: number; readonly visibleAnswerBodyCount?: number; readonly answerBodyOutsideProgress?: boolean; readonly answerBodyAnimated?: boolean; readonly answerProsePresent?: boolean; readonly answerBlockCount?: number; readonly unmappedVisibleProsePresent?: boolean; readonly linkedRegionCount?: number; readonly visibleLinkedRegionCount?: number; readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
+  readonly progressProbe?: { readonly failureCandidateCount?: number; readonly failureEligibleCount?: number; readonly failureVisibleEligibleCount?: number; readonly failureApprovalCount?: number; readonly failureAuthoredRootCount?: number; readonly failureGroupLatest?: boolean; readonly failureActionControlCount?: number; readonly failureRetryVisible?: boolean; readonly failureStopVisible?: boolean; readonly completionControlsPresent?: boolean; readonly failureSource?: "alert" | "provider_marker" | "none"; readonly answerBodyCount?: number; readonly visibleAnswerBodyCount?: number; readonly answerBodyOutsideProgress?: boolean; readonly answerBodyAnimated?: boolean; readonly answerProsePresent?: boolean; readonly answerBlockCount?: number; readonly unmappedVisibleProsePresent?: boolean; readonly linkedRegionCount?: number; readonly visibleLinkedRegionCount?: number; readonly shellSearchDepth?: number; readonly shellCandidateCount?: number; readonly containerPresent: boolean; readonly anchorCount: number; readonly titleCount: number; readonly descriptionCount: number; readonly containerVisible: boolean; readonly markerCount: number; readonly agentShellEligible: boolean; readonly visibleAnchorCount: number; readonly controlCount: number; readonly visibleControlCount: number; readonly localLabelCount: number; readonly visibleLabelCount: number; readonly containerDisplay: "none" | "contents" | "other"; readonly containerVisibilityHidden: boolean; readonly containerOpacityZero: boolean; readonly containerHasRects: boolean; readonly ownedControlCount: number; readonly ownedVisibleControlCount: number; readonly ownedLocalLabelCount: number; readonly ownedVisibleLabelCount: number };
 }
 
 interface RawSnapshot {
@@ -961,10 +961,21 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
     // is not a provider failure. Keep independent errors outside those roots.
     const errorCandidates = [...group.querySelectorAll('[data-message-error], [data-testid="message-error"], [role="alert"]')];
     const approvalRoots = [...group.querySelectorAll('${APPROVAL_SURFACE_SELECTOR}')];
-    const nonFailureRoots = [user, answerBody, progressRoot, ...approvalRoots].filter(Boolean);
+    // Error-looking prose inside any authored branch belongs to that branch.
+    // The first selected answer is not the only answer that can be rendered.
+    const authoredUserRoots = [...group.querySelectorAll(
+      '[data-user-message-bubble], [data-message-author-role="user"], [data-conversation-role="user"], [data-markdown-text-style="user-message"]')];
+    const nonFailureRoots = [...authoredUserRoots, ...answerCandidates, progressRoot, ...approvalRoots].filter(Boolean);
     const providerErrors = errorCandidates.filter(node => !nonFailureRoots.some(root => root.contains(node)));
     const failure = providerErrors.find(node => progressVisible(node)
       && (node.getAttribute('role') !== 'alert' || !stopVisible));
+    // Failure-shape diagnostics stay attached to the exact keyed assistant.
+    // They do not read or publish the error text or authorize a retry.
+    const errorShell = failure?.parentElement && failure.parentElement !== group && group.contains(failure.parentElement)
+      ? failure.parentElement : failure;
+    const errorControls = errorShell ? [...errorShell.querySelectorAll('button,[role="button"]')] : [];
+    const retryVisible = errorControls.some(node => progressVisible(node)
+      && /^(?:retry|try again)$/i.test((node.getAttribute('aria-label') || text(node)).trim()));
     if (assistantBody || progressRoot || failure) {
       // A keyed turn can contain both the user's Copy message control and an
       // unfinished assistant body. User-owned actions cannot settle the answer.
@@ -1028,7 +1039,12 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         progressProbe: {
           failureCandidateCount: Math.min(65, errorCandidates.length),
           failureEligibleCount: Math.min(65, providerErrors.length),
+          failureVisibleEligibleCount: Math.min(65, providerErrors.filter(progressVisible).length),
           failureApprovalCount: Math.min(65, errorCandidates.filter(node => approvalRoots.some(root => root.contains(node))).length),
+          failureAuthoredRootCount: Math.min(65, new Set(answerCandidates).size),
+          failureGroupLatest: group === groups.at(-1),
+          failureActionControlCount: Math.min(65, errorControls.length),
+          failureRetryVisible: retryVisible,
           failureStopVisible: stopVisible,
           completionControlsPresent: complete,
           failureSource: failure ? failure.getAttribute('role') === 'alert' ? 'alert' : 'provider_marker' : 'none',
@@ -2217,7 +2233,12 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
             assistant_fingerprint: diagnosticFingerprint(settled.key),
             failure_class: probe.failureSource ?? "none", error_candidate_count: probe.failureCandidateCount ?? 0,
             eligible_error_candidate_count: probe.failureEligibleCount ?? 0,
+            visible_eligible_error_candidate_count: probe.failureVisibleEligibleCount ?? 0,
             approval_error_candidate_count: probe.failureApprovalCount ?? 0,
+            authored_answer_root_count: probe.failureAuthoredRootCount ?? 0,
+            failure_group_latest: probe.failureGroupLatest ?? false,
+            failure_action_control_count: probe.failureActionControlCount ?? 0,
+            retry_control_visible: probe.failureRetryVisible ?? false,
             stop_visible: probe.failureStopVisible ?? false,
             answer_body_present: (probe.answerBodyCount ?? 0) > 0,
             progress_present: probe.containerPresent, progress_visible: probe.containerVisible,
@@ -2230,7 +2251,12 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
             failure_class: probe.failureSource ?? "none",
             provider_error_candidate_count: probe.failureCandidateCount ?? 0,
             eligible_error_candidate_count: probe.failureEligibleCount ?? 0,
+            visible_eligible_error_candidate_count: probe.failureVisibleEligibleCount ?? 0,
             approval_error_candidate_count: probe.failureApprovalCount ?? 0,
+            authored_answer_root_count: probe.failureAuthoredRootCount ?? 0,
+            failure_group_latest: probe.failureGroupLatest ?? false,
+            failure_action_control_count: probe.failureActionControlCount ?? 0,
+            retry_control_visible: probe.failureRetryVisible ?? false,
             stop_visible: probe.failureStopVisible ?? false,
             progress_container_present: probe.containerPresent,
             progress_container_visible: probe.containerVisible,

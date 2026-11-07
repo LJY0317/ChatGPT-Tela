@@ -10,7 +10,8 @@ import { BROWSER_READ_ONLY_PREVIEW, type BrowserSurfaceLease } from "./index";
 const original=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
 const roots:string[]=[];
 test("failure census distinguishes user markers outside, inside and on keyed groups without reading content", () => {
-  const keyed = { matches(selector: string) { return selector === '[data-message-author-role="user"]'; } };
+  const keyed = { matches(selector: string) { return selector === '[data-message-author-role="user"]'; },
+    getAttribute(name: string) { return name === 'data-turn-key' ? 'synthetic-turn' : null; } };
   const node = (inside: boolean) => ({ closest() { return inside ? keyed : null; }, get textContent(): never { throw Error('Prose must not be read'); } });
   const selectors: Record<string, unknown[]> = {
     '[data-turn-key]': [keyed],
@@ -26,6 +27,7 @@ test("failure census distinguishes user markers outside, inside and on keyed gro
   expect(result).toMatchObject({ keyed_turn_count: 1, user_bubble_count: 0, user_author_count: 1,
     user_author_keyed_count: 1, user_author_group_self_count: 1, user_conversation_keyed_count: 0,
     user_markdown_count: 2, user_markdown_keyed_count: 1 });
+  expect(result.focus_turn_key).toBe('synthetic-turn');
   expect(result.html).toBeUndefined();
 });
 afterEach(()=>{ if(original)process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=original;else delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true}); });
@@ -136,11 +138,13 @@ test("delivery-boundary census preserves independent composer and answer facts i
     location:{pathname:"/c/fixture"},performance:{getEntriesByType:()=>[]},
     getComputedStyle:()=>({display:"block",visibility:"visible"}),
   });
+  result.focus_turn_key="synthetic-turn";
   const surface={taskId:"delivery-census",epochId:"epoch",capability(cap:unknown){
     if(cap===BROWSER_PAGE_AUTOMATION)return{async evaluate(){return result;}};
   }} as unknown as BrowserSurfaceLease;
   await captureBrowserDiagnosticEvidence(surface,"completion_deferred");
   expect(readDiagnosticTail(join(root,"events.jsonl")).events.find(row=>row.stage==="browser_snapshot_observed"))
-    .toMatchObject({composer_send_count:2,enabled_composer_send_count:1,composer_stop_count:0,assistant_body_count:2,visible_assistant_body_count:1,private_capture:false});
+    .toMatchObject({composer_send_count:2,enabled_composer_send_count:1,composer_stop_count:0,assistant_body_count:2,visible_assistant_body_count:1,private_capture:false,
+      focused_assistant_fingerprint:diagnosticFingerprint("assistant:synthetic-turn")});
   expect(result.html).toBeUndefined();
 });
