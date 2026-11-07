@@ -86,6 +86,26 @@ test('tool projection links through unique operation, contradictory owners stay 
  expect(ambiguous.evidenceLimits.ambiguousOperations).toBe(1);
  expect(ambiguous.turns[0].summary.cost.toolText.complete).toBe(false);
 });
+test('renderer stream failures join only through a unique surface lease and active Web plan',()=>{
+ const lease='a'.repeat(24),surface='b'.repeat(24),op='c'.repeat(24),request='d'.repeat(24);
+ const bound=event('renderer_surface_bound',{event:'chatgpt_tela_browser',lease_fingerprint:lease,surface_fingerprint:surface});
+ const planned=plan('retained-delta',{operation_fingerprint:op,request_fingerprint:request,lease_fingerprint:lease});
+ const network=event('renderer_request_failed',{event:'chatgpt_tela_browser',surface_fingerprint:surface,
+   network_request_fingerprint:'d'.repeat(24),browser_response:'event_stream',request_role:'stream_candidate',
+   failure_class:'err_aborted',http_status:200,surface_correlated:true});
+ delete (network as any).scope_fingerprint; delete (network as any).turn_fingerprint;
+ const ended=event('native_execution_failed',{request_fingerprint:request,operation_fingerprint:op});
+ const [turn]=summarizeContextContinuity({events:[bound,planned,network,ended],atMs:100000,scope}).turns;
+ expect(turn.browserNetworkFailures).toEqual([{at:network.ts,requestFingerprint:'d'.repeat(24),response:'event_stream',
+   requestRole:'stream_candidate',failureClass:'err_aborted',httpStatus:200,surfaceCorrelated:true,
+   attribution:'surface_lease_and_active_plan'}]);
+ const ambiguous=event('renderer_surface_bound',{event:'chatgpt_tela_browser',scope_fingerprint:'e'.repeat(24),
+   lease_fingerprint:lease,surface_fingerprint:surface});
+ const report=summarizeContextContinuity({events:[bound,planned,network,ended,ambiguous],atMs:100000,scope});
+ expect(report.turns[0].browserNetworkFailures).toHaveLength(0);
+ const unclosed=summarizeContextContinuity({events:[bound,planned,network],atMs:100000,scope});
+ expect(unclosed.turns[0].browserNetworkFailures).toHaveLength(0);
+});
 test('a bounded terminal receipt survives missing raw final without pretending its bytes were measured',()=>{
  const r=summarizeContextContinuity({events:[event('native_cycle_summary',{contract_version:1,state:'completed',local_final_committed:true,summary_complete:true,composer_measured:false,composer_wire_bytes:0})],atMs:100000});
  expect(r.turns[0].completionEvidence).toBe('cycle_receipt');expect(r.turns[0].outcome).toBe('local_final_committed');

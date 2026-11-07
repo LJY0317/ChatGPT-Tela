@@ -8,6 +8,10 @@ const REQUEST_BOUNDARIES = new Set([
   "web_send_activation_started", "web_turn_identity_accepted", "context_checkpoint_provider_invoked",
   "checkpoint_operation_observed", "native_outcome_committed", "native_cycle_summary",
 ]);
+const BROWSER_CYCLE_END_STAGES = new Set([
+  "web_turn_failed", "native_execution_failed", "native_outcome_committed",
+  "native_turn_retired", "native_cycle_summary",
+]);
 const fp = (v: unknown): string | undefined => typeof v === "string" && FP.test(v) ? v : undefined;
 const count = (v: unknown): number | undefined => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : undefined;
 
@@ -19,12 +23,34 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
   }).sort((a, b) => a.ts.localeCompare(b.ts));
   const requests = new Map<string, Set<string>>();
   const operations = new Map<string, Set<string>>();
+  const browserLeases = new Map<string, Set<string>>();
+  const leasePlans = new Map<string, { key: string; at: string; endAt?: string; request: string; operation?: string }[]>();
   for (const row of rows) {
     const scope = fp(row.scope_fingerprint), turn = fp(row.turn_fingerprint), request = fp(row.request_fingerprint);
+    if (row.stage === "renderer_surface_bound" && scope && fp(row.surface_fingerprint) && fp(row.lease_fingerprint)) {
+      const id = `${row.surface_fingerprint}`;
+      const owners = browserLeases.get(id) ?? new Set<string>();
+      owners.add(`${scope}:${row.lease_fingerprint}`);
+      browserLeases.set(id, owners);
+    }
     if (!scope || !turn) continue;
     if (request) { const owners = requests.get(request) ?? new Set<string>(); owners.add(`${scope}:${turn}`); requests.set(request, owners); }
     const operation = fp(row.operation_fingerprint);
     if (operation) { const owners=operations.get(operation)??new Set<string>(); owners.add(`${scope}:${turn}`);operations.set(operation,owners); }
+  }
+  for (const row of rows) {
+    if (row.stage !== "web_turn_plan") continue;
+    const scope = fp(row.scope_fingerprint), turn = fp(row.turn_fingerprint);
+    const lease = fp(row.lease_fingerprint), request = fp(row.request_fingerprint);
+    if (!scope || !turn || !lease || !request) continue;
+    const endAt = rows.filter(candidate => candidate.request_fingerprint === request
+      && BROWSER_CYCLE_END_STAGES.has(candidate.stage) && candidate.ts >= row.ts)
+      .map(candidate => candidate.ts).sort()[0];
+    const id = `${scope}:${lease}`;
+    const plans = leasePlans.get(id) ?? [];
+    const operation = fp(row.operation_fingerprint);
+    plans.push({ key: `${scope}:${turn}`, at: row.ts, ...(endAt ? { endAt } : {}), request, ...(operation ? { operation } : {}) });
+    leasePlans.set(id, plans);
   }
   const turns = new Map<string, any>();
   const attributedRows = new Map<string, StructuralDiagnosticEvent[]>();
@@ -41,7 +67,15 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
     const operationOwner = operationLinked?.size===1?[...operationLinked][0]:undefined;
     if(requestOwner&&operationOwner&&requestOwner!==operationOwner)conflictingLinks++;
     const inferred = requestOwner&&operationOwner&&requestOwner!==operationOwner ? undefined : requestOwner??operationOwner;
-    const key = directScope && directTurn ? `${directScope}:${directTurn}` : inferred;
+    let key = directScope && directTurn ? `${directScope}:${directTurn}` : inferred;
+    const surface = fp(row.surface_fingerprint);
+    if (!key && row.event === "chatgpt_tela_browser" && surface) {
+      const owners = browserLeases.get(surface);
+      const owner = owners?.size === 1 ? [...owners][0] : undefined;
+      const plans = owner ? leasePlans.get(owner) : undefined;
+      const candidates = plans?.filter(plan => plan.at <= row.ts && plan.endAt !== undefined && row.ts <= plan.endAt);
+      if (candidates?.length === 1) key = candidates[0]!.key;
+    }
     if (!key) { if(fp(row.operation_fingerprint)&&/^(mcp_native_result_projected|tool_settled)$/.test(row.stage))unattributedOperationEvents++; if (/checkpoint|web_turn_plan|http_transport_closed/.test(row.stage)) unattributedEvents++; continue; }
     const [scope, turn] = key.split(":");
     if (input.scope && scope !== input.scope) continue;
@@ -50,11 +84,17 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
       if (turns.size >= 64) { omittedTurns++; continue; }
       state = { scopeFingerprint: scope, turnFingerprint: turn, firstObservedAt: row.ts, lastObservedAt: row.ts,
         checkpoint: { started: 0, completed: 0, reused: 0, failed: 0, locallyClosed: 0, observedModelDurationMs: 0 },
-        plans: [], disconnects: [], responseObservers: 0, outcome: "not_observed", semanticRecall: "not_evaluated" };
+        plans: [], disconnects: [], browserNetworkFailures: [], responseObservers: 0, outcome: "not_observed", semanticRecall: "not_evaluated" };
       turns.set(key, state);
     }
     const attributed=attributedRows.get(key)??[];attributed.push(row);attributedRows.set(key,attributed);
     state.lastObservedAt = row.ts;
+    if (row.event === "chatgpt_tela_browser" && row.stage === "renderer_request_failed") {
+      state.browserNetworkFailures.push({ at: row.ts, requestFingerprint: fp(row.network_request_fingerprint),
+        response: row.browser_response, requestRole: row.request_role, failureClass: row.failure_class,
+        httpStatus: count(row.http_status), surfaceCorrelated: row.surface_correlated === true,
+        attribution: "surface_lease_and_active_plan" });
+    }
     if (row.stage === "native_cycle_observation_started" || row.stage === "native_steering_cycle_started") state.outcome="not_observed";
     if (row.stage === "native_response_observer_started") state.responseObservers++;
     if (row.stage === "native_visible_prefix_checkpoint_started") {
