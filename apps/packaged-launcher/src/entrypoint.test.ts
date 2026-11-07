@@ -1,9 +1,9 @@
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 import { expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { ChatWorkspaceRegistry } from "../../../packages/chat-service/src/workspaces";
@@ -11,11 +11,73 @@ import { ChatProcessManager } from "../../../packages/chat-service/src/processes
 import { createChatToolRuntime, startChatService } from "@chatgpt-tela/chat-service";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
-import { registerDeviceLocalChatPlugin } from "../../local-mcp/src/main";
+import { runProductUninstall } from "../../../packages/product-uninstall/src/index";
+import { createDeviceLocalChatMcpServer, registerDeviceLocalChatPlugin } from "../../local-mcp/src/main";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const removeFixture = registerTemporaryFixtureCleanup();
+
+test("explicit packaged registration isolates device paths and uninstall restores only that device", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-local-registration-devices-"));
+  try {
+    const createDevice = (label: string) => {
+      const home = join(root, label);
+      const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
+      const launcherExecutablePath = join(paths.binaryRoot, `tela-${label}`);
+      const marketplacePath = join(home, ".agents", "plugins", "marketplace.json");
+      const foreign = { name: `user-${label}`, source: { source: "local", path: "./user-plugin" } };
+      mkdirSync(paths.binaryRoot, { recursive: true });
+      writeFileSync(launcherExecutablePath, `launcher:${label}`);
+      mkdirSync(dirname(marketplacePath), { recursive: true });
+      writeFileSync(marketplacePath, JSON.stringify({ name: `personal-${label}`, extra: { owner: label }, plugins: [foreign] }));
+      writeOwnershipManifest(paths.installManifest, createOwnershipManifest("test", new Date(), `registration-${label}`));
+      return { label, home, paths, launcherExecutablePath, marketplacePath, foreign };
+    };
+    const a = createDevice("a"), b = createDevice("b");
+    const register = (device: ReturnType<typeof createDevice>) => registerDeviceLocalChatPlugin({
+      paths: device.paths, launcherExecutablePath: device.launcherExecutablePath, marketplacePath: device.marketplacePath,
+    });
+    expect(await register(a)).toBe("registered");
+    expect(await register(b)).toBe("registered");
+
+    const pluginPath = (device: ReturnType<typeof createDevice>) =>
+      join(device.paths.stateRoot, "install", "local-chat-plugin", "plugins", "tela-local-chat");
+    for (const device of [a, b]) {
+      const marketplace = JSON.parse(readFileSync(device.marketplacePath, "utf8")) as {
+        name: string; extra: { owner: string }; plugins: { name: string; source: { path: string } }[];
+      };
+      expect(marketplace.extra).toEqual({ owner: device.label });
+      expect(marketplace.plugins[0]).toEqual(device.foreign);
+      expect(marketplace.plugins[1]!.name).toBe("tela-local-chat");
+      expect(join(device.home, marketplace.plugins[1]!.source.path)).toBe(pluginPath(device));
+      const config = JSON.parse(readFileSync(join(pluginPath(device), ".mcp.json"), "utf8"));
+      expect(config.mcpServers["tela-local-chat"]).toEqual({ type: "stdio", command: basename(device.launcherExecutablePath),
+        env: { PATH: dirname(device.launcherExecutablePath) }, args: ["local-mcp"], cwd: "${PLUGIN_ROOT}" });
+    }
+
+    const bMarketplace = readFileSync(b.marketplacePath, "utf8");
+    const missingHome = join(root, "not-installed");
+    const missingPaths = resolveProductPaths({ platform: "linux", home: missingHome, environment: {} });
+    const missingMarketplace = join(missingHome, ".agents", "plugins", "marketplace.json");
+    await expect(registerDeviceLocalChatPlugin({ paths: missingPaths,
+      launcherExecutablePath: join(missingPaths.binaryRoot, "tela"), marketplacePath: missingMarketplace }))
+      .rejects.toThrow("local marketplace requires an installed Tela product");
+    expect(existsSync(missingMarketplace)).toBe(false);
+
+    const removed = await runProductUninstall({ mode: "apply", removeData: true, platform: "linux", home: a.home,
+      environment: {}, paths: a.paths,
+      serviceRegistrationRunner: { async run() { return { exitCode: 0, stdout: "", stderr: "" }; } } });
+    expect(removed.failedCount).toBe(0);
+    expect(existsSync(pluginPath(a))).toBe(false);
+    expect(JSON.parse(readFileSync(a.marketplacePath, "utf8"))).toEqual({
+      name: "personal-a", extra: { owner: "a" }, plugins: [a.foreign],
+    });
+    expect(readFileSync(b.marketplacePath, "utf8")).toBe(bMarketplace);
+    expect(existsSync(pluginPath(b))).toBe(true);
+    expect(() => createDeviceLocalChatMcpServer(a.paths)).toThrow("Tela is not installed on this computer");
+  } finally { removeFixture(root); }
+});
 
 test("one compiled runtime dispatches isolated daemons, CLI and a real owned command", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-shared-runtime-"));
