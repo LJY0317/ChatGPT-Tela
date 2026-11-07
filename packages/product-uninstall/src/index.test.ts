@@ -133,7 +133,7 @@ test("uninstall detaches and removes the install-owned startup catalog after res
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("uninstall preserves an owned catalog directory while an edited provider config still references it", async () => {
+test("uninstall preserves a catalog newly referenced by user edits during the removal plan", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-catalog-preserve-"));
   try {
     const installId = randomUUID();
@@ -157,8 +157,15 @@ test("uninstall preserves an owned catalog directory while an edited provider co
     editOfficialCodexProviderFile({ configPath, installId,
       baseUrl: `http://127.0.0.1:18744/${capability}/v1`, catalogPath, action: "register", mode: "apply" });
     const edited = readFileSync(configPath, "utf8").replace("supports_websockets = false", "supports_websockets = true");
-    writeFileSync(configPath, edited);
-    const result = await runProductUninstall({ mode: "apply", removeData: true, ...fixture.options });
+    let editedAfterPlan = false;
+    const paths = { ...fixture.paths, serviceState(service: Parameters<typeof fixture.paths.serviceState>[0]) {
+      // The initial provider plan has already read the original config;
+      // mutate it before the removal plan finishes and apply re-observes it.
+      if (!editedAfterPlan) { writeFileSync(configPath, edited); editedAfterPlan = true; }
+      return fixture.paths.serviceState(service);
+    } };
+    const result = await runProductUninstall({ mode: "apply", removeData: true, ...fixture.options, paths });
+    expect(editedAfterPlan).toBe(true);
     expect(result).toMatchObject({ applied: true, providerRestore: { status: "preserved", selected: false }, manifestRemoved: false });
     expect(readFileSync(configPath, "utf8")).toBe(edited);
     expect(existsSync(catalogPath)).toBe(true);

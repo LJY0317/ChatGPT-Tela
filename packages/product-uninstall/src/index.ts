@@ -190,7 +190,7 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
       throw new Error(`packaged repair for ${repairJournal.productVersion} is incomplete; resume it before uninstall apply`);
     }
   }
-  const providerPlan = restoreOwnedDesktopProvider({ ...input, mode: "dry-run" }, paths, manifest.installId, manifest);
+  let providerRestore = restoreOwnedDesktopProvider({ ...input, mode: "dry-run" }, paths, manifest.installId, manifest);
 
   const filesystemObserver = new FilesystemOwnershipObserver();
   const hasManagedWorktrees = manifest.resources.some(resource => resource.kind === "managed-worktree");
@@ -242,8 +242,11 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
     observe(resource: OwnedResource, currentManifest: OwnershipManifest) {
       if (resource.kind === "directory" && resource.id !== "transition-coordinator"
         && inside(resource.path, coordinatorResource(paths).path)) return "dirty" as const;
+      // A planned detach is not its result: after editing Desktop config,
+      // recheck the live shared catalog reference before removing its file.
       if (resource.kind === "directory" && resource.id === APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID
-        && (providerPlan as { readonly catalogStatus?: string }).catalogStatus !== "removed") {
+        && !(providerRestore.status === "planned" && "catalogStatus" in providerRestore
+          && providerRestore.catalogStatus === "removed")) {
         try {
           if (existsSync(officialCodexConfigPath(input.home))) {
             const config = Bun.TOML.parse(readFileSync(officialCodexConfigPath(input.home), "utf8")) as Record<string, unknown>;
@@ -279,19 +282,19 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
     blockedOwners.add("codex");
     shutdownFailures.push({ owner: "codex-profile-setup", detail: activityBlockers.join("; ") });
   }
-  const providerDependency = providerPlan.status === "preserved" && providerPlan.selected;
+  const providerDependency = providerRestore.status === "preserved" && providerRestore.selected;
   // Establish the removal plan before touching any service or external config.
   const plan = await planUninstall({ manifest: { ...manifest, resources: manifest.resources.filter(row => row.id !== "transition-coordinator") }, observer, removeData });
   const recoveryNotice = hasPendingFileImports(join(paths.serviceState("chat"), "imports-v2"))
     ? { fileImportRecoveryPending: true, recoveryNotice: "Resolve pending file imports in Tela before removing saved data; recovery records are preserved." } : {};
   if (input.mode === "dry-run") {
-    return Object.freeze({ dryRun: true, activityBlockers, providerRestore: providerPlan, ...recoveryNotice, ...plan });
+    return Object.freeze({ dryRun: true, activityBlockers, providerRestore, ...recoveryNotice, ...plan });
   }
-  const nothingRemovable = plan.removableCount === 0 && plan.preservedCount > 0 && providerPlan.status === "planned";
+  const nothingRemovable = plan.removableCount === 0 && plan.preservedCount > 0 && providerRestore.status === "planned";
   // Activity admission and external provider ownership must settle before
   // stopping services or modifying the user's Codex settings.
   if (activityBlockers.length > 0 || providerDependency || nothingRemovable) {
-    return Object.freeze({ applied: false, status: "uninstall-blocked", providerRestore: providerPlan,
+    return Object.freeze({ applied: false, status: "uninstall-blocked", providerRestore,
       activityBlockers, removedCount: 0, preservedCount: Number(providerDependency),
       failedCount: 1, shutdownFailures, destructiveActions: 0,
       ...(nothingRemovable ? { reason: "No owned resources can be removed; Codex provider selection was preserved" } : {}) });
@@ -309,11 +312,11 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
   }
 
   if (shutdownFailures.length > 0) {
-    return Object.freeze({ applied: false, status: "uninstall-blocked", providerRestore: providerPlan,
+    return Object.freeze({ applied: false, status: "uninstall-blocked", providerRestore,
       activityBlockers, shutdownFailures, removedCount: 0, preservedCount: 0,
       failedCount: shutdownFailures.length, destructiveActions: 0 });
   }
-  const providerRestore = restoreOwnedDesktopProvider(input, paths, manifest.installId, manifest);
+  providerRestore = restoreOwnedDesktopProvider(input, paths, manifest.installId, manifest);
   if (providerRestore.status === "preserved" && providerRestore.selected) {
     return Object.freeze({ applied: false, status: "uninstall-blocked", providerRestore,
       activityBlockers, shutdownFailures, removedCount: 0, preservedCount: 1,
