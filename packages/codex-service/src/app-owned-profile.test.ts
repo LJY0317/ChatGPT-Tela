@@ -4,8 +4,9 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { startCodexService } from "./controller";
 import type { CodexNativeTargetAdapter } from "./native-target";
+import { RoutedCodexTurnBridge } from "./routed-turn-bridge";
 
-test("app-owned parent accepts and stops its provider without owning the running Desktop", async () => {
+test("app-owned parent restarts an idle provider on its fixed Responses route without owning the Desktop", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-parent-"));
   const state = join(root, "state.json");
   writeFileSync(state, JSON.stringify({ busy: false }));
@@ -43,8 +44,12 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
   const service = await startCodexService({ config: { appOwnedResponses: [ingress] },
     nativeTargetAdapter: adapter, profileRuntimeCommand: [process.execPath, join(root, "child.mjs")],
     webDelegationCapacity: async () => { delegationCalls++; return { total: { used: 1 }, uncertain: 1 }; } });
+  const routed = service.tools as RoutedCodexTurnBridge;
   try {
-    expect(await service.startProfile(1)).toMatchObject({ controlState: "running", webModelsReady: true });
+    const first = await service.startProfile(1);
+    expect(first).toMatchObject({ controlState: "running", webModelsReady: true,
+      responsesRouteFingerprint: "a".repeat(64) });
+    expect(routed.routeCount).toBe(1);
     expect(await service.profiles()).toContainEqual(expect.objectContaining({ slot: 1, controlState: "running" }));
     expect(await service.waitWebPreparation(1)).toMatchObject({ webState: "ready", webModelsReady: true });
     expect((await service.profiles())[0]).toMatchObject({ webModelsReady: true });
@@ -55,6 +60,16 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
     await expect(service.stopProfile(1)).rejects.toThrow("not acknowledged");
     writeFileSync(state, JSON.stringify({ busy: false }));
     expect(await service.stopProfile(1)).toMatchObject({ controlState: "stopped" });
+    expect(routed.routeCount).toBe(0);
+    const restarted = await service.startProfile(1);
+    expect(restarted).toMatchObject({ slot: 1, controlState: "running", webModelsReady: true,
+      responsesRouteFingerprint: first.responsesRouteFingerprint });
+    expect(restarted.childProcessId).not.toBe(first.childProcessId);
+    expect(routed.routeCount).toBe(1);
+    expect(await service.waitWebPreparation(1)).toMatchObject({ webState: "ready", webModelsReady: true });
+    expect(await service.shutdownReadiness()).toBe("ready");
+    expect(await service.stopProfile(1)).toMatchObject({ controlState: "stopped" });
+    expect(routed.routeCount).toBe(0);
     expect(nativeCalls).toBe(0);
     expect(delegationCalls).toBe(0);
   } finally { await service.close(); rmSync(root, { recursive: true, force: true }); }
