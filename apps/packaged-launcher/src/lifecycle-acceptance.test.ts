@@ -16,6 +16,7 @@ import { runPackagedServicesCommand } from "./services";
 import { readConfigurationInput, runPackagedBootstrapCommand } from "./bootstrap";
 import { runPackagedDesktopProviderCommand } from "./desktop-provider";
 import { resolveChatGptTelaBrowserProfile } from "@chatgpt-tela/development-runtime/browser-profile";
+import { publishAppOwnedDesktopCatalog } from "@chatgpt-tela/development-runtime/app-owned-desktop-catalog";
 import { prepareInstalledProfileOwnership } from "../../cli/src/profile-ownership";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 
@@ -190,8 +191,14 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     const codexConfig = join(codexHome, "config.toml");
     const codexOriginal = 'model_provider = "openai"\nmodel = "user-native-model"\n# preserve desktop settings\n';
     writeFileSync(codexConfig, codexOriginal, { mode: 0o640 });
-    const catalogFile = join(paths.stateRoot, "install", "desktop-model-catalog", "models.json");
-    writeFileSync(catalogFile, JSON.stringify({ models: [{ id: "native-fixture" }, { id: "web-fixture" }] }), { mode: 0o600 });
+    const catalogFile = await publishAppOwnedDesktopCatalog({ paths, installId: manifest.installId,
+      nativeCatalog: { models: [{ slug: "native-fixture", visibility: "list", display_name: "Native fixture",
+        supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] },
+      webFamilies: [{ key: "0123456789abcdefabcd", label: "Web fixture", availableEfforts: ["medium"] }],
+      assertCurrentAccount() {},
+    });
+    expect(JSON.parse(readFileSync(catalogFile, "utf8")).models.map((model: { slug: string }) => model.slug))
+      .toEqual(["native-fixture", "chatgpt-tela-web/family/0123456789abcdefabcd"]);
     const providerOptions = { payloadRoot: paths.binaryRoot, pathOptions: options };
     expect(await runPackagedDesktopProviderCommand(["desktop-provider", "register", "--dry-run"], providerOptions))
       .toMatchObject({ changed: true, selection: expect.stringContaining("Catalog: installed") });
