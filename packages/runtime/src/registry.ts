@@ -203,8 +203,21 @@ export class ActiveTurnRegistry {
     return result;
   }
 
-  #releaseControls(owner: string): void {
-    for (const [control, scope] of this.#controls) if (scope.owner === owner) this.#controls.delete(control);
+  #releaseControls(owner: string, reason: "next_cycle" | "turn_retired"): void {
+    for (const [control, scope] of this.#controls) {
+      if (scope.owner !== owner) continue;
+      if (scope.kind === "goal") {
+        const channel = this.#byCapability.get(owner);
+        if (channel) emitDiagnosticEvent("chatgpt_tela_codex", "native_goal_control_retired", {
+          scope_fingerprint: diagnosticFingerprint(channel.binding.authority.threadId),
+          turn_fingerprint: diagnosticFingerprint(channel.binding.authority.turnId),
+          control_fingerprint: diagnosticFingerprint(control),
+          reason_class: reason,
+          turn_phase: channel.phase,
+        });
+      }
+      this.#controls.delete(control);
+    }
   }
 
   refresh(binding: NativeTurnBinding): RegisteredTurn {
@@ -224,7 +237,7 @@ export class ActiveTurnRegistry {
     const nextToken = capability(this.#routeId);
     const channel = new RuntimeTurnChannel(binding, this.#nativeCallIdsByTurn.get(turnKey(binding))!);
     previous.releaseProgress();
-    this.#releaseControls(token);
+    this.#releaseControls(token, "next_cycle");
     this.#byCapability.delete(token);
     this.#byCapability.set(nextToken, channel);
     this.#capabilityByTurn.set(turnKey(binding), nextToken);
@@ -235,7 +248,7 @@ export class ActiveTurnRegistry {
     const channel = this.resolve(token);
     const key = turnKey(channel.binding);
     channel.releaseProgress();
-    this.#releaseControls(token);
+    this.#releaseControls(token, "turn_retired");
     this.#byCapability.delete(token);
     this.#capabilityByTurn.delete(key);
     this.#nativeCallIdsByTurn.delete(key);

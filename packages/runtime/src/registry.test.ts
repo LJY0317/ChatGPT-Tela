@@ -128,3 +128,35 @@ test("response cycle rotation revokes the old capability and retains Native-wide
   expect(() => next.channel.requestTool(invocation)).toThrow("already used");
   registry.cancelAll();
 });
+
+test("Goal control retirement records exact owner and response boundary without bearer bytes", () => {
+  const events: Record<string, unknown>[] = [];
+  const stop = observeDiagnosticEvents(event => {
+    if (event.stage === "native_goal_control_retired") events.push(event);
+  });
+  const registry = new ActiveTurnRegistry();
+  const original = binding();
+  const bound = { ...original, tools: NativeToolInventory.fromObservations("thread-1", "turn-1", [
+    { source: "fixture", tools: [{ wireName: "update_goal", name: "update_goal",
+      description: "Original Goal tool", kind: "function", inputSchema: { type: "object" } }] },
+  ]) };
+  try {
+    const first = registry.register(bound);
+    const oldControl = registry.goalControl(first.capability)!;
+    first.channel.markSubmitted(); first.channel.markAccepted(); first.channel.complete("answer");
+    const next = registry.nextCycle(first.capability, bound);
+    expect(registry.resolveGoalControl(oldControl)).toBeUndefined();
+    const newControl = registry.goalControl(next.capability)!;
+    registry.retire(next.capability);
+    expect(events).toEqual([
+      expect.objectContaining({ reason_class: "next_cycle", turn_phase: "completed",
+        scope_fingerprint: diagnosticFingerprint("thread-1"),
+        turn_fingerprint: diagnosticFingerprint("turn-1"),
+        control_fingerprint: diagnosticFingerprint(oldControl) }),
+      expect.objectContaining({ reason_class: "turn_retired",
+        control_fingerprint: diagnosticFingerprint(newControl) }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain(oldControl);
+    expect(JSON.stringify(events)).not.toContain(newControl);
+  } finally { stop?.(); }
+});
