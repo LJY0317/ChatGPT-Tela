@@ -5,10 +5,12 @@ import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createChatToolRuntime, startChatService } from "@chatgpt-tela/chat-service";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest, prepareOwnedDirectory, registerLocalMarketplace } from "@chatgpt-tela/product-lifecycle";
 import { normalizeOwnedLocalChatPlugin, prepareLocalChatPlugin } from "./plugin-package";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
+import { createDeviceLocalChatMcpServer } from "./main";
 
 async function ownedPluginRoot(home: string) {
   const paths = resolveProductPaths({ home, environment: {} });
@@ -142,7 +144,7 @@ test("copied SDK stdio package initializes, lists, calls and exits without check
   } finally { rmSync(destination, { recursive: true, force: true }); }
 });
 
-test("Chat-only MCP has no Native tools and two independent Chat instances never fall back", async () => {
+test("Chat-only MCP isolates two explicit device installations and never falls back", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-local-chat-"));
   const instances = [];
   const clients: Client[] = [];
@@ -168,11 +170,9 @@ test("Chat-only MCP has no Native tools and two independent Chat instances never
       instances.push({ label, paths, service, allowed });
     }
     for (const instance of instances) {
-      const home = dirname(instance.allowed);
-      const clientTransport = new StdioClientTransport({ command: "bun",
-        args: ["run", "apps/local-mcp/src/main.ts"], cwd: process.cwd(),
-        env: { ...process.env, HOME: home, XDG_STATE_HOME: "", XDG_RUNTIME_DIR: "",
-          XDG_CONFIG_HOME: "", XDG_CACHE_HOME: "", APPDATA: "", LOCALAPPDATA: "" } });
+      const server = createDeviceLocalChatMcpServer(instance.paths);
+      const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
       const client = new Client({ name: "local", version: "0.0.1" }, { capabilities: {} });
       await client.connect(clientTransport);
       clients.push(client);
@@ -222,16 +222,10 @@ test("Chat-only MCP has no Native tools and two independent Chat instances never
   }
 });
 
-test("an uninstalled computer cannot initialize local MCP stdio or list any tools", () => {
+test("an uninstalled device cannot initialize local MCP or list any tools", () => {
   const home = mkdtempSync(join(tmpdir(), "tela-local-not-installed-"));
   try {
-    const child = spawnSync("bun", ["run", "apps/local-mcp/src/main.ts"], {
-      cwd: process.cwd(), input: "", encoding: "utf8", timeout: 5000,
-      env: { ...process.env, HOME: home, XDG_STATE_HOME: "", XDG_RUNTIME_DIR: "",
-        XDG_CONFIG_HOME: "", XDG_CACHE_HOME: "", APPDATA: "", LOCALAPPDATA: "" },
-    });
-    expect(child.status).toBe(1);
-    expect(child.stdout).toBe("");
-    expect(child.stderr).toContain("Tela is not installed on this computer");
+    const paths = resolveProductPaths({ platform: "darwin", home, environment: {} });
+    expect(() => createDeviceLocalChatMcpServer(paths)).toThrow("Tela is not installed on this computer");
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

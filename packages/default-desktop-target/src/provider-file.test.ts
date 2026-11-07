@@ -45,3 +45,35 @@ test("isolated official config catalog transaction keeps mode, ownership and for
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("two device homes keep independent provider credentials and catalog paths for one signed-in account", () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-two-device-providers-"));
+  try {
+    const devices = ["device-a", "device-b"].map((name, index) => {
+      const home = join(root, name), configDir = join(home, ".codex");
+      mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "config.toml");
+      const original = ['model_provider = "openai"', 'model = "same-account-model"', ''].join("\n");
+      writeFileSync(configPath, original);
+      return { home, configPath, original, installId: `11111111-2222-4333-8444-55555555555${index}`,
+        baseUrl: `http://127.0.0.1:${18744 + index}/${String(index + 1).repeat(48)}/v1`,
+        catalogPath: join(home, "state", "owned-models.json") };
+    });
+    for (const device of devices) {
+      expect(editOfficialCodexProviderFile({ ...device, action: "register", mode: "apply", result: "detailed" }))
+        .toMatchObject({ changed: true, catalogStatus: "installed" });
+    }
+    const [a, b] = devices.map(device => readFileSync(device.configPath, "utf8"));
+    expect(a).toContain(devices[0]!.baseUrl);
+    expect(a).toContain(devices[0]!.catalogPath);
+    expect(a).not.toContain(devices[1]!.baseUrl);
+    expect(a).not.toContain(devices[1]!.catalogPath);
+    expect(b).toContain(devices[1]!.baseUrl);
+    expect(b).toContain(devices[1]!.catalogPath);
+    expect(b).not.toContain(devices[0]!.baseUrl);
+    expect(b).not.toContain(devices[0]!.catalogPath);
+    expect(devices.map(device => editOfficialCodexProviderFile({ ...device, action: "restore", mode: "apply", result: "detailed" })))
+      .toEqual([{ changed: true, catalogStatus: "removed" }, { changed: true, catalogStatus: "removed" }]);
+    for (const device of devices) expect(readFileSync(device.configPath, "utf8")).toBe(device.original);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
