@@ -37,7 +37,6 @@ describe("built-in default Desktop Responses route", () => {
       baseUrl: `${baseUrl}/`,
       envKey: "CHATGPT_TELA_RUNTIME_TOKEN",
       credential: "s".repeat(48),
-      appOwned: true,
     });
     expect(owned.baseUrl).toBe(baseUrl);
     expect(owned.modelCatalogUrl).toBe(`${baseUrl}/models`);
@@ -47,12 +46,11 @@ describe("built-in default Desktop Responses route", () => {
     ));
     expect(rewritten.params.config.openai_base_url).toBe(baseUrl);
     expect(rewritten.params.modelProvider).toBe(TELA_DEFAULT_DESKTOP_PROVIDER_ID);
-    expect(() => createDefaultDesktopResponsesRoute({
+    expect(createDefaultDesktopResponsesRoute({
       baseUrl: "http://127.0.0.1:18744/v1/",
       envKey: "CHATGPT_TELA_RUNTIME_TOKEN",
       credential: "s".repeat(48),
-      appOwned: true,
-    })).toThrow("fixed capability path");
+    }).baseUrl).toBe("http://127.0.0.1:18744/v1");
   });
 
   test("overlays only thread lifecycle requests and preserves unrelated JSON-RPC bytes", () => {
