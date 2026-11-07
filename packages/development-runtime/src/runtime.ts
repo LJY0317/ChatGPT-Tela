@@ -328,7 +328,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
           const checkpoints = plan.physicalContext.segments.filter(segment => segment.type === "checkpoint");
           const contextEvidence = {
             epoch_fingerprint: diagnosticFingerprint(plan.webEpochId),
-            surface_fingerprint: diagnosticFingerprint(acquired.surface.leaseId),
+            lease_fingerprint: diagnosticFingerprint(acquired.surface.leaseId),
             ...(document ? { document_generation: document.generation } : {}),
             head_revision_fingerprint: diagnosticFingerprint(plan.physicalContext.headRevisionId),
             ...(plan.physicalContext.activeRequestRevisionId ? {

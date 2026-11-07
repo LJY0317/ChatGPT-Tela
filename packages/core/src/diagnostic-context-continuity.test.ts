@@ -11,12 +11,12 @@ function event(stage: string, fields: object = {}): StructuralDiagnosticEvent {
 }
 function plan(mode: string, fields: object = {}) {
   return event("web_turn_plan", { context_mode: mode, operation_fingerprint: operation,
-    epoch_fingerprint: epoch, surface_fingerprint: surface, head_revision_fingerprint: head, retained_input_head_fingerprint: head,
+    epoch_fingerprint: epoch, lease_fingerprint: surface, head_revision_fingerprint: head, retained_input_head_fingerprint: head,
     document_generation: 1, logical_estimate: 200000, transfer_estimate: 8000, ...fields });
 }
 function settled(fields: object = {}) {
   return event("web_context_settled", { operation_fingerprint: operation, status: "completed",
-    epoch_fingerprint: epoch, surface_fingerprint: surface, head_revision_fingerprint: head, document_generation: 1, ...fields });
+    epoch_fingerprint: epoch, lease_fingerprint: surface, head_revision_fingerprint: head, document_generation: 1, ...fields });
 }
 
 test("seed byte partitions and pressure warnings remain observed estimates, missing historical fields stay unknown", () => {

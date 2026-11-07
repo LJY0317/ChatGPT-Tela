@@ -87,18 +87,18 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
     if (row.stage === "web_turn_plan" && state.plans.length < 128) {
       const previous = priorSettled.get(scope!);
       const mode = MODES.has(String(row.context_mode)) ? row.context_mode : "unknown";
-      const surface = fp(row.surface_fingerprint), epoch = fp(row.epoch_fingerprint), base = fp(row.base_revision_fingerprint);
+      const lease = fp(row.lease_fingerprint), epoch = fp(row.epoch_fingerprint), base = fp(row.base_revision_fingerprint);
       const retainedInputHead = fp(row.retained_input_head_fingerprint);
       const generation = count(row.document_generation);
-      const comparable = previous?.surfaceFingerprint && previous?.epochFingerprint && previous?.headRevisionFingerprint
-        && previous.documentGeneration !== undefined && surface && epoch && base && retainedInputHead && generation !== undefined;
+      const comparable = previous?.leaseFingerprint && previous?.epochFingerprint && previous?.headRevisionFingerprint
+        && previous.documentGeneration !== undefined && lease && epoch && base && retainedInputHead && generation !== undefined;
       const link = mode !== "retained-delta" ? "reconstructed" : !comparable ? "incomplete_evidence"
-        : surface === previous.surfaceFingerprint && epoch === previous.epochFingerprint
+        : lease === previous.leaseFingerprint && epoch === previous.epochFingerprint
           && generation === previous.documentGeneration && retainedInputHead === previous.headRevisionFingerprint
           ? "verified_local_link" : "unmatched_local_link";
       const plan = { at: row.ts, requestFingerprint: fp(row.request_fingerprint),
         operationFingerprint: fp(row.operation_fingerprint), mode, retentionLink: link,
-        surfaceFingerprint: surface, epochFingerprint: epoch,
+        leaseFingerprint: lease, epochFingerprint: epoch,
         documentGeneration: generation, headRevisionFingerprint: fp(row.head_revision_fingerprint),
         baseRevisionFingerprint: base, checkpointFingerprint: fp(row.checkpoint_fingerprint), checkpointCount: count(row.checkpoint_count),
         retainedInputHeadFingerprint: retainedInputHead,
@@ -131,7 +131,7 @@ export function summarizeContextContinuity(input: { events: readonly StructuralD
     if (row.stage === "web_context_settled" && row.status === "completed") {
       const plan = pendingPlans.get(`${key}:${row.operation_fingerprint}`);
       if (plan?.headRevisionFingerprint && plan.headRevisionFingerprint === fp(row.head_revision_fingerprint)
-        && plan.surfaceFingerprint === fp(row.surface_fingerprint) && plan.epochFingerprint === fp(row.epoch_fingerprint)
+        && plan.leaseFingerprint === fp(row.lease_fingerprint) && plan.epochFingerprint === fp(row.epoch_fingerprint)
         && plan.documentGeneration !== undefined && plan.documentGeneration === count(row.document_generation)) {
         plan.settlement = "locally_committed"; priorSettled.set(scope!, plan);
       }

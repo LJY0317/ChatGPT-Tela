@@ -1046,7 +1046,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     else hotHistoryByTask.delete(entry.threadId);
     emitDiagnosticEvent("chatgpt_tela_work", "web_context_settled", {
       status: "completed", epoch_fingerprint: diagnosticFingerprint(entry.webEpochId),
-      surface_fingerprint: diagnosticFingerprint(outcome.surfaceLeaseId), document_generation: outcome.documentGeneration,
+      lease_fingerprint: diagnosticFingerprint(outcome.surfaceLeaseId), document_generation: outcome.documentGeneration,
       head_revision_fingerprint: diagnosticFingerprint(entry.inputHeadRevisionId),
       resident_usage_estimate: estimatedResidentTokens, resident_usage_confidence: "conservative-estimate",
       tool_result_bytes: toolBytes, tool_round_count: rounds,

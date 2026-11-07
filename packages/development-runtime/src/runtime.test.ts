@@ -1196,7 +1196,7 @@ test("same Native turn continuation runs two settled Web cycles through the real
     expect(plans).toHaveLength(2); expect(settled).toHaveLength(2);
     expect(plans[1]).toMatchObject({ context_mode: "retained-delta", document_generation: 1,
       retained_input_head_fingerprint: settled[0].head_revision_fingerprint,
-      surface_fingerprint: settled[0].surface_fingerprint, epoch_fingerprint: settled[0].epoch_fingerprint });
+      lease_fingerprint: settled[0].lease_fingerprint, epoch_fingerprint: settled[0].epoch_fingerprint });
     expect(plans[0].head_revision_fingerprint).toMatch(/^[a-f0-9]{24}$/);
     expect(plans[1].active_request_revision_fingerprint).toMatch(/^[a-f0-9]{24}$/);
     expect(plans[1].active_request_kind).toBe("user");
