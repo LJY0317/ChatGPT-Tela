@@ -38,12 +38,19 @@ registration command cannot promise the Desktop UI exposes a provider
 picker, and it does not install a model catalog. The app-owned Responses
 runtime must also be running on its configured port. A normal Desktop
 restart may be needed to load config changes; hot reload is not assumed.
-Restore the Tela provider before uninstalling Tela. An altered provider
-stanza is intentionally not removed automatically. If the user's top-level
-or named-profile `model_provider` selects Tela, restore refuses removal until
-the user selects another provider. Session overrides are outside config-file
-inspection. The existing uninstall lifecycle does not expose a supported
-external Codex provider removal hook, so explicit restore precedes uninstall.
+Tela's existing uninstall path now restores the exact install-marked provider
+stanza automatically. When top-level or named-profile `model_provider` selects
+Tela, uninstall switches only that selection to Codex's built-in `openai`
+provider. A Tela-only synthetic Web model selection is also cleared so the
+official provider can choose its default Native model. Unrelated model
+selections, settings, comments and permissions remain.
+Uninstall dry-run reports `providerRestore: planned` when necessary, while
+apply restores before stopping/removing Tela resources. A modified/foreign
+stanza or uncertain ownership preserves the external config and Tela resources
+and reports the reason; no entire user config file becomes Tela-owned.
+The separate explicit `desktop-provider restore` command still requires the
+user to select a different provider first. Session-specific overrides are
+outside the user-level config editor's scope.
 
 An isolated official engine `0.167.0-alpha.3.2` with an explicit fixture
 model catalog accepted this provider configuration using

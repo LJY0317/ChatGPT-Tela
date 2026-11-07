@@ -128,6 +128,7 @@
         "@chatgpt-tela/core": "workspace:*",
         "@chatgpt-tela/development-runtime": "workspace:*",
         "@chatgpt-tela/http-host": "workspace:*",
+        "@chatgpt-tela/product-config": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",
       },
     },
@@ -295,6 +296,8 @@
       "dependencies": {
         "@chatgpt-tela/chat-service": "workspace:*",
         "@chatgpt-tela/credential-store": "workspace:*",
+        "@chatgpt-tela/default-desktop-target": "workspace:*",
+        "@chatgpt-tela/product-config": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
         "@chatgpt-tela/service-supervisor": "workspace:*",
         "@chatgpt-tela/tailscale-ingress": "workspace:*",

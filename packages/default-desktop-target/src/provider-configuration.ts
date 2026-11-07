@@ -63,6 +63,36 @@ function exactOwnedProvider(content: string, registration: AppOwnedProviderRegis
     && Object.entries(expected).every(([key, value]) => record[key] === value);
 }
 
+/** On uninstall, an explicitly selected Tela provider falls back to Codex's built-in openai provider. */
+function restoreSelection(content: string, selected: boolean, selectedProfiles: readonly string[]): string {
+  if (!selected && selectedProfiles.length === 0) return content;
+  let section = "";
+  let replaced = 0;
+  const next = content.split(/(?<=\n)/).map(line => {
+    const heading = /^\s*\[([^\]\r\n]+)\]/.exec(line);
+    if (heading) section = heading[1]!;
+    const target = section === "" && selected || selectedProfiles.some(profile =>
+      section === `profiles.${profile}` || section === `profiles.${JSON.stringify(profile)}`);
+    if (!target) return line;
+    // Synthetic Web model IDs belong to the disappearing Tela provider.
+    // Removing only this model assignment lets official Codex select its
+    // default Native model after falling back to the built-in provider.
+    const webModel = /^([ \t]*)model[ \t]*=[ \t]*(["'])chatgpt-tela-web\/family\/[^'"\s]+\2([ \t]*(?:#.*)?)(\r?\n)?$/.exec(line);
+    if (webModel) {
+      const comment = webModel[3]?.trim();
+      return `${comment ? `${webModel[1]}${comment}` : ""}${webModel[4] ?? ""}`;
+    }
+    return line.replace(/^([ \t]*model_provider[ \t]*=[ \t]*)(["'])chatgpt_tela_local\2([ \t]*(?:#.*)?)(\r?\n)?$/, (_all, prefix: string, _quote: string, suffix: string, newline = "") => {
+      replaced++;
+      return `${prefix}"openai"${suffix}${newline}`;
+    });
+  }).join("");
+  if (replaced !== Number(selected) + selectedProfiles.length) {
+    throw new Error("Selected Tela provider has an unsupported config layout; preserving user settings");
+  }
+  return next;
+}
+
 /**
  * Pure transformation: the caller must separately establish explicit user
  * approval, current installation ownership, and safe file-write conditions.
@@ -71,6 +101,7 @@ export function editAppOwnedDesktopProviderConfig(
   content: string,
   action: "register" | "restore",
   registration: AppOwnedProviderRegistration,
+  options: { readonly restoreSelected?: boolean } = {},
 ): { readonly content: string; readonly changed: boolean } {
   const block = registrationBlock(registration);
   const hasExactBlock = content.includes(block);
@@ -91,19 +122,28 @@ export function editAppOwnedDesktopProviderConfig(
     if (provider !== undefined || content.includes("# ChatGPT Tela provider begin:")) {
       throw new Error("Desktop provider ownership or contents changed; refusing to restore");
     }
+    const settings = Bun.TOML.parse(content) as Record<string, unknown>;
+    const profiles = settings.profiles;
+    if (settings.model_provider === TELA_APP_OWNED_PROVIDER_ID || profiles && typeof profiles === "object"
+      && Object.values(profiles).some(profile => profile && typeof profile === "object"
+        && (profile as Record<string, unknown>).model_provider === TELA_APP_OWNED_PROVIDER_ID)) {
+      throw new Error("Tela provider remains selected without an owned registration; preserving user settings");
+    }
     return { content, changed: false };
   }
   const settings = Bun.TOML.parse(content) as Record<string, unknown>;
   const profiles = settings.profiles;
-  const selectedInProfile = profiles && typeof profiles === "object" && !Array.isArray(profiles)
-    && Object.values(profiles).some(profile => profile && typeof profile === "object"
-      && !Array.isArray(profile) && (profile as Record<string, unknown>).model_provider === TELA_APP_OWNED_PROVIDER_ID);
-  if (settings.model_provider === TELA_APP_OWNED_PROVIDER_ID || selectedInProfile) {
+  const selectedProfiles = profiles && typeof profiles === "object" && !Array.isArray(profiles)
+    ? Object.entries(profiles).filter(([, profile]) => profile && typeof profile === "object"
+      && !Array.isArray(profile) && (profile as Record<string, unknown>).model_provider === TELA_APP_OWNED_PROVIDER_ID)
+      .map(([name]) => name) : [];
+  const selected = settings.model_provider === TELA_APP_OWNED_PROVIDER_ID;
+  if ((selected || selectedProfiles.length) && !options.restoreSelected) {
     throw new Error("Select another user-level or profile model_provider before restoring the Tela provider");
   }
   // A byte-for-byte match of the owned block is required. Other user sections,
   // before or after it, are left untouched.
-  const next = content.replace(block, "");
+  const next = restoreSelection(content.replace(block, ""), selected, selectedProfiles);
   parsedProviders(next);
   return { content: next, changed: true };
 }

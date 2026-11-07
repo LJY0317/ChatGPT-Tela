@@ -12,6 +12,7 @@ import {
   type OwnedResource,
 } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "./index";
+import { editOfficialCodexProviderFile } from "@chatgpt-tela/default-desktop-target";
 import { startUninstallCheckpoint, writeUninstallCheckpoint } from "./coordination";
 
 async function binaryFixture(root: string, externalMetadata = false) {
@@ -37,6 +38,79 @@ async function binaryFixture(root: string, externalMetadata = false) {
   });
   return { home, paths, options };
 }
+
+test("owned Desktop provider register, re-register and selected uninstall restore in an isolated HOME", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-provider-uninstall-"));
+  try {
+    const { home, paths, options } = await binaryFixture(root);
+    const codex = join(home, ".codex"); mkdirSync(codex);
+    const configPath = join(codex, "config.toml");
+    const original = 'model_provider = "openai"\nmodel = "user-choice"\n# existing comment\n';
+    writeFileSync(configPath, original, { mode: 0o640 });
+    const capability = "a".repeat(48);
+    const owner = { configPath, installId: "install-uninstall-fixture",
+      baseUrl: `http://127.0.0.1:18744/${capability}/v1` };
+    // The installed ownership fixture uses a non-UUID ID, whereas provider
+    // registration intentionally requires an actual install receipt UUID.
+    const manifest = createOwnershipManifest("1.0.0");
+    writeOwnershipManifest(paths.installManifest, manifest);
+    const registration = { ...owner, installId: manifest.installId };
+    const product = { version: 1, publicMcpAbi: "stable", exposure: {
+      kind: "existing-https", publicUrl: "https://example.test/mcp", localPort: 18743,
+      authentication: "none", allowUnauthenticatedPublicEndpoint: true,
+    }, appOwnedResponses: [{ slot: 1, port: 18744, capability }] };
+    mkdirSync(paths.configRoot, { recursive: true });
+    writeFileSync(join(paths.configRoot, "product-v1.json"), JSON.stringify(product));
+    expect(editOfficialCodexProviderFile({ ...registration, action: "register", mode: "apply" })).toBe(true);
+    expect(editOfficialCodexProviderFile({ ...registration, action: "register", mode: "apply" })).toBe(false);
+    const registered = readFileSync(configPath, "utf8");
+    const selected = registered.replace('model_provider = "openai"', 'model_provider = "chatgpt_tela_local"');
+    writeFileSync(configPath, selected, { mode: 0o640 });
+    expect((await runProductUninstall({ mode: "dry-run", ...options })).providerRestore)
+      .toMatchObject({ status: "planned" });
+    expect(readFileSync(configPath, "utf8")).toBe(selected);
+    const applied = await runProductUninstall({ mode: "apply", ...options });
+    expect(applied.providerRestore).toMatchObject({ status: "restored" });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    expect((await runProductUninstall({ mode: "apply", ...options })).providerRestore)
+      .toMatchObject({ status: "already-absent" });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("uninstall preserves edited external provider and installed resources with an exact reason", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-provider-preserve-"));
+  try {
+    const { home, paths, options } = await binaryFixture(root);
+    const manifest = createOwnershipManifest("1.0.0");
+    writeOwnershipManifest(paths.installManifest, manifest);
+    const capability = "b".repeat(48);
+    mkdirSync(join(home, ".codex"));
+    const configPath = join(home, ".codex", "config.toml");
+    writeFileSync(configPath, 'model_provider = "openai"\n');
+    const owner = { configPath, installId: manifest.installId,
+      baseUrl: `http://127.0.0.1:18744/${capability}/v1` };
+    editOfficialCodexProviderFile({ ...owner, action: "register", mode: "apply" });
+    writeFileSync(configPath, readFileSync(configPath, "utf8").replace("supports_websockets = false", "supports_websockets = true"));
+    mkdirSync(paths.configRoot, { recursive: true });
+    writeFileSync(join(paths.configRoot, "product-v1.json"), JSON.stringify({ version: 1,
+      publicMcpAbi: "stable", exposure: { kind: "existing-https", publicUrl: "https://example.test/mcp",
+        localPort: 18743, authentication: "none", allowUnauthenticatedPublicEndpoint: true },
+      appOwnedResponses: [{ slot: 1, port: 18744, capability }],
+    }));
+    const before = readFileSync(configPath, "utf8");
+    expect((await runProductUninstall({ mode: "dry-run", ...options })).providerRestore)
+      .toMatchObject({ status: "preserved", reason: expect.stringContaining("ownership or contents changed") });
+    const removed = await runProductUninstall({ mode: "apply", removeData: true, ...options });
+    expect(removed).toMatchObject({ applied: false, status: "preserved-external-provider" });
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+    expect(existsSync(paths.binaryRoot)).toBe(true);
+    expect(existsSync(paths.installManifest)).toBe(true);
+    rmSync(join(paths.configRoot, "product-v1.json"));
+    expect((await runProductUninstall({ mode: "dry-run", ...options })).providerRestore)
+      .toMatchObject({ status: "preserved", reason: expect.stringContaining("configuration is missing") });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 for (const unknown of [false, true]) test(`binary removal owns external metadata and preserves unknown files (${unknown})`, async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-binary-metadata-uninstall-"));

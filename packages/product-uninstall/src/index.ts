@@ -1,5 +1,8 @@
 import { coordinatorResource, finalizeUninstall, readUninstallCheckpoint, startUninstallCheckpoint, clearUninstallCheckpoint, writeUninstallCheckpoint } from "./coordination";
-import { existsSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { editOfficialCodexProviderFile } from "@chatgpt-tela/default-desktop-target";
+import { readProductConfig } from "@chatgpt-tela/product-config";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   hasPendingFileImports,
@@ -103,6 +106,39 @@ export function profileSetupActivityBlockers(paths: ProductPaths, installId: str
   return Object.freeze(blockers);
 }
 
+/** External Codex config remains user-owned; only the exact install-marked stanza is touched. */
+function restoreOwnedDesktopProvider(input: ProductUninstallOptions, paths: ProductPaths, installId: string) {
+  const configPath = join(input.home ?? homedir(), ".codex", "config.toml");
+  const productPath = join(paths.configRoot, "product-v1.json");
+  try {
+    const withoutOwnedRoute = () => {
+      // No install-owned route record exists. A surviving registration marker
+      // is still an uninstall dependency, but its URL cannot be re-proven.
+      if (existsSync(configPath) && lstatSync(configPath).isFile()
+        && !lstatSync(configPath).isSymbolicLink()
+        && readFileSync(configPath, "utf8").includes(`# ChatGPT Tela provider begin: ${installId}`)) {
+        return { status: "preserved" as const,
+          reason: "Owned Desktop provider marker remains but install-owned Responses configuration is missing" };
+      }
+      return { status: "not-configured" as const };
+    };
+    if (!existsSync(productPath)) return withoutOwnedRoute();
+    const config = readProductConfig(productPath);
+    const ingress = config.appOwnedResponses?.find(item => item.slot === 1);
+    if (!ingress) return withoutOwnedRoute();
+    if (!existsSync(configPath)) return { status: "already-absent" as const };
+    const changed = editOfficialCodexProviderFile({
+      configPath, action: "restore", mode: input.mode, restoreSelected: true,
+      installId, baseUrl: `http://127.0.0.1:${ingress.port}/${ingress.capability}/v1`,
+    });
+    return { status: changed ? input.mode === "apply" ? "restored" as const : "planned" as const
+      : "already-absent" as const };
+  } catch (error) {
+    return { status: "preserved" as const,
+      reason: error instanceof Error ? error.message : "Codex provider ownership could not be established" };
+  }
+}
+
 async function runProductUninstallOwned(input: ProductUninstallOptions): Promise<Readonly<Record<string, unknown>>> {
   const platform = input.platform ?? process.platform;
   const environment = input.environment ?? process.env;
@@ -131,6 +167,11 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
     if (repairJournal) {
       throw new Error(`packaged repair for ${repairJournal.productVersion} is incomplete; resume it before uninstall apply`);
     }
+  }
+  const providerRestore = restoreOwnedDesktopProvider(input, paths, manifest.installId);
+  if (input.mode === "apply" && providerRestore.status === "preserved") {
+    return Object.freeze({ applied: false, status: "preserved-external-provider", providerRestore,
+      destructiveActions: 0, preservedCount: 1 });
   }
 
   const filesystemObserver = new FilesystemOwnershipObserver();
@@ -228,7 +269,7 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
   const recoveryNotice = hasPendingFileImports(join(paths.serviceState("chat"), "imports-v2"))
     ? { fileImportRecoveryPending: true, recoveryNotice: "Resolve pending file imports in Tela before removing saved data; recovery records are preserved." } : {};
   if (input.mode === "dry-run") {
-    return Object.freeze({ dryRun: true, activityBlockers, ...recoveryNotice, ...plan });
+    return Object.freeze({ dryRun: true, activityBlockers, providerRestore, ...recoveryNotice, ...plan });
   }
 
   const result = await applyUninstallPlan({
@@ -297,6 +338,7 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
     ...recoveryNotice,
     removeData,
     activityBlockers,
+    providerRestore,
     shutdownFailures,
     ...result,
     manifestRemoved: false,

@@ -68,4 +68,23 @@ describe("explicit app-owned official Codex provider registration", () => {
     })).toThrow("install ID");
     expect(() => editAppOwnedDesktopProviderConfig("model_provider = [", "register", owned)).toThrow();
   });
+  test("uninstall restores selected root and named profile providers to official openai without touching other settings", () => {
+    const added = editAppOwnedDesktopProviderConfig(original, "register", owned).content;
+    const selected = added.replace('model_provider = "openai"', `model_provider = "${TELA_APP_OWNED_PROVIDER_ID}"`)
+      .replace('model = "user-model"', 'model = "chatgpt-tela-web/family/synthetic" # keep model comment')
+      + `\n[profiles.work]\nmodel_provider = "${TELA_APP_OWNED_PROVIDER_ID}" # custom comment\nmodel = "keep"\n`
+      + '\n[profiles.other]\nmodel_provider = "custom"\n';
+    const planned = editAppOwnedDesktopProviderConfig(selected, "restore", owned, { restoreSelected: true });
+    expect(planned.changed).toBe(true);
+    expect(planned.content).toContain('model_provider = "openai"');
+    expect(planned.content).not.toContain('chatgpt-tela-web/family/synthetic');
+    expect(planned.content).toContain('# keep model comment');
+    expect(planned.content).toContain('model_provider = "openai" # custom comment');
+    expect(planned.content).toContain('model = "keep"');
+    expect(planned.content).toContain('model_provider = "custom"');
+    expect(planned.content).not.toContain(`[model_providers.${TELA_APP_OWNED_PROVIDER_ID}]`);
+    expect(editAppOwnedDesktopProviderConfig(planned.content, "restore", owned, { restoreSelected: true }).changed).toBe(false);
+    expect(() => editAppOwnedDesktopProviderConfig('model_provider = "chatgpt_tela_local"\n', "restore", owned,
+      { restoreSelected: true })).toThrow("remains selected");
+  });
 });
