@@ -203,6 +203,15 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   let internalMcp: CodexBridgeMcpHttpServer | undefined;
   try {
     input.signal?.throwIfAborted();
+    const preparation = input.catalogPreparation ?? (process.env.CHATGPT_TELA_INSTALL_ID
+      ? { paths: resolveProductPaths(), installId: process.env.CHATGPT_TELA_INSTALL_ID } : undefined);
+    const installation = preparation && !preparation.readNativeCatalog
+      ? resolveDefaultDesktopInstallation({ environment: process.env }) : undefined;
+    const nativeCatalog = preparation
+      ? await (preparation.readNativeCatalog
+        ? preparation.readNativeCatalog()
+        : readDefaultDesktopNativeCatalog({ installation: installation!, ...(input.signal ? { signal: input.signal } : {}) }))
+      : undefined;
     const webDiscovery = await prepareProductWebDiscovery({
       runtime, browserProfile: config.browserProfile, connectorName: identity.connectorName,
       signal: input.signal ?? new AbortController().signal, stage: () => {},
@@ -230,20 +239,9 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       });
     });
     await router.refreshWebModelFamilies(input.signal);
-    const preparedCatalog: typeof input.catalogPreparation = input.catalogPreparation ?? (process.env.CHATGPT_TELA_INSTALL_ID
-      ? { paths: resolveProductPaths(), installId: process.env.CHATGPT_TELA_INSTALL_ID } : undefined);
-    if (preparedCatalog) {
-      const installation = preparedCatalog.readNativeCatalog ? undefined
-        : resolveDefaultDesktopInstallation({ environment: process.env });
-      const nativeCatalog = await (preparedCatalog.readNativeCatalog
-        ? preparedCatalog.readNativeCatalog()
-        : readDefaultDesktopNativeCatalog({ installation: installation!,
-          ...(input.signal ? { signal: input.signal } : {}) }));
-      await publishAppOwnedDesktopCatalog({
-        paths: preparedCatalog.paths,
-        installId: preparedCatalog.installId,
-        nativeCatalog,
-        webFamilies: families,
+    if (preparation && nativeCatalog !== undefined) {
+      await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId,
+        nativeCatalog, webFamilies: families,
         assertCurrentAccount: () => {
           const current = readChatGptTelaAccountBinding(config.browserProfile);
           if (!current || current.accountFingerprint !== binding.accountFingerprint) {

@@ -536,6 +536,7 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
   const { chatGptWebModelId, chatGptWebFamilyKey } = await import("@chatgpt-tela/chatgpt");
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-startup-roundtrip-"));
   const family = { key: chatGptWebFamilyKey("Startup fixture"), label: "Startup fixture", availableEfforts: ["medium"] as const };
+  const preparationOrder: string[] = [];
   const paths = resolveProductPaths({ platform: "linux", home: root, environment: {} });
   const manifest = createOwnershipManifest("fixture", new Date(), "11111111-2222-4333-8444-555555555555");
   writeOwnershipManifest(paths.installManifest, manifest);
@@ -577,6 +578,7 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
       return { responses, suppliedToolBridge: gateway.toolBridge,
         shutdownReadiness: () => gateway.shutdownReadiness(), prepareShutdown: () => gateway.prepareShutdown(),
         async prepareChatGptWebSession(input: any) {
+          preparationOrder.push("web-account-and-discovery");
           input.onProfile?.({ account: { accountFingerprint: "a".repeat(64), accountStructure: "personal", containerFingerprint: "fixture" } });
           input.onFamilies?.([family]); input.onConnectorStarting?.(); input.onConnectorProven?.(); return { families: [family] };
         },
@@ -588,6 +590,7 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
       nativeFetch: async () => Response.json({ models: [] }),
       catalogPreparation: { paths, installId: manifest.installId, async readNativeCatalog() {
         nativeCatalogReads++;
+        preparationOrder.push("native-catalog");
         return { models: [{ slug: "official-native", visibility: "list", display_name: "Native",
           supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] };
       } },
@@ -597,6 +600,7 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
     expect(prepared.models.map((model: { slug: string }) => model.slug)).toEqual([
       "official-native", chatGptWebModelId(family.key),
     ]);
+    expect(preparationOrder).toEqual(["native-catalog", "web-account-and-discovery"]);
     client = new Client({ name: "startup-goal", version: "1.0.0" });
     await client.connect(new StreamableHTTPClientTransport(owned.internalMcp.endpointUrl, {
       requestInit: { headers: { authorization: `Bearer ${config.internalMcpToken}` } } }) as unknown as import("@modelcontextprotocol/sdk/shared/transport.js").Transport);
