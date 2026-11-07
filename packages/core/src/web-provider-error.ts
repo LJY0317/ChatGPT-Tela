@@ -1,11 +1,12 @@
 /** Stable, text-free classification shared by Web observation and failure projection. */
 export type WebProviderFailureReason = "fetch_failed" | "message_stream_failed" | "message_too_long"
-  | "unusual_activity" | "other_provider_error" | "detail_unavailable";
+  | "message_delivery_timed_out" | "unusual_activity" | "other_provider_error" | "detail_unavailable";
 
 export function webProviderFailureReason(detail: string | undefined): WebProviderFailureReason {
   const normalized = detail?.trim().toLowerCase();
   return normalized === "failed to fetch" ? "fetch_failed"
     : normalized?.includes("message stream") ? "message_stream_failed"
+      : normalized?.includes("message delivery timed out") ? "message_delivery_timed_out"
       : normalized && /message\s+you\s+submitted\s+was\s+too\s+long/.test(normalized) ? "message_too_long"
         : normalized?.includes("our systems have detected unusual activity coming from your system") ? "unusual_activity"
           : normalized ? "other_provider_error" : "detail_unavailable";

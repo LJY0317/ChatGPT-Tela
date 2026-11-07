@@ -2748,6 +2748,41 @@ test("provider failure diagnostics retain shape but never the error text",async(
  }finally{stop?.();await surface.host.close();}
 });
 
+test("provider message-delivery timeouts are classified without triggering stream Retry", async () => {
+  class NoRetryDriver extends FixtureDriver {
+    retries = 0;
+    async retryFailedResponse() { this.retries++; return true; }
+  }
+  const driver = new NoRetryDriver(fixture("ready-new-chat"));
+  const surface = await leaseFor(driver);
+  const provider = new ChatGptSemanticProvider();
+  const rows: Record<string, unknown>[] = [];
+  const stop = observeDiagnosticEvents(row => {
+    if (row.stage === "web_provider_failure_detail_classified") rows.push(row);
+  });
+  const detail = "Message delivery timed out. Please try again later.";
+  try {
+    const pending = provider.submitTurn(surface.lease, request());
+    while (driver.current.revision === "r1") await Promise.resolve();
+    driver.queued.push(acceptedSnapshot(driver));
+    const submitted = await pending;
+    if (submitted.state !== "proven") throw Error("expected accepted request");
+    driver.queued.push({ ...driver.current, revision: "delivery-timeout", turns: [...driver.current.turns,
+      { key: "assistant", role: "assistant", parentUserTurnKey: "user-turn-1", phase: "failed", failureDetail: detail }] });
+    const result = await provider.waitForTurnEvent(surface.lease, submitted.value);
+    expect(result.state === "proven" && result.value).toMatchObject({ kind: "failed", detail });
+    expect(driver.retries).toBe(0);
+    expect(rows).toEqual([expect.objectContaining({ reason_class: "message_delivery_timed_out",
+      detail_chars: detail.length, contains_submission_term: true, phase: "direct", assistant_phase: "failed",
+      matched_assistant_count: 1, matched_failed_count: 1, matched_complete_count: 0,
+      provider_internal_cause_available: false })]);
+    expect(JSON.stringify(rows)).not.toContain(detail);
+  } finally {
+    stop?.();
+    await surface.host.close();
+  }
+});
+
 test("owned unusual activity fails without invoking stream Retry and records only the reason", async () => {
   class Driver extends FixtureDriver { retries = 0; async retryFailedResponse() { this.retries++; return true; } }
   const driver = new Driver(fixture("ready-new-chat")); const surface = await leaseFor(driver);
