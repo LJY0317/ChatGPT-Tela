@@ -32,6 +32,33 @@ to a shared-engine replacement: Web, history and compaction gates remain.
 
 ## App-owned provider cutover
 
+An opt-in isolated acceptance fixture in
+`packages/codex-service/src/app-owned-profile.test.ts` uses the unmodified
+Desktop-bundled Codex 0.167 app-server, a disposable `CODEX_HOME`, and the
+production `startAppOwnedProductResponsesRuntime` Responses route. It seeds
+the engine catalog from that route's actual `/models` response and starts one
+thread on a Web model before selecting a Native model. The Web turn reaches
+the supplied provider; the Native turn reaches the isolated upstream stub,
+executes the engine's original `exec_command`, and returns the exact
+`function_call_output` to the same thread. The existing separate assembly
+fixture proves authenticated supplied Goal-tool roundtrip, disconnected final
+retention and exact recovery after an app-owned child restart. This is not
+evidence that a Web model can invoke arbitrary Native tools: the supplied
+bridge currently admits only originally advertised Goal functions.
+
+For an eventual installed Desktop acceptance, opt into the app-owned route
+explicitly on a disposable profile and record the Desktop PID and fixed
+Responses URL before starting. In one disposable thread, select a visible Web
+model and confirm its actual family/effort and completed turn; switch to a
+Native model and observe one original host-tool call, its exact result and
+completed turn. Stop and restart only Tela's app-owned child, verify the
+Desktop PID and provider URL remain unchanged, and collect the exact
+previously unobserved Web operation without another model submission. Confirm
+the account binding, internal MCP unmount on stop, and that the managed path
+remains available. Desktop picker, real account/browser tool effects and the
+installed lifecycle still require owner-observed acceptance; do not change
+the installed default based on the isolated fixture.
+
 Native models using their original tools and Web models using Tela Chat are the
 minimum target. Web-to-original-Native tool execution is a separate capability,
 not a prerequisite for restoring Native Computer Use. An input-only Responses
