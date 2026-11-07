@@ -46,6 +46,31 @@ retention and exact recovery after an app-owned child restart. This is not
 evidence that a Web model can invoke arbitrary Native tools: the supplied
 bridge currently admits only originally advertised Goal functions.
 
+Cold-start catalog gap: in the same isolated fixture, official 0.167
+`model/list` without `model_catalog_json` does not request the product
+`/models` endpoint or expose its Web family. Even fetching that endpoint
+after startup does not refresh the already-running official model list.
+Separately, the official `debug models` command returns the original Native
+catalog in an empty isolated home. The existing managed launch already
+combines that catalog with dynamic Web family discovery and writes a temporary
+`model_catalog_json` before starting the engine
+(`readDefaultDesktopNativeCatalog` and `startDefaultDesktopTargetRuntime`).
+The app-owned production starter in
+`packages/development-runtime/src/product-profile.ts` currently exposes
+only its Responses URL; it has no installation-owned catalog preparation or
+official-engine launch configuration contract. Integrating the existing
+prelaunch catalog preparation into the app-owned Desktop owner is still
+required. Its input must be the verified Native discovery and current
+account-bound Web families, and its output must be an owned catalog path
+provided to the official engine before the first model list. On restart, the
+owner must rebuild the projection from current discovery; Native entries must
+survive a later Web discovery failure. This requires coordination with the
+provider configuration and product runtime owners. The isolated fixture
+proves that a restart with a generated catalog makes both model choices
+visible and that a later provider `/models` failure does not remove the
+already-admitted Native model. It does not prove live official Desktop picker
+refresh within the same running session.
+
 For an eventual installed Desktop acceptance, opt into the app-owned route
 explicitly on a disposable profile and record the Desktop PID and fixed
 Responses URL before starting. In one disposable thread, select a visible Web

@@ -377,6 +377,8 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
   mkdirSync(config.browserProfile.userDataDir, { recursive: true });
   bindChatGptTelaAccount(config.browserProfile, "a".repeat(64));
   const webRequests: any[] = [], nativeRequests: any[] = [];
+  let nativeCatalogReads = 0;
+  let nativeCatalogUnavailable = false;
   const provider = {
     async submitTurn(_surface: unknown, turn: any) {
       webRequests.push({ turnId: turn.nativeTurnId, tools: turn.chatTools });
@@ -394,7 +396,11 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
   }, async release() {}, async close() {} } as any;
   const nativeFetch = async (request: Request): Promise<Response> => {
     expect(request.headers.get("authorization")).toBe("Bearer isolated-fixture-only");
-    if (request.method === "GET") return Response.json({ models: [nativeEntry] });
+    if (request.method === "GET") {
+      nativeCatalogReads++;
+      if (nativeCatalogUnavailable) return Response.json({ error: "isolated catalog unavailable" }, { status: 503 });
+      return Response.json({ models: [nativeEntry] });
+    }
     const body = await request.json() as any;
     nativeRequests.push(body);
     expect(body.model).toBe(nativeModel);
@@ -442,6 +448,72 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
   try {
     expect(execFileSync(officialEngine!, ["--version"], { encoding: "utf8" })).toContain("0.167.");
     owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter, nativeFetch });
+    // Cold app-server: there is no model_catalog_json and no prior Native/Web
+    // cache. Query its public model/list while the product /models route exists.
+    const coldHome = join(root, "cold-codex-home");
+    mkdirSync(coldHome, { recursive: true });
+    const discoveredNative = JSON.parse(execFileSync(officialEngine!, ["debug", "models"], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH!, HOME: root, CODEX_HOME: coldHome,
+        OPENAI_API_KEY: "isolated-fixture-only", TMPDIR: root },
+    })) as { models: { slug: string; visibility?: string }[] };
+    expect(discoveredNative.models.some(entry => entry.visibility === "list")).toBe(true);
+    expect(discoveredNative.models.map(entry => entry.slug)).not.toContain(webModel);
+    writeFileSync(join(coldHome, "config.toml"), [
+      'model_provider = "fixture"', '[model_providers.fixture]', 'name = "OpenAI"',
+      `base_url = ${JSON.stringify(owned.responses.baseUrl.href.slice(0, -1))}`,
+      'wire_api = "responses"', 'requires_openai_auth = false', 'env_key = "OPENAI_API_KEY"',
+    ].join("\n"));
+    const coldEngine = Bun.spawn([officialEngine!, "app-server", "--stdio"], {
+      cwd: root, env: { PATH: process.env.PATH!, HOME: root, CODEX_HOME: coldHome,
+        OPENAI_API_KEY: "isolated-fixture-only", TMPDIR: root },
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    const coldReplies = new Map<number, {resolve(value:any):void;reject(error:unknown):void}>();
+    let coldSequence = 0;
+    const coldReading = (async () => {
+      const reader = coldEngine.stdout.getReader();
+      let buffer = "";
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        buffer += new TextDecoder().decode(part.value);
+        let index: number;
+        while ((index = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
+          if (!line) continue;
+          const message = JSON.parse(line);
+          if (message.id === undefined) continue;
+          const waiter = coldReplies.get(message.id); coldReplies.delete(message.id);
+          if (message.error) waiter?.reject(message.error); else waiter?.resolve(message.result);
+        }
+      }
+    })();
+    const coldRpc = (method:string, params:unknown) => new Promise<any>((resolve,reject) => {
+      const id=++coldSequence;coldReplies.set(id,{resolve,reject});
+      coldEngine.stdin.write(JSON.stringify({id,method,params})+"\n");
+    });
+    try {
+      await coldRpc("initialize",{clientInfo:{name:"tela-cold-models",version:"0.0.0"},capabilities:{experimentalApi:true}});
+      coldEngine.stdin.write(JSON.stringify({method:"initialized"})+"\n");
+      const coldConfig = await coldRpc("config/read",{});
+      expect(coldConfig.config.model_catalog_json ?? null).toBeNull();
+      const coldList = await coldRpc("model/list",{includeHidden:true});
+      expect(coldList.data.length).toBeGreaterThan(0);
+      expect(coldList.data.map((entry:any)=>entry.model)).not.toContain(webModel);
+      expect(nativeCatalogReads).toBe(0);
+      // The official app-server owns its catalog snapshot. Fetching the
+      // product route in this session does not install Web choices into it.
+      const coldProviderCatalog = await fetch(new URL("models", owned.responses.baseUrl), {
+        headers: {authorization:"Bearer isolated-fixture-only"},
+      });
+      expect((await coldProviderCatalog.json() as any).models.map((entry:any)=>entry.slug))
+        .toEqual([nativeModel, webModel]);
+      const unrefreshed = await coldRpc("model/list",{includeHidden:true});
+      expect(unrefreshed.data.map((entry:any)=>entry.model)).not.toContain(webModel);
+    } finally {
+      coldEngine.stdin.end();await coldEngine.exited;await coldReading;
+    }
     const catalogFile = join(home, "models.json");
     const catalogResponse = await fetch(new URL("models", owned.responses.baseUrl), {
       headers: { authorization: "Bearer isolated-fixture-only" },
@@ -533,6 +605,15 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       const resumed = await rpc("thread/read", { threadId, includeTurns: true });
       expect(resumed.thread.id).toBe(threadId);
       expect(resumed.thread.turns).toHaveLength(2);
+      nativeCatalogUnavailable = true;
+      const inaccessibleCatalog = await fetch(new URL("models", owned.responses.baseUrl), {
+        headers: { authorization: "Bearer isolated-fixture-only" },
+      });
+      expect(inaccessibleCatalog.status).toBe(503);
+      // The official engine retains its legitimate Native model while Web
+      // discovery's upstream catalog endpoint is temporarily unavailable.
+      const available = await rpc("model/list", { includeHidden: true });
+      expect(available.data.map((entry: any) => entry.model)).toContain(nativeModel);
     } finally {
       engine.stdin.end();
       await engine.exited;
