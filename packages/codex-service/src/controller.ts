@@ -445,7 +445,7 @@ export async function startCodexService(input: {
     if (!response.ok) return blocked("runtime_readiness_unavailable");
     const web = await response.json() as { contractVersion?: unknown; slot?: unknown; shutdownReadiness?: unknown };
     if (web.contractVersion !== 1 || web.slot !== profile.slot || web.shutdownReadiness !== "ready") return blocked("runtime_not_ready");
-    if (input.webDelegationCapacity) {
+    if (profile.mode === "managed" && input.webDelegationCapacity) {
       const capacity = await input.webDelegationCapacity(profile.slot);
       if (capacity.uncertain > 0 || capacity.total.used > 0) return blocked("delegation_reservation");
     }
@@ -533,7 +533,9 @@ export async function startCodexService(input: {
         if (state.slot !== profile.slot) throw new Error("Web state owner mismatch");
         profile.webState = state.webState;
         profile.accountManagementActive = state.accountManagementActive === true;
-        if (state.webState !== "ready" || !profile.terminalEndpoint) return false;
+        if (state.webState !== "ready") return false;
+        if (profile.mode === "app-owned") return true;
+        if (!profile.terminalEndpoint) return false;
         const signal = input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000);
         const rpc = await connectCodexAppServerWebSocket(profile.terminalEndpoint, { signal });
         try {
@@ -633,7 +635,9 @@ export async function startCodexService(input: {
       }
     },
     async profiles() {
-      const inventory = new Map((await targets.profiles(input.signal)).map(profile => [profile.target.slot, profile]));
+      const nativeProfiles = input.config.multiProfile || !appOwnedIngress(1)
+        ? await targets.profiles(input.signal) : [];
+      const inventory = new Map(nativeProfiles.map(profile => [profile.target.slot, profile]));
       for (const ingress of input.config.appOwnedResponses ?? []) inventory.set(ingress.slot, {
         target: appOwnedTarget, session: { targetId: appOwnedTarget.id, state: "independent" },
       });
