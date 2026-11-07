@@ -14,6 +14,7 @@ import { runPackagedLifecycleCommand } from "./lifecycle";
 import { runPackagedChatCommand } from "./chat";
 import { runPackagedServicesCommand } from "./services";
 import { readConfigurationInput, runPackagedBootstrapCommand } from "./bootstrap";
+import { runPackagedDesktopProviderCommand } from "./desktop-provider";
 import { resolveChatGptTelaBrowserProfile } from "@chatgpt-tela/development-runtime/browser-profile";
 import { prepareInstalledProfileOwnership } from "../../cli/src/profile-ownership";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
@@ -185,6 +186,36 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     const catalogResource = readOwnershipManifest(paths.installManifest)?.resources.find(resource => resource.id === "app-owned-desktop-model-catalog");
     expect(catalogResource).toMatchObject({ kind: "directory", owner: "product", dataClass: "config", path: join(paths.stateRoot, "install", "desktop-model-catalog") });
     expect(existsSync(join(paths.stateRoot, "install", "desktop-model-catalog", OWNERSHIP_MARKER))).toBe(true);
+    const codexHome = join(home, ".codex"); mkdirSync(codexHome);
+    const codexConfig = join(codexHome, "config.toml");
+    const codexOriginal = 'model_provider = "openai"\nmodel = "user-native-model"\n# preserve desktop settings\n';
+    writeFileSync(codexConfig, codexOriginal, { mode: 0o640 });
+    const catalogFile = join(paths.stateRoot, "install", "desktop-model-catalog", "models.json");
+    writeFileSync(catalogFile, JSON.stringify({ models: [{ id: "native-fixture" }, { id: "web-fixture" }] }), { mode: 0o600 });
+    const providerOptions = { payloadRoot: paths.binaryRoot, pathOptions: options };
+    expect(await runPackagedDesktopProviderCommand(["desktop-provider", "register", "--dry-run"], providerOptions))
+      .toMatchObject({ changed: true, selection: expect.stringContaining("Catalog: installed") });
+    expect(readFileSync(codexConfig, "utf8")).toBe(codexOriginal);
+    expect(await runPackagedDesktopProviderCommand(["desktop-provider", "register", "--apply"], providerOptions))
+      .toMatchObject({ changed: true, selection: expect.stringContaining("Catalog: installed") });
+    const registered = readFileSync(codexConfig, "utf8");
+    expect(registered).toContain(`model_catalog_json = ${JSON.stringify(catalogFile)}`);
+    expect(registered).toContain("[model_providers.chatgpt_tela_local]");
+    expect(registered).toContain('model = "user-native-model"');
+    expect((Bun.TOML.parse(registered) as Record<string, unknown>).model_provider).toBe("openai");
+    expect(await runPackagedDesktopProviderCommand(["desktop-provider", "restore", "--dry-run"], providerOptions))
+      .toMatchObject({ changed: true });
+    expect(readFileSync(codexConfig, "utf8")).toBe(registered);
+    expect(await runPackagedDesktopProviderCommand(["desktop-provider", "restore", "--apply"], providerOptions))
+      .toMatchObject({ changed: true });
+    expect(readFileSync(codexConfig, "utf8")).toBe(codexOriginal);
+    const markerPath = join(paths.stateRoot, "install", "desktop-model-catalog", OWNERSHIP_MARKER);
+    const marker = readFileSync(markerPath, "utf8");
+    writeFileSync(markerPath, JSON.stringify({ version: 1, installId: "foreign-install", resourceId: "app-owned-desktop-model-catalog" }));
+    await expect(runPackagedDesktopProviderCommand(["desktop-provider", "register", "--apply"], providerOptions))
+      .rejects.toThrow("catalog is not prepared");
+    expect(readFileSync(codexConfig, "utf8")).toBe(codexOriginal);
+    writeFileSync(markerPath, marker);
     // Ordinary reconfiguration without the opt-in preserves the existing route.
     await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
     expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).appOwnedResponses).toEqual(optedIn.appOwnedResponses);
