@@ -74,7 +74,7 @@ test("current capture settings cannot erase or certify evidence from an earlier 
   expect(disabled).toMatchObject({capture:"off",evidence:"unverified",reason:"current_capture_disabled"});
   expect(readdirSync(join(f.center,"private"))).toEqual(artifacts);
   setPrivateDiagnosticCapture(f.center,1);
-  expect(privateDiagnosticFailureGuidance(f.center)).toMatchObject({capture:"enabled",evidence:"unverified"});
+  expect(privateDiagnosticFailureGuidance(f.center)).toMatchObject({capture:"enabled",evidence:"unverified",reason:"capture_enabled_status_only"});
   expect(JSON.stringify(disabled)).not.toContain("PRIVATE");
 });
 

@@ -7,7 +7,7 @@ import { join } from "node:path";
 export function privateDiagnosticFailureGuidance(root = configuredDiagnosticRoot()) {
   if (!root) return { capture: "unavailable", evidence: "unverified", reason: "diagnostic_root_unavailable" } as const;
   if (privateDiagnosticCaptureStatus(root).enabled) {
-    return { capture: "enabled", evidence: "unverified", reason: "artifact_receipt_unverified" } as const;
+    return { capture: "enabled", evidence: "unverified", reason: "capture_enabled_status_only" } as const;
   }
   return { capture: "off", evidence: "unverified", reason: "current_capture_disabled",
     nextAction: "offer_optional_capture_on_recurrence",

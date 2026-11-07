@@ -147,6 +147,37 @@ function recentGoalEvents(events: readonly EvidenceRow[], rejected: readonly Evi
   return [...events, ...rejected].sort((a, b) => a.ts.localeCompare(b.ts)).slice(-MAX_TIMELINE);
 }
 
+/** Project exact-turn response-cycle proof without treating request shape as human authorship. */
+function responseCycleProofEvidence(events: readonly EvidenceRow[]) {
+  const ordered = [...events].sort((a, b) => a.ts.localeCompare(b.ts));
+  const rejection = ordered.filter(event => event.stage === "native_cycle_proof_rejected").at(-1);
+  if (!rejection) return null;
+  const nextCycle = ordered.find(event => event.stage === "native_steering_cycle_started" && event.ts > rejection.ts);
+  const inRejectedCycle = (event: EvidenceRow) => event.ts >= rejection.ts && (!nextCycle || event.ts < nextCycle.ts);
+  const inputEvidence = ordered.filter(event => event.stage === "native_cycle_input_evidence" && inRejectedCycle(event))
+    .map(event => Object.freeze({
+      index: typeof event.index === "number" ? event.index : null,
+      sourceIndex: typeof event.source_index === "number" ? event.source_index : null,
+      mode: typeof event.mode === "string" ? event.mode : null,
+      precededByCompaction: typeof event.preceded_by_compaction === "boolean" ? event.preceded_by_compaction : null,
+      bodyFingerprint: diagnosticFingerprintField(event.body_fingerprint) ?? null,
+      matched: typeof event.matched === "boolean" ? event.matched : null,
+    }));
+  const count = typeof rejection.new_message_count === "number" ? rejection.new_message_count : null;
+  const replay = ordered.filter(event => event.stage === "native_replay_rejected" && inRejectedCycle(event)).at(-1);
+  return Object.freeze({
+    reasonClass: typeof rejection.reason_class === "string" ? rejection.reason_class : "unknown",
+    priorFinalPresent: typeof rejection.prior_final_present === "boolean" ? rejection.prior_final_present : null,
+    newMessageCount: count, exactRequestReplay: typeof rejection.exact_request_replay === "boolean" ? rejection.exact_request_replay : null,
+    priorFinalFingerprint: diagnosticFingerprintField(rejection.prior_final_fingerprint) ?? null,
+    inputEvidence: Object.freeze(inputEvidence), inputEvidenceComplete: count !== null && inputEvidence.length === count,
+    matchedCount: inputEvidence.filter(row => row.matched === true).length,
+    unmatchedCount: inputEvidence.filter(row => row.matched === false).length,
+    replayRejectedReason: typeof replay?.reason_class === "string" ? replay.reason_class : null,
+    supersededByNewCycle: Boolean(nextCycle),
+  });
+}
+
 
 function projectToolEvidenceEvent(event: EvidenceRow, turnFingerprint: string, correlation: string) {
   const projected: Record<string, EvidenceValue> = {
@@ -388,11 +419,13 @@ export async function inspectNativeThread(input: {
     "native_response_observer_started", "web_turn_plan", "web_send_activation_started",
     "web_turn_identity_pending", "web_turn_identity_accepted", "web_public_progress_extraction",
     "native_public_item_observed", "native_outcome_committed", "native_response_body_closed", "native_turn_retired",
-    "native_execution_failed", "web_turn_failed",
+    "native_execution_failed", "native_steering_cycle_started", "native_cycle_proof_rejected",
+    "native_cycle_input_evidence", "native_replay_rejected", "web_turn_failed",
   ]);
   const nativeTurnStages = new Set([
     "native_response_observer_started", "native_public_item_observed", "native_outcome_committed",
     "native_response_body_closed", "native_turn_retired", "native_execution_failed",
+    "native_steering_cycle_started", "native_cycle_proof_rejected", "native_cycle_input_evidence", "native_replay_rejected",
   ]);
   const boundaries = activeEvents.filter(event => boundaryStages.has(event.stage));
   const latestOperation = [...boundaries].reverse().find(event =>
@@ -423,6 +456,20 @@ export async function inspectNativeThread(input: {
     browserFinalObserved: requestEvents.some(event =>
       event.stage === "web_turn_completed" || event.stage === "web_turn_final_observed"),
     webAnswerReceived,
+    webExecutionFailure: (() => {
+      const event = requestEvents.filter(row => row.stage === "web_execution_exception").at(-1);
+      if (!event) return null;
+      const plan = activeEvents.filter(row => row.stage === "web_turn_plan" && row.operation_fingerprint === event.operation_fingerprint).at(-1);
+      return { at: event.ts, reasonClass: event.reason_class ?? null, boundary: event.boundary ?? null,
+        observationState: event.observation_state ?? null, observationReason: event.observation_evidence_class ?? null,
+        observationEvidenceCount: event.observation_evidence_count ?? null, accepted: event.accepted ?? null,
+        turnPhase: event.turn_phase ?? null, operationFingerprint: diagnosticFingerprintField(event.operation_fingerprint) ?? null,
+        epochFingerprint: diagnosticFingerprintField(plan?.epoch_fingerprint) ?? null,
+        leaseFingerprint: diagnosticFingerprintField(plan?.lease_fingerprint) ?? null,
+        headRevisionFingerprint: diagnosticFingerprintField(plan?.head_revision_fingerprint) ?? null,
+        activeRequestRevisionFingerprint: diagnosticFingerprintField(plan?.active_request_revision_fingerprint) ?? null };
+    })(),
+    responseCycleProof: responseCycleProofEvidence(activeEvents),
     nativeFinalItemObserved,
     nativeFinalCommitted: nativeTurnEvents.some(event =>
       event.stage === "native_outcome_committed" && event.outcome === "final"),
@@ -652,6 +699,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       isError: event.is_error ?? null, bodyPresent: event.body_present ?? null,
     })),
     goalControlEvidence,
+    responseCycleProof: responseCycleProofEvidence(events),
     ...(toolDeliveryEvidence ? { toolDeliveryEvidence } : {}),
     contextPreparationEvidence: events.filter(event => ["native_context_source_rejected",
       "native_checkpoint_preparation_planned", "native_working_checkpoint_selected",
