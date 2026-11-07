@@ -17,7 +17,9 @@ chatgpt-tela configure --file <product-config.json> --enable-app-owned-desktop
 The option is also accepted with `configure --stdin`. Omitting it preserves the
 existing managed-only default. Reconfiguration preserves an existing route;
 an explicit `appOwnedResponses: []` in the supplied configuration disables it.
-After configuring, start the Codex service. If this computer has no saved Work
+The launcher supports `services start` for all three services, or `services
+start chat` for Chat alone. It has no `services start codex` form.
+After configuring, start the installed services. If this computer has no saved Work
 connection yet, open ChatGPT Tela's Control Center → Work and turn on **Web
 models** for the ChatGPT profile. That normal connection starts the installed
 app-owned profile runtime; an already-saved connection is restored when the
@@ -26,7 +28,7 @@ account-bound Web discovery and Native catalog have been prepared. Then use
 the packaged launcher's explicit provider registration:
 
 ```text
-chatgpt-tela services start codex
+chatgpt-tela services start
 chatgpt-tela desktop-provider register --dry-run
 chatgpt-tela desktop-provider register --apply
 chatgpt-tela desktop-provider restore --dry-run
@@ -69,6 +71,13 @@ registration command cannot promise the Desktop UI exposes a provider
 picker. The app-owned Responses runtime must also be running on its configured
 port. A normal Desktop
 restart may be needed to load config changes; hot reload is not assumed.
+Existing Native-first settings do not migrate automatically. This candidate
+does not bundle the optional Native engine. Keep the existing `openai` provider
+and Native model until the app-owned profile reports Ready and catalog
+registration reports `installed` or `already-owned`. Then explicitly select
+`model_provider = "chatgpt_tela_local"` and a model in the prepared catalog.
+The installed Desktop's compatibility with this selection still requires
+separate acceptance; neither the packaged launcher nor registration selects it.
 Tela's existing uninstall path now restores the exact install-marked provider
 stanza automatically. When top-level or named-profile `model_provider` selects
 Tela, uninstall switches only that selection to Codex's built-in `openai`
