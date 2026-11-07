@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "candidateBranch": "agent/app-owned-assembly-acceptance-20261107",
+  "baseline": "1827459d",
+  "scope": "Isolated app-owned integration candidate; no consumer installation or provider selection change",
+  "included": {
+    "desktopCatalogAndProviderRegistration": "1827459d",
+    "catalogUninstallCleanup": "6da82bdf",
+    "webFailureAndPrivateEvidence": ["82ed9368", "f1de768c", "d648ceb9", "84943ac1", "2fcf9e43", "726ac9e6", "290666d3", "71bf315f", "5694e12f", "ea2a941f", "f7e0fb47", "2bd481dc"],
+    "suppliedResultAndOwnedCleanup": ["ee1860f2", "ce4be1eb", "1855ffef", "173f0287", "527f9ca2", "00730032", "3030b27a", "a8c5a466", "837ff49b", "b5c0d951", "baf4e961"],
+    "catalogDocumentation": "167ff7a0"
+  },
+  "deduplicated": {
+    "identicalPatchAlreadyIncluded": ["f8e4c49a", "9319b68e", "b5ecbdb0", "e083c0df", "9ee9141d", "d68c2f38", "bacc9578", "c127f3dd"],
+    "emptyOnConflictResolution": ["4a2d6b47"],
+    "reconciledIntoCandidate": ["27863aba", "e6506d4d", "7ea5dc82"]
+  },
+  "verification": {
+    "typecheck": "passed after integration conflict fixes",
+    "relatedTests": "113 passed, 2 initial integration-test defects corrected; both affected files then passed 26 tests",
+    "officialEngineAcceptance": "Previously verified against isolated 0.167.0-alpha.3.2 at baseline 1827459d; not rerun in this consolidation; assembly test skipped without explicit engine fixture",
+    "productionInstallation": "not performed"
+  },
+  "releaseReadiness": "candidate only; not approved for automatic consumer activation",
+  "remaining": [
+    "Integrate and verify A's completed explicit configure/activation ordering work after its independent completion report",
+    "Perform packaging-resource and consumer install/upgrade/uninstall acceptance on the assembled candidate",
+    "Exercise current full candidate with an explicit isolated official engine acceptance fixture when release gating requires it",
+    "Verify actual consumer account and Desktop interaction only under separate operational authorization"
+  ]
+}

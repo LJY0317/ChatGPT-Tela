@@ -7,6 +7,7 @@ import { BROWSER_DOCUMENT_LIFETIME, type BrowserHost, type BrowserSurfaceLease, 
 import { chatGptWebFamilyKey, chatGptWebModelId, type WebConversationProvider, type WebTurnRequest } from "@chatgpt-tela/chatgpt";
 import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
+import { handleNativeResponsesHttp } from "@chatgpt-tela/responses";
 import { createProfileTurnBridge, createSuppliedRequestGateway } from "./supplied-request-gateway";
 import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
@@ -20,7 +21,7 @@ function request(turn = "turn-1", input: unknown[] = firstInput) {
   };
 }
 
-function fixture(options: { wait?: Promise<void>; failure?: Error; planner?: ReturnType<typeof createNativeRequestDevelopmentWebTurnPlanner>;
+function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure?: Error; planner?: ReturnType<typeof createNativeRequestDevelopmentWebTurnPlanner>;
   completedResults?: Parameters<typeof createSuppliedRequestGateway>[0]["completedResults"] } = {}) {
   const submissions: WebTurnRequest[] = [], selections: unknown[] = [], released: string[] = [];
   let acquisitions = 0, closed = false;
@@ -40,6 +41,7 @@ function fixture(options: { wait?: Promise<void>; failure?: Error; planner?: Ret
     async observeCapabilities() { throw Error("No redundant preflight"); },
     async submitTurn(_surface, turn) {
       submissions.push(turn);
+      options.onSubmit?.();
       return { state: "proven", evidence: ["fixture"], value: { nativeTaskId: turn.nativeTaskId,
         nativeTurnId: turn.nativeTurnId, webEpochId: turn.webEpochId, providerTurnId: `web-${submissions.length}` } };
     },

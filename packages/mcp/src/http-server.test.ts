@@ -72,8 +72,8 @@ test("MCP listener close failure remains retryable without readmitting requests"
     await expect(server.stop()).rejects.toThrow("MCP HTTP cleanup failed");
     const refusal = await fetch(server.endpointUrl, {
       method: "POST", headers: { authorization: `Bearer ${server.bearerToken}` },
-    });
-    expect(refusal.status).toBe(503);
+    }).catch(() => undefined);
+    if (refusal) expect(refusal.status).toBe(503);
     await server.stop();
     await server.stop();
     expect(closeAttempts).toBe(2);

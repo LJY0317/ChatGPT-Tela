@@ -36,7 +36,6 @@ Usage:
   chatgpt-tela services restart chat
   chatgpt-tela chat roots
   chatgpt-tela local-mcp [package <destination>|register]
-  chatgpt-tela desktop-provider <register|restore> <--dry-run|--apply>
   chatgpt-tela chat <allow-root|disallow-root> --path <folder>
   chatgpt-tela install (--dry-run | --apply) [--payload <package-directory>]
   chatgpt-tela repair  (--dry-run | --apply) [--payload <package-directory>]
