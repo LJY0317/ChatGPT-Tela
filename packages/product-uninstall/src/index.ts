@@ -16,6 +16,7 @@ import {
   applyUninstallPlan,
   OWNERSHIP_MARKER,
   PACKAGED_PAYLOAD_RECEIPT,
+  observeInstalledPackagedPayload,
   withPackagedTransitionOwner,
   FilesystemOwnershipObserver,
   observeProductActivity,
@@ -242,6 +243,11 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
     observe(resource: OwnedResource, currentManifest: OwnershipManifest) {
       if (resource.kind === "directory" && resource.id !== "transition-coordinator"
         && inside(resource.path, coordinatorResource(paths).path)) return "dirty" as const;
+      if (resource.kind === "directory" && resource.id === "product-binaries" && resource.dataClass === "binary") {
+        const payload = observeInstalledPackagedPayload(resource, currentManifest);
+        return payload.state === "owned" && payload.receipt.productVersion === currentManifest.productVersion
+          ? "owned" as const : payload.state === "missing" ? "ownership-drift" as const : payload.state;
+      }
       // A planned detach is not its result: after editing Desktop config,
       // recheck the live shared catalog reference before removing its file.
       if (resource.kind === "directory" && resource.id === APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID

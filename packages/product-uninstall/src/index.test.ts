@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   createOwnershipManifest,
+  PACKAGED_PAYLOAD_RECEIPT,
+  packagedPayloadFingerprint,
   prepareOwnedDirectory,
   acquireProductActivity, releaseProductActivity, productActivityPath,
   resolveProductPaths,
@@ -38,6 +40,11 @@ async function binaryFixture(root: string, externalMetadata = false, installId =
     productVersion: manifest.productVersion,
     resource,
   });
+  const fingerprint = packagedPayloadFingerprint(resource.path, { target: true });
+  writeFileSync(join(resource.metadataRoot ?? resource.path, PACKAGED_PAYLOAD_RECEIPT), JSON.stringify({
+    version: 1, installId, resourceId: resource.id, productVersion: manifest.productVersion,
+    payloadFingerprint: fingerprint,
+  }));
   return { home, paths, options };
 }
 
@@ -220,6 +227,25 @@ for (const unknown of [false, true]) test(`binary removal owns external metadata
     expect(existsSync(metadata)).toBe(unknown);
     if (unknown) expect(readFileSync(join(metadata, "unowned.txt"), "utf8")).toBe("preserve");
     else expect(result.manifestRemoved).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("uninstall preserves changed packaged bytes and an unrecorded legacy directory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-uninstall-partial-manifest-"));
+  try {
+    const f = await binaryFixture(root);
+    const legacy = join(f.paths.stateRoot, "legacy-browser-data");
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "user.txt"), "user data");
+    writeFileSync(join(f.paths.binaryRoot, "user-added.txt"), "user data");
+
+    const planned = await runProductUninstall({ mode: "dry-run", removeData: true, ...f.options });
+    expect((planned.steps as Array<{ resourceId: string; action: string }>).find(
+      step => step.resourceId === "product-binaries")?.action).toBe("preserve");
+    const applied = await runProductUninstall({ mode: "apply", removeData: true, ...f.options });
+    expect(applied).toMatchObject({ applied: true, manifestRemoved: false, preservedCount: 1 });
+    expect(readFileSync(join(f.paths.binaryRoot, "user-added.txt"), "utf8")).toBe("user data");
+    expect(readFileSync(join(legacy, "user.txt"), "utf8")).toBe("user data");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
