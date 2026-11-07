@@ -17,9 +17,13 @@ chatgpt-tela configure --file <product-config.json> --enable-app-owned-desktop
 The option is also accepted with `configure --stdin`. Omitting it preserves the
 existing managed-only default. Reconfiguration preserves an existing route;
 an explicit `appOwnedResponses: []` in the supplied configuration disables it.
-After configuring, start the Codex service so the installed profile runtime
-can prepare the Native plus Web catalog. Then use the packaged launcher's
-explicit provider registration:
+After configuring, start the Codex service. If this computer has no saved Work
+connection yet, open ChatGPT Tela's Control Center → Work and turn on **Web
+models** for the ChatGPT profile. That normal connection starts the installed
+app-owned profile runtime; an already-saved connection is restored when the
+Codex service starts. Wait until the profile reports **Ready** so its
+account-bound Web discovery and Native catalog have been prepared. Then use
+the packaged launcher's explicit provider registration:
 
 ```text
 chatgpt-tela services start codex
