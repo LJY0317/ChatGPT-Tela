@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { editAppOwnedDesktopProviderConfig, type AppOwnedProviderRegistration } from "./provider-configuration";
+
+/** The official Desktop uses the same user-level Codex home as its launcher. */
+export function officialCodexConfigPath(home?: string): string {
+  return join(resolve(home ?? homedir()), ".codex", "config.toml");
+}
 
 /** Shared file operation for explicit registration and the owned uninstall lifecycle. */
 export function editOfficialCodexProviderFile(input: AppOwnedProviderRegistration & {

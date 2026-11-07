@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   createOwnershipManifest,
   prepareOwnedDirectory,
+  acquireProductActivity, releaseProductActivity, productActivityPath,
   resolveProductPaths,
   writeOwnershipManifest,
   withPackagedTransitionOwner,
@@ -15,12 +17,12 @@ import { runProductUninstall } from "./index";
 import { editOfficialCodexProviderFile } from "@chatgpt-tela/default-desktop-target";
 import { startUninstallCheckpoint, writeUninstallCheckpoint } from "./coordination";
 
-async function binaryFixture(root: string, externalMetadata = false) {
+async function binaryFixture(root: string, externalMetadata = false, installId = "install-uninstall-fixture") {
   const home = join(root, "home");
   mkdirSync(home);
   const options = { platform: "linux" as const, home, environment: {} };
   const paths = resolveProductPaths(options);
-  const manifest = createOwnershipManifest("1.0.0", new Date("2026-09-29T00:00:00.000Z"), "install-uninstall-fixture");
+  const manifest = createOwnershipManifest("1.0.0", new Date("2026-09-29T00:00:00.000Z"), installId);
   writeOwnershipManifest(paths.installManifest, manifest);
   const resource: Extract<OwnedResource, { kind: "directory" }> = Object.freeze({
     kind: "directory",
@@ -42,7 +44,8 @@ async function binaryFixture(root: string, externalMetadata = false) {
 test("owned Desktop provider register, re-register and selected uninstall restore in an isolated HOME", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-provider-uninstall-"));
   try {
-    const { home, paths, options } = await binaryFixture(root);
+    const installId = randomUUID();
+    const { home, paths, options } = await binaryFixture(root, false, installId);
     const codex = join(home, ".codex"); mkdirSync(codex);
     const configPath = join(codex, "config.toml");
     const original = 'model_provider = "openai"\nmodel = "user-choice"\n# existing comment\n';
@@ -52,9 +55,7 @@ test("owned Desktop provider register, re-register and selected uninstall restor
       baseUrl: `http://127.0.0.1:18744/${capability}/v1` };
     // The installed ownership fixture uses a non-UUID ID, whereas provider
     // registration intentionally requires an actual install receipt UUID.
-    const manifest = createOwnershipManifest("1.0.0");
-    writeOwnershipManifest(paths.installManifest, manifest);
-    const registration = { ...owner, installId: manifest.installId };
+    const registration = { ...owner, installId };
     const product = { version: 1, publicMcpAbi: "stable", exposure: {
       kind: "existing-https", publicUrl: "https://example.test/mcp", localPort: 18743,
       authentication: "none", allowUnauthenticatedPublicEndpoint: true,
@@ -69,6 +70,14 @@ test("owned Desktop provider register, re-register and selected uninstall restor
     expect((await runProductUninstall({ mode: "dry-run", ...options })).providerRestore)
       .toMatchObject({ status: "planned" });
     expect(readFileSync(configPath, "utf8")).toBe(selected);
+    const activityPath = productActivityPath(paths.runtimeRoot, "profile-setup", "1");
+    const activity = acquireProductActivity({ path: activityPath, installId, kind: "profile-setup", scope: "1" });
+    try {
+      const rejected = await runProductUninstall({ mode: "apply", ...options });
+      expect(rejected).toMatchObject({ applied: false, status: "uninstall-blocked", failedCount: 1 });
+      expect(readFileSync(configPath, "utf8")).toBe(selected);
+      expect(existsSync(paths.binaryRoot)).toBe(true);
+    } finally { releaseProductActivity({ path: activityPath, expected: activity }); }
     const applied = await runProductUninstall({ mode: "apply", ...options });
     expect(applied.providerRestore).toMatchObject({ status: "restored" });
     expect(readFileSync(configPath, "utf8")).toBe(original);
@@ -81,14 +90,13 @@ test("owned Desktop provider register, re-register and selected uninstall restor
 test("uninstall preserves edited external provider and installed resources with an exact reason", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-provider-preserve-"));
   try {
-    const { home, paths, options } = await binaryFixture(root);
-    const manifest = createOwnershipManifest("1.0.0");
-    writeOwnershipManifest(paths.installManifest, manifest);
+    const installId = randomUUID();
+    const { home, paths, options } = await binaryFixture(root, false, installId);
     const capability = "b".repeat(48);
     mkdirSync(join(home, ".codex"));
     const configPath = join(home, ".codex", "config.toml");
     writeFileSync(configPath, 'model_provider = "openai"\n');
-    const owner = { configPath, installId: manifest.installId,
+    const owner = { configPath, installId,
       baseUrl: `http://127.0.0.1:18744/${capability}/v1` };
     editOfficialCodexProviderFile({ ...owner, action: "register", mode: "apply" });
     writeFileSync(configPath, readFileSync(configPath, "utf8").replace("supports_websockets = false", "supports_websockets = true"));
@@ -101,14 +109,18 @@ test("uninstall preserves edited external provider and installed resources with 
     const before = readFileSync(configPath, "utf8");
     expect((await runProductUninstall({ mode: "dry-run", ...options })).providerRestore)
       .toMatchObject({ status: "preserved", reason: expect.stringContaining("ownership or contents changed") });
-    const removed = await runProductUninstall({ mode: "apply", removeData: true, ...options });
-    expect(removed).toMatchObject({ applied: false, status: "preserved-external-provider" });
-    expect(readFileSync(configPath, "utf8")).toBe(before);
-    expect(existsSync(paths.binaryRoot)).toBe(true);
-    expect(existsSync(paths.installManifest)).toBe(true);
-    rmSync(join(paths.configRoot, "product-v1.json"));
+    const productConfigPath = join(paths.configRoot, "product-v1.json");
+    const productConfig = readFileSync(productConfigPath, "utf8");
+    rmSync(productConfigPath);
     expect((await runProductUninstall({ mode: "dry-run", ...options })).providerRestore)
       .toMatchObject({ status: "preserved", reason: expect.stringContaining("configuration is missing") });
+    writeFileSync(productConfigPath, productConfig);
+    const removed = await runProductUninstall({ mode: "apply", removeData: true, ...options });
+    expect(removed).toMatchObject({ applied: true, failedCount: 0, preservedCount: 1,
+      providerRestore: { status: "preserved", selected: false } });
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+    expect(existsSync(paths.binaryRoot)).toBe(false);
+    expect(existsSync(paths.installManifest)).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

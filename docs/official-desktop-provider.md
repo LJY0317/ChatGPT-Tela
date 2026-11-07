@@ -44,10 +44,13 @@ Tela, uninstall switches only that selection to Codex's built-in `openai`
 provider. A Tela-only synthetic Web model selection is also cleared so the
 official provider can choose its default Native model. Unrelated model
 selections, settings, comments and permissions remain.
-Uninstall dry-run reports `providerRestore: planned` when necessary, while
-apply restores before stopping/removing Tela resources. A modified/foreign
-stanza or uncertain ownership preserves the external config and Tela resources
-and reports the reason; no entire user config file becomes Tela-owned.
+Uninstall dry-run observes the provider without changing the file. Apply first
+checks installation ownership, activity, and the removal plan, then stops the
+owned services. Only after these admissions succeed does it restore the exact
+provider stanza before resource removal. A modified/foreign stanza that is
+still selected blocks uninstall and reports the reason. If it is no longer
+selected, uninstall preserves that user-modified provider and may remove Tela's
+remaining owned resources. No entire user config file becomes Tela-owned.
 The separate explicit `desktop-provider restore` command still requires the
 user to select a different provider first. Session-specific overrides are
 outside the user-level config editor's scope.

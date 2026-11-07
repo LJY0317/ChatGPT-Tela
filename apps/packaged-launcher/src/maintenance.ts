@@ -98,12 +98,16 @@ export async function runMaintenanceCommand(args: readonly string[], options: Pa
         productVersion: readOwnershipManifest(paths.installManifest)?.productVersion ?? null,
         blockers: [error.message] };
     }
-    const failed = Number(result.failedCount ?? 0) + (Array.isArray(result.shutdownFailures) ? result.shutdownFailures.length : 0);
+    const failed = result.applied === false ? Number(result.failedCount ?? 1)
+      : Number(result.failedCount ?? 0) + (Array.isArray(result.shutdownFailures) ? result.shutdownFailures.length : 0);
     const preservedRepair = operation === "repair" && (result.payload === "preserved" || result.services?.some((s: any) => s.outcome === "preserved"));
     const preserved = operation === "repair" ? Number(result.payload === "preserved") + (result.services?.filter((s: any) => s.outcome === "preserved").length ?? 0) : result.preservedCount ?? 0;
-    return { operation, success: failed === 0 && !preservedRepair,
+    return { operation, success: failed === 0 && result.applied !== false && !preservedRepair,
       removedCount: result.removedCount ?? 0, preservedCount: preserved, failedCount: failed,
       productVersion: result.toVersion ?? result.productVersion ?? null,
+      ...(operation === "uninstall" ? { providerRestore: result.providerRestore,
+        ...(result.applied === false ? { blockers: [result.providerRestore?.reason
+          ?? result.activityBlockers?.join("; ") ?? result.status ?? "Uninstall was not applied"] } : {}) } : {}),
       ...(operation === "uninstall" ? { accountCleanup: {
         status: "not-performed",
         message: "Local removal does not remove the ChatGPT plugin or separately connected MCP integrations. Manage them in ChatGPT if needed.",

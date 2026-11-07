@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import {
   editOfficialCodexProviderFile,
-  resolveDefaultDesktopInstallation,
+  officialCodexConfigPath,
   TELA_APP_OWNED_PROVIDER_ID,
 } from "@chatgpt-tela/default-desktop-target";
 import { readProductConfig } from "@chatgpt-tela/product-config";
@@ -29,12 +29,8 @@ export async function runPackagedDesktopProviderCommand(
   const config = readProductConfig(join(paths.configRoot, "product-v1.json"));
   const owned = config.appOwnedResponses?.find(entry => entry.slot === 1);
   if (!owned) throw new Error("app-owned default Desktop Responses must be explicitly configured first");
-  const installation = resolveDefaultDesktopInstallation({
-    ...(options.pathOptions?.home ? { home: options.pathOptions.home } : {}),
-    environment: options.pathOptions?.environment ?? process.env,
-  });
   const changed = editOfficialCodexProviderFile({
-    configPath: join(installation.codexHome, "config.toml"),
+    configPath: officialCodexConfigPath(options.pathOptions?.home),
     action,
     mode: mode === "--apply" ? "apply" : "dry-run",
     installId: ownership.installId,

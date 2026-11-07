@@ -7,6 +7,7 @@ import { buildPackagedPayload, resolveProductPaths, readOwnershipManifest, prepa
 import { runPackagedLifecycleCommand } from "./lifecycle";
 import { cleanupMaintenanceWindow, runMaintenanceCommand, stageMaintenanceWindow, resolveMaintenanceWindowSource } from "./maintenance";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
+import { editOfficialCodexProviderFile } from "@chatgpt-tela/default-desktop-target";
 
 const removeFixture = registerTemporaryFixtureCleanup();
 
@@ -95,6 +96,40 @@ test("apply requires review and rejects unknown/ambiguous operation arguments", 
   for (const operation of ["upgrade", "cancel-upgrade"]) {
     await expect(runMaintenanceCommand(["maintenance", "review", operation])).rejects.toThrow("usage:");
   }
+});
+
+test("maintenance reports a selected modified provider as failed and preserves the installation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-maintenance-provider-refusal-"));
+  try {
+    const f = fixture(root), options = { platform: "linux" as const, home: f.home, environment: {}, runner: f.runner,
+      executingBinaryPath: join(root, "external-launcher") };
+    await runPackagedLifecycleCommand(["install", "--apply", "--payload", f.first], options);
+    const paths = resolveProductPaths(options), owner = readOwnershipManifest(paths.installManifest)!;
+    const capability = "c".repeat(48);
+    mkdirSync(paths.configRoot, { recursive: true });
+    writeFileSync(join(paths.configRoot, "product-v1.json"), JSON.stringify({
+      version: 1, publicMcpAbi: "stable", exposure: { kind: "existing-https",
+        publicUrl: "https://example.test/mcp", localPort: 18743,
+        authentication: "none", allowUnauthenticatedPublicEndpoint: true },
+      appOwnedResponses: [{ slot: 1, port: 18744, capability }],
+    }));
+    mkdirSync(join(f.home, ".codex"));
+    const configPath = join(f.home, ".codex", "config.toml");
+    writeFileSync(configPath, 'model_provider = "openai"\n');
+    editOfficialCodexProviderFile({ configPath, action: "register", mode: "apply", installId: owner.installId,
+      baseUrl: `http://127.0.0.1:18744/${capability}/v1` });
+    const selected = readFileSync(configPath, "utf8").replace('model_provider = "openai"',
+      'model_provider = "chatgpt_tela_local"').replace('supports_websockets = false', 'supports_websockets = true');
+    writeFileSync(configPath, selected);
+    const review = await runMaintenanceCommand(["maintenance", "review", "uninstall"], options) as any;
+    const applied = await runMaintenanceCommand(["maintenance", "apply", "uninstall", "--review-token", review.reviewToken], options) as any;
+    expect(applied).toMatchObject({ success: false, failedCount: 1,
+      providerRestore: { status: "preserved", selected: true } });
+    expect(applied.blockers.join(" ")).toContain("ownership or contents changed");
+    expect(readFileSync(configPath, "utf8")).toBe(selected);
+    expect(readOwnershipManifest(paths.installManifest)?.installId).toBe(owner.installId);
+    expect(existsSync(paths.binaryRoot)).toBe(true);
+  } finally { removeFixture(root); }
 });
 
 test("repair refusal leaves running services and damaged files unchanged", async () => {

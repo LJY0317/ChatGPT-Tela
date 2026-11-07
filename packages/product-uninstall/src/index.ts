@@ -1,7 +1,6 @@
 import { coordinatorResource, finalizeUninstall, readUninstallCheckpoint, startUninstallCheckpoint, clearUninstallCheckpoint, writeUninstallCheckpoint } from "./coordination";
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
-import { editOfficialCodexProviderFile } from "@chatgpt-tela/default-desktop-target";
+import { editOfficialCodexProviderFile, officialCodexConfigPath } from "@chatgpt-tela/default-desktop-target";
 import { readProductConfig } from "@chatgpt-tela/product-config";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
@@ -108,8 +107,14 @@ export function profileSetupActivityBlockers(paths: ProductPaths, installId: str
 
 /** External Codex config remains user-owned; only the exact install-marked stanza is touched. */
 function restoreOwnedDesktopProvider(input: ProductUninstallOptions, paths: ProductPaths, installId: string) {
-  const configPath = join(input.home ?? homedir(), ".codex", "config.toml");
+  const configPath = officialCodexConfigPath(input.home);
   const productPath = join(paths.configRoot, "product-v1.json");
+  const selectedByUser = () => {
+    if (!existsSync(configPath)) return false;
+    const parsed = Bun.TOML.parse(readFileSync(configPath, "utf8")) as Record<string, any>;
+    return parsed.model_provider === "chatgpt_tela_local"
+      || Object.values(parsed.profiles ?? {}).some((profile: any) => profile?.model_provider === "chatgpt_tela_local");
+  };
   try {
     const withoutOwnedRoute = () => {
       // No install-owned route record exists. A surviving registration marker
@@ -118,6 +123,7 @@ function restoreOwnedDesktopProvider(input: ProductUninstallOptions, paths: Prod
         && !lstatSync(configPath).isSymbolicLink()
         && readFileSync(configPath, "utf8").includes(`# ChatGPT Tela provider begin: ${installId}`)) {
         return { status: "preserved" as const,
+          selected: selectedByUser(),
           reason: "Owned Desktop provider marker remains but install-owned Responses configuration is missing" };
       }
       return { status: "not-configured" as const };
@@ -134,8 +140,11 @@ function restoreOwnedDesktopProvider(input: ProductUninstallOptions, paths: Prod
     return { status: changed ? input.mode === "apply" ? "restored" as const : "planned" as const
       : "already-absent" as const };
   } catch (error) {
+    let selected = true;
+    try { selected = selectedByUser(); }
+    catch { /* Unreadable selection remains dependent on the original provider. */ }
     return { status: "preserved" as const,
-      reason: error instanceof Error ? error.message : "Codex provider ownership could not be established" };
+      selected, reason: error instanceof Error ? error.message : "Codex provider ownership could not be established" };
   }
 }
 
@@ -168,11 +177,7 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
       throw new Error(`packaged repair for ${repairJournal.productVersion} is incomplete; resume it before uninstall apply`);
     }
   }
-  const providerRestore = restoreOwnedDesktopProvider(input, paths, manifest.installId);
-  if (input.mode === "apply" && providerRestore.status === "preserved") {
-    return Object.freeze({ applied: false, status: "preserved-external-provider", providerRestore,
-      destructiveActions: 0, preservedCount: 1 });
-  }
+  const providerPlan = restoreOwnedDesktopProvider({ ...input, mode: "dry-run" }, paths, manifest.installId);
 
   const filesystemObserver = new FilesystemOwnershipObserver();
   const hasManagedWorktrees = manifest.resources.some(resource => resource.kind === "managed-worktree");
@@ -252,6 +257,23 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
     blockedOwners.add("codex");
     shutdownFailures.push({ owner: "codex-profile-setup", detail: activityBlockers.join("; ") });
   }
+  const providerDependency = providerPlan.status === "preserved" && providerPlan.selected;
+  // Establish the removal plan before touching any service or external config.
+  const plan = await planUninstall({ manifest: { ...manifest, resources: manifest.resources.filter(row => row.id !== "transition-coordinator") }, observer, removeData });
+  const recoveryNotice = hasPendingFileImports(join(paths.serviceState("chat"), "imports-v2"))
+    ? { fileImportRecoveryPending: true, recoveryNotice: "Resolve pending file imports in Tela before removing saved data; recovery records are preserved." } : {};
+  if (input.mode === "dry-run") {
+    return Object.freeze({ dryRun: true, activityBlockers, providerRestore: providerPlan, ...recoveryNotice, ...plan });
+  }
+  const nothingRemovable = plan.removableCount === 0 && plan.preservedCount > 0 && providerPlan.status === "planned";
+  // Activity admission and external provider ownership must settle before
+  // stopping services or modifying the user's Codex settings.
+  if (activityBlockers.length > 0 || providerDependency || nothingRemovable) {
+    return Object.freeze({ applied: false, status: "uninstall-blocked", providerRestore: providerPlan,
+      activityBlockers, removedCount: 0, preservedCount: Number(providerDependency),
+      failedCount: 1, shutdownFailures, destructiveActions: 0,
+      ...(nothingRemovable ? { reason: "No owned resources can be removed; Codex provider selection was preserved" } : {}) });
+  }
   if (input.mode === "apply") {
     const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
     for (const service of ["gateway", "chat", "codex"] as const) {
@@ -264,12 +286,16 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
     }
   }
 
-  // Coordination metadata is finalized only after releasing the OS writer lock.
-  const plan = await planUninstall({ manifest: { ...manifest, resources: manifest.resources.filter(row => row.id !== "transition-coordinator") }, observer, removeData });
-  const recoveryNotice = hasPendingFileImports(join(paths.serviceState("chat"), "imports-v2"))
-    ? { fileImportRecoveryPending: true, recoveryNotice: "Resolve pending file imports in Tela before removing saved data; recovery records are preserved." } : {};
-  if (input.mode === "dry-run") {
-    return Object.freeze({ dryRun: true, activityBlockers, providerRestore, ...recoveryNotice, ...plan });
+  if (shutdownFailures.length > 0) {
+    return Object.freeze({ applied: false, status: "uninstall-blocked", providerRestore: providerPlan,
+      activityBlockers, shutdownFailures, removedCount: 0, preservedCount: 0,
+      failedCount: shutdownFailures.length, destructiveActions: 0 });
+  }
+  const providerRestore = restoreOwnedDesktopProvider(input, paths, manifest.installId);
+  if (providerRestore.status === "preserved" && providerRestore.selected) {
+    return Object.freeze({ applied: false, status: "uninstall-blocked", providerRestore,
+      activityBlockers, shutdownFailures, removedCount: 0, preservedCount: 1,
+      failedCount: 1, destructiveActions: 0 });
   }
 
   const result = await applyUninstallPlan({
@@ -341,6 +367,7 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
     providerRestore,
     shutdownFailures,
     ...result,
+    preservedCount: result.preservedCount + Number(providerRestore.status === "preserved"),
     manifestRemoved: false,
     coordinatorCleanupReady: canRemoveManifest,
   });
