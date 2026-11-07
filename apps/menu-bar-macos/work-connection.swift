@@ -59,7 +59,10 @@ struct TelaWorkProfile: Decodable, Equatable {
   var accountManagementActive: Bool? = nil
   var needsWebSignIn: Bool { connected && webState == "login-required" }
   var canReconnectWeb: Bool { connected && (webState == "failed" || webState == "ready") }
-  var connected: Bool { controlState == "running" && targetSessionState == "ready" }
+  var connected: Bool {
+    controlState == "running" && (targetSessionState == "ready" ||
+      (targetSessionState == "independent" && webState == "ready" && webModelsReady == true))
+  }
   var action: String { connected ? "stop" : (targetState == "running" || controlState == "restart-required" ? "restart" : "start") }
   var connectionLabel: String {
     if connected && accountManagementActive == true { return "Finish account management" }

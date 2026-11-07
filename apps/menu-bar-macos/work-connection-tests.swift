@@ -11,6 +11,17 @@ state.failed(NSError(domain: "fixture", code: 7)); precondition(state.error != n
 let connected = TelaWorkProfile(slot: 1, targetDisplayName: "ChatGPT", targetState: "running", targetSessionState: "ready", controlState: "running")
 state.loaded([connected]); precondition(state.error == nil && state.profiles[0].connected)
 precondition(connected.action == "stop")
+var appOwned = TelaWorkProfile(slot: 1, targetDisplayName: "ChatGPT", targetState: "running", targetSessionState: "independent", controlState: "running")
+precondition(!appOwned.connected)
+appOwned.webState = "ready"; appOwned.webModelsReady = true
+precondition(appOwned.connected && appOwned.action == "stop")
+precondition(TelaWebConnectionPresentation(profile: appOwned, wantedTargets: []).status == "Ready")
+appOwned.webModelsReady = false
+precondition(!appOwned.connected)
+appOwned.webModelsReady = true; appOwned.webState = "failed"
+precondition(!appOwned.connected)
+let stoppedAppOwned = TelaWorkProfile(slot: 1, targetDisplayName: "ChatGPT", targetState: "running", targetSessionState: "independent", controlState: "stopped", webModelsReady: true, webState: "ready")
+precondition(!stoppedAppOwned.connected)
 precondition(TelaRequestBudget.seconds(path: "v1/codex/profiles", method: "GET") > 4)
 precondition(TelaRequestBudget.seconds(path: "v1/codex/profiles/1/start", method: "POST") > 300)
 precondition(telaConnectionProgress("closing").contains("close"))
