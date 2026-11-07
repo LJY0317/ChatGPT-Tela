@@ -11,6 +11,7 @@ import { ChatProcessManager } from "../../../packages/chat-service/src/processes
 import { createChatToolRuntime, startChatService } from "@chatgpt-tela/chat-service";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
+import { registerDeviceLocalChatPlugin } from "../../local-mcp/src/main";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -80,18 +81,13 @@ test("one compiled runtime dispatches isolated daemons, CLI and a real owned com
     service = await startChatService({ bearerToken: "x".repeat(48), tools });
     const owned = createOwnershipManifest("test", new Date(), "compiled-local-plugin");
     writeOwnershipManifest(paths.installManifest, owned);
-    const localEnvironment = { HOME: home, USERPROFILE: home,
-      APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local"),
-      XDG_DATA_HOME: join(home, ".local", "share"), XDG_CONFIG_HOME: join(home, ".config"),
-      XDG_STATE_HOME: join(home, ".local", "state"), XDG_CACHE_HOME: join(home, ".cache"), XDG_RUNTIME_DIR: "" };
-    const registered = await run(["local-mcp", "register"], localEnvironment);
-    expect(registered.code).toBe(0);
-    expect(JSON.parse(registered.out).result).toBe("registered");
+    const marketplacePath = join(home, ".agents", "plugins", "marketplace.json");
+    expect(await registerDeviceLocalChatPlugin({ paths, launcherExecutablePath: executable, marketplacePath })).toBe("registered");
     const personal = JSON.parse(readFileSync(join(home, ".agents", "plugins", "marketplace.json"), "utf8"));
     expect(personal.plugins[0].source.path.startsWith("./")).toBe(true);
     const ownedPlugin = join(home, personal.plugins[0].source.path);
     expect(readdirSync(ownedPlugin).sort()).toEqual([".codex-plugin", ".mcp.json"]);
-    expect(JSON.parse((await run(["local-mcp", "register"], localEnvironment)).out).result).toBe("already-registered");
+    expect(await registerDeviceLocalChatPlugin({ paths, launcherExecutablePath: executable, marketplacePath })).toBe("already-registered");
     writeServiceRuntimeDescriptor(join(paths.serviceRuntime("chat"), "descriptor.json"), {
       version: 1, service: "chat", instanceId: service.instanceId, installId: owned.installId,
       pid: process.pid, endpoint: service.endpoint.href, bearerToken: service.bearerToken, startedAt: new Date().toISOString()

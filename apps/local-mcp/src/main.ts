@@ -1,8 +1,11 @@
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { DynamicChatBackend, createPublicMcpServer } from "@chatgpt-tela/gateway";
-import { readOwnershipManifest, resolveProductPaths, type ProductPaths } from "@chatgpt-tela/product-lifecycle";
+import { prepareOwnedDirectory, readOwnershipManifest, registerLocalMarketplace, resolveProductPaths,
+  withPackagedTransitionOwner, type ProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { readServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
+import { normalizeOwnedLocalChatPlugin, prepareLocalChatPlugin } from "./plugin-package";
 
 /** The installed service's local runtime descriptor is the only backend selector. */
 export function createDeviceLocalChatMcpServer(paths: ProductPaths = resolveProductPaths()) {
@@ -22,6 +25,21 @@ export function createDeviceLocalChatMcpServer(paths: ProductPaths = resolveProd
 export async function serveDeviceLocalChatStdio(paths?: ProductPaths): Promise<void> {
   const server = createDeviceLocalChatMcpServer(paths);
   await server.connect(new StdioServerTransport());
+}
+
+export async function registerDeviceLocalChatPlugin(input: { paths: ProductPaths; launcherExecutablePath: string; marketplacePath: string }) {
+  const manifest = readOwnershipManifest(input.paths.installManifest);
+  if (!manifest) throw new Error("local marketplace requires an installed Tela product");
+  const root = join(input.paths.stateRoot, "install", "local-chat-plugin");
+  const resource = { kind: "directory" as const, id: "local-chat-plugin-source", owner: "product" as const, path: root, dataClass: "binary" as const };
+  return withPackagedTransitionOwner({ paths: input.paths, installId: manifest.installId }, async () => {
+    const prepared = await prepareOwnedDirectory({ manifestPath: input.paths.installManifest, installId: manifest.installId, productVersion: manifest.productVersion, resource });
+    if (prepared.state === "external-existing") throw Error("local plugin source belongs to another owner");
+    const contents = readdirSync(root).filter(name => name !== ".chatgpt-tela-owner.json");
+    if (contents.length === 0) prepareLocalChatPlugin(root, input.launcherExecutablePath);
+    else normalizeOwnedLocalChatPlugin(root, input.launcherExecutablePath);
+    return registerLocalMarketplace({ manifestPath: input.paths.installManifest, marketplacePath: input.marketplacePath, pluginPath: join(root, "plugins", "tela-local-chat") });
+  });
 }
 
 if (import.meta.main) {
