@@ -25,6 +25,8 @@ test("cold installed catalog is created from verified Native and account-bound W
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(readOwnershipManifest(paths.installManifest)?.resources.some(resource => resource.id === "app-owned-desktop-model-catalog")).toBe(true);
     const prior = readFileSync(path, "utf8");
+    expect(await publishAppOwnedDesktopCatalog(input)).toBe(path);
+    expect(readFileSync(path, "utf8")).toBe(prior);
     await expect(publishAppOwnedDesktopCatalog({ ...input, webFamilies: [],
       assertCurrentAccount: () => { throw new Error("account binding changed"); } })).rejects.toThrow("account binding changed");
     expect(readFileSync(path, "utf8")).toBe(prior);
