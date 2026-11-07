@@ -255,7 +255,7 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
     const temporary = await startLocalResponsesServer({ requestRouter: async () => new Response(null, { status: 404 }) });
     const ingress = { port: temporary.port, capability: "c".repeat(48) };
     await temporary.stop();
-    let closes = 0, nativeRequests = 0;
+    let closes = 0, nativeRequests = 0, failNextStop = false;
     const nativeResponses: string[] = [];
     const webResponses: string[] = [];
     const webModel = chatGptWebModelId(chatGptWebFamilyKey("App owned Web fixture"));
@@ -286,7 +286,10 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
           return { families: [] };
         },
         async discoverChatGptWebModelFamilies() { return []; },
-        async stop() { closes++; await responses.stop(); },
+        async stop() {
+          if (failNextStop) { failNextStop = false; throw Error("synthetic runtime cleanup interrupted"); }
+          closes++; await responses.stop();
+        },
       } as unknown as ElectronDevelopmentRuntime;
     }) as typeof import("./electron").startElectronDevelopmentRuntime;
     const open = () => startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
@@ -316,7 +319,12 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
       expect(nativeResponses).toEqual(["native-fixture", "native-fixture"]);
       expect(webResponses).toEqual([webModel]);
       expect((await fetch(`http://127.0.0.1:${ingress.port}/wrong/v1/models`)).status).toBe(401);
-    } finally { await first.stop(); }
+    } finally {
+      failNextStop = true;
+      await expect(first.stop()).rejects.toThrow("App-owned profile cleanup failed");
+      expect(closes).toBe(0);
+      await first.stop();
+    }
     const second = await open();
     try {
       expect(second.responses.baseUrl.href).toBe(url.href);
