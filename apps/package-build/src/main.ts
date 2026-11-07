@@ -65,6 +65,20 @@ function electronExecutableRelativePath(): string {
   throw new Error(`packaged payload build is unsupported on ${process.platform}`);
 }
 
+function electronDistribution(): string {
+  const root = resolve(repoRoot, "node_modules", "electron");
+  const distribution = join(root, "dist");
+  if (!existsSync(distribution)) {
+    // Bun may install the npm wrapper without running Electron's official
+    // download script. Package from this checkout's pinned dependency.
+    execFileSync(process.execPath, [join(root, "install.js")], { cwd: repoRoot, stdio: "inherit" });
+  }
+  if (!existsSync(distribution) || !lstatSync(distribution).isDirectory() || lstatSync(distribution).isSymbolicLink()) {
+    throw new Error("Electron distribution is missing after the official electron/install.js postinstall");
+  }
+  return distribution;
+}
+
 function macCodesign(outputPath: string, identity: string, manifest: PackagedProductManifest): void {
   const sign = (path: string, flags: readonly string[] = []) => {
     execFileSync("/usr/bin/codesign", ["--force", ...flags, "--sign", identity, path], {
@@ -115,10 +129,7 @@ async function main(): Promise<void> {
     ? parsePackagedNativeEngine(JSON.parse(readFileSync(realRegularFile(nativeEngineMetadataPath, "Native engine metadata"), "utf8")))
     : undefined;
 
-  const electronBundle = resolve(repoRoot, "node_modules", "electron", "dist");
-  if (!existsSync(electronBundle) || !lstatSync(electronBundle).isDirectory() || lstatSync(electronBundle).isSymbolicLink()) {
-    throw new Error("Electron distribution is missing; run the official electron/install.js postinstall before package build");
-  }
+  const electronBundle = electronDistribution();
 
   const temporary = mkdtempSync(join(tmpdir(), "chatgpt-tela-package-build-"));
   try {

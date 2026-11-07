@@ -42,18 +42,6 @@ function executableName(name: string): string {
   return process.platform === "win32" ? `${name}.exe` : name;
 }
 
-function ensureElectronDistribution(): void {
-  const electronRoot = join(repoRoot, "node_modules", "electron");
-  const distribution = join(electronRoot, "dist");
-  if (existsSync(distribution) && lstatSync(distribution).isDirectory() && !lstatSync(distribution).isSymbolicLink()) return;
-  const installScript = join(electronRoot, "install.js");
-  regularFile(installScript, "official Electron install script");
-  run(process.execPath, [installScript]);
-  if (!existsSync(distribution) || !lstatSync(distribution).isDirectory() || lstatSync(distribution).isSymbolicLink()) {
-    throw new Error("official Electron install script completed without producing a usable distribution");
-  }
-}
-
 function smokeLauncher(path: string): void {
   const result = spawnSync(path, ["--help"], {
     encoding: "utf8",
@@ -73,7 +61,6 @@ function smokeLauncher(path: string): void {
 }
 
 async function main(): Promise<void> {
-  ensureElectronDistribution();
   const root = mkdtempSync(join(tmpdir(), "chatgpt-tela-package-smoke-"));
   const output = join(root, process.platform === "darwin" ? "ChatGPT Tela.app" : "payload");
 
