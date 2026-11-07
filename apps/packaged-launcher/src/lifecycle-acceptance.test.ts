@@ -171,12 +171,24 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     expect(await runPackagedBootstrapCommand(["bootstrap-status"], bootstrap)).toEqual({
       configuration: "configured", publicUrl: "https://example.test/mcp",
     });
-    const productConfig = readFileSync(join(paths.configRoot, "product-v1.json"), "utf8");
+    let productConfig = readFileSync(join(paths.configRoot, "product-v1.json"), "utf8");
     await expect(runPackagedBootstrapCommand(["configure", "--stdin", "--if-missing"], {
       ...bootstrap, configurationInput: configurationInput.replace("18743", "18744"),
     })).rejects.toThrow("preserved");
     expect(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).toBe(productConfig);
-    // Operator file configuration remains supported through the same parser/ownership boundary.
+    // File input accepts an explicit app-owned route and later reconfiguration preserves it if omitted.
+    const appOwnedResponses = [{ slot: 1, port: 18744, capability: "a".repeat(48) }];
+    writeFileSync(configFile, JSON.stringify({ ...(JSON.parse(configurationInput) as object), appOwnedResponses }));
+    await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
+    expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).appOwnedResponses).toEqual(appOwnedResponses);
+    writeFileSync(configFile, configurationInput);
+    await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
+    productConfig = readFileSync(join(paths.configRoot, "product-v1.json"), "utf8");
+    expect(JSON.parse(productConfig).appOwnedResponses).toEqual(appOwnedResponses);
+    writeFileSync(configFile, JSON.stringify({ ...(JSON.parse(configurationInput) as object), appOwnedResponses: [] }));
+    await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
+    expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).appOwnedResponses).toEqual([]);
+    writeFileSync(configFile, JSON.stringify({ ...(JSON.parse(configurationInput) as object), appOwnedResponses }));
     await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
     writeFileSync(join(paths.logsRoot, "fixture.log"), "synthetic diagnostic\n");
     writeFileSync(join(paths.serviceState("chat"), "fixture-state.txt"), "synthetic chat state\n");

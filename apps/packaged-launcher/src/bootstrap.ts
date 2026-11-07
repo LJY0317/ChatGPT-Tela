@@ -77,6 +77,9 @@ export async function runPackagedBootstrapCommand(args: readonly string[], optio
     const { paths, ownership } = verifyInstalledPackage(options);
     const configPath = join(paths.configRoot, "product-v1.json");
     if (args.includes("--if-missing") && configurationExists(configPath)) throw new Error("configuration already exists; first-use setup preserved it");
+    const existingAppOwnedResponses = config.appOwnedResponses === undefined && configurationExists(configPath)
+      ? readProductConfig(configPath).appOwnedResponses
+      : undefined;
     const prepared = await prepareOwnedDirectory({ manifestPath: paths.installManifest,
       installId: ownership.installId, productVersion: ownership.productVersion,
       resource: { kind: "directory", id: "product-config", owner: "product", path: paths.configRoot, dataClass: "config" } });
@@ -93,7 +96,9 @@ export async function runPackagedBootstrapCommand(args: readonly string[], optio
     ];
     for (const directory of directories) await prepareOwnedDirectory({ manifestPath: paths.installManifest,
       installId: ownership.installId, productVersion: ownership.productVersion, resource: { kind: "directory", ...directory } });
-    writeProductConfig(config, configPath);
+    writeProductConfig(existingAppOwnedResponses
+      ? { ...config, appOwnedResponses: existingAppOwnedResponses }
+      : config, configPath);
     return { configured: true, publicMcpAbi: config.publicMcpAbi, exposure: config.exposure.kind };
   }
   if (command !== "setup" || !(args.length === 1 || (args.length === 3 && args[1] === "--slot"))) {
