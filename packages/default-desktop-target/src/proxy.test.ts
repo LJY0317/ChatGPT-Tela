@@ -625,3 +625,30 @@ test("rejected routing records structural failure boundary without request conte
     expect(JSON.stringify(events)).not.toContain("private-config");
   } finally {client.close();await proxy.close();upstream.stop(true);}
 });
+
+
+test("nullable Native resume config keeps the Desktop transport connected", async () => {
+  const events: {stage:string; fields:any}[]=[], received:any[]=[];
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,
+    fetch(request,server){return server.upgrade(request)?undefined:new Response(null,{status:400});},
+    websocket:{message(socket,raw){const value=JSON.parse(String(raw));received.push(value);socket.send(JSON.stringify({id:value.id,result:{ok:true}}));}},
+  });
+  const route=createDefaultDesktopResponsesRoute({baseUrl:"http://127.0.0.1:18741/v1",envKey:"TEST_KEY",credential:"s".repeat(48)});
+  const proxy=await startDefaultDesktopAppServerProxy({upstreamEndpoint:`ws://127.0.0.1:${upstream.port}/`,route,
+    onDiagnostic:(stage,fields)=>events.push({stage,fields})});
+  const client=await openSocket(proxy.endpoint);
+  try {
+    for (const [index,method] of ["thread/start","thread/resume","thread/fork"].entries()) {
+      const response=new Promise<string>((resolve,reject)=>{
+        const closed=()=>reject(Error("valid nullable config closed the connection"));
+        client.addEventListener("close",closed,{once:true});
+        client.addEventListener("message",e=>{client.removeEventListener("close",closed);resolve(String(e.data));},{once:true});
+      });
+      client.send(JSON.stringify({id:index,method,params:{threadId:"private-thread",config:null}}));
+      expect(JSON.parse(await response)).toEqual({id:index,result:{ok:true}});
+      expect(received[index].params.config.openai_base_url).toBe(route.baseUrl);
+    }
+    expect(client.readyState).toBe(WebSocket.OPEN);
+    expect(events.some(x=>x.stage==="desktop_transport_failed")).toBe(false);
+  } finally {client.close();await proxy.close();upstream.stop(true);}
+});

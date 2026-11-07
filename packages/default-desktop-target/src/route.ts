@@ -89,14 +89,10 @@ export function rewriteDefaultDesktopAppServerRequest(
   const params = record(root.params);
   if (!params) throw new Error("routed app-server request has non-object params");
   const existingConfig = params.config;
-  if (existingConfig !== undefined && !record(existingConfig)) {
+  if (existingConfig != null && !record(existingConfig)) {
     throw new Error("routed app-server request has non-object config");
   }
   const config = { ...(record(existingConfig) ?? {}) };
-  const existingProviders = config.model_providers;
-  if (existingProviders !== undefined && !record(existingProviders)) {
-    throw new Error("routed app-server request has non-object model_providers");
-  }
   config.model_provider = route.providerId;
   config.openai_base_url = route.baseUrl;
   const routedParams: Record<string, unknown> = {
