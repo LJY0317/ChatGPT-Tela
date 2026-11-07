@@ -125,6 +125,50 @@ describe("default Desktop route-preserving app-server proxy", () => {
     } finally { socket.close(); await proxy.close(); upstream.stop(true); }
   });
 
+  test("a prior unrelated RPC and a contradictory image ACK cannot acquire turn ownership", async () => {
+    const png = Buffer.from("89504e470d0a1a0a00000000", "hex");
+    const image = "data:image/png;base64," + png.toString("base64");
+    const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0,
+      fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, { status: 400 }); },
+      websocket: { message(socket, raw) {
+        const request = JSON.parse(String(raw));
+        socket.send(JSON.stringify({ id: request.id, result: request.method === "thread/read"
+          ? { thread: { turns: [] } }
+          : { turn: { id: "ack-" + request.id,
+            threadId: request.id === 42 ? "wrong-thread" : request.params.threadId,
+            status: "inProgress" } } }));
+      } },
+    });
+    const proxy = await startDefaultDesktopAppServerProxy({
+      upstreamEndpoint: `ws://127.0.0.1:${upstream.port}/`,
+      route: createDefaultDesktopResponsesRoute({
+        baseUrl: "http://127.0.0.1:18741/v1", envKey: "TEST_KEY", credential: "x".repeat(48),
+      }),
+    });
+    const socket = await openSocket(proxy.endpoint);
+    const exchange = (request: unknown) => {
+      const reply = new Promise<any>(resolve => socket.addEventListener("message",
+        event => resolve(JSON.parse(String(event.data))), { once: true }));
+      socket.send(JSON.stringify(request));
+      return reply;
+    };
+    const start = (id: number, threadId: string) => exchange({ id, method: "turn/start",
+      params: { threadId, input: [{ type: "image", url: image }] } });
+    try {
+      await exchange({ id: 41, method: "thread/read", params: { threadId: "previous" } });
+      expect((await start(41, "reused")).result.turn.id).toBe("ack-41");
+      expect(proxy.ingressMedia.current("reused", "ack-41")).toBeUndefined();
+      expect(proxy.liveTurnProof.current("reused")).toBeUndefined();
+      expect((await start(42, "correct-thread")).result.turn.threadId).toBe("wrong-thread");
+      expect(proxy.ingressMedia.current("correct-thread", "ack-42")).toBeUndefined();
+      expect(proxy.liveTurnProof.current("correct-thread")).toBeUndefined();
+      expect((await start(43, "valid-thread")).result.turn.id).toBe("ack-43");
+      expect(proxy.ingressMedia.current("valid-thread", "ack-43")?.assets).toHaveLength(1);
+      expect(proxy.liveTurnProof.current("valid-thread")?.turnId).toBe("ack-43");
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+    } finally { socket.close(); await proxy.close(); upstream.stop(true); }
+  });
+
   test("optional request and response observation exceptions preserve original Native traffic", async () => {
     const png = Buffer.from("89504e470d0a1a0a00000000", "hex");
     const image = "data:image/png;base64," + png.toString("base64");

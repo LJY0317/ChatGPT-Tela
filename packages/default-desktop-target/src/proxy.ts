@@ -175,16 +175,13 @@ export async function startDefaultDesktopAppServerProxy(input: {
       readonly media: NativeIngressPendingMedia;
       readonly generation: number;
     }>();
-    const seenMediaRpcIds = new Set<string>();
     const pendingLiveTurns = new Map<string, {
       readonly threadId: string;
       readonly generation: number;
     }>();
-    // An original turn/start ACK has no independent thread ID in the public
-    // response. Reusing a completed JSON-RPC id on this same socket would
-    // allow a delayed old reply to masquerade as another thread's ACK.
-    // Never recycle turn-authority correlation keys during one connection.
-    const seenLiveRpcIds = new Set<string>();
+    // Media and live-turn receipts share the same socket-level RPC owner.
+    // A delayed reply to any reused id cannot establish either owner.
+    const seenObservationRpcIds = new Set<string>();
     const finishedLiveTurns = new Set<string>();
     const startedLiveTurns = new Map<string, string>();
     let liveReceiptsDisabled = false;
@@ -239,8 +236,8 @@ export async function startDefaultDesktopAppServerProxy(input: {
         client_written_bytes: clientWrittenBytes, delivery: "socket_write_only" });
       pendingCatalog.clear(); pendingModelLists.clear(); pendingHistory.clear();
       remote.close();
-      pendingMedia.clear(); seenMediaRpcIds.clear();
-      pendingLiveTurns.clear(); seenLiveRpcIds.clear();
+      pendingMedia.clear(); pendingLiveTurns.clear();
+      seenObservationRpcIds.clear();
       finishedLiveTurns.clear(); startedLiveTurns.clear();
       liveTurnProof.retireOwner(state);
     };
@@ -439,11 +436,11 @@ export async function startDefaultDesktopAppServerProxy(input: {
         try { handshake = JSON.parse(message); } catch { /* Preserve unrelated upstream bytes. */ }
         observationKey = jsonRpcIdKey(handshake?.id);
         remote.request(handshake);
-        const mediaIdAvailable = !!observationKey && !seenMediaRpcIds.has(observationKey)
-          && seenMediaRpcIds.size < 512;
+        const observationIdAvailable = !!observationKey && !seenObservationRpcIds.has(observationKey)
+          && seenObservationRpcIds.size < 512;
         // Any prior RPC with the same id can have a delayed reply. Never let
         // such a reply authorize optional image evidence for a later turn.
-        if (mediaIdAvailable && observationKey) seenMediaRpcIds.add(observationKey);
+        if (observationIdAvailable && observationKey) seenObservationRpcIds.add(observationKey);
         if (handshake?.method === "initialize") {
           permissionProfiles = handshake.params?.capabilities?.experimentalApi === true;
           clientKind = handshake.params?.clientInfo?.name === "chatgpt-tela" ? "tela_client" : "external_client";
@@ -480,17 +477,16 @@ export async function startDefaultDesktopAppServerProxy(input: {
               pendingLiveTurns.clear();
               liveTurnProof.retireOwner(state);
               diagnostic("desktop_native_live_turn_rejected", { reason_class: "ambiguous_request" });
-            } else if (seenLiveRpcIds.has(key)) {
+            } else if (!observationIdAvailable) {
               // Preserve existing valid turns; only this new request loses
               // optional Legacy live proof. No old delayed ACK can bind it.
               diagnostic("desktop_native_live_turn_rejected", { reason_class: "reused_request_id" });
-            } else if (pendingLiveTurns.size >= 64 || seenLiveRpcIds.size >= 512) {
+            } else if (pendingLiveTurns.size >= 64) {
               liveReceiptsDisabled = true;
               pendingLiveTurns.clear();
               liveTurnProof.retireOwner(state);
               diagnostic("desktop_native_live_turn_rejected", { reason_class: "request_capacity" });
             } else {
-              seenLiveRpcIds.add(key);
               pendingLiveTurns.set(key, {
                 threadId, generation: liveTurnProof.generation,
               });
@@ -498,7 +494,7 @@ export async function startDefaultDesktopAppServerProxy(input: {
           }
           const media = prepareNativeIngressTurnMedia(handshake.params);
           if (media) {
-            if (!key || !mediaIdAvailable || pendingMedia.size >= 8) {
+            if (!key || !observationIdAvailable || pendingMedia.size >= 8) {
               // Missing or ambiguous optional evidence must not reject the original turn/start.
               diagnostic("desktop_native_media_owner_unavailable", { reason_class: "tracking_unavailable" });
             } else {
@@ -516,8 +512,7 @@ export async function startDefaultDesktopAppServerProxy(input: {
         if (observationKey) {
           pendingMedia.delete(observationKey);
           pendingLiveTurns.delete(observationKey);
-          if (seenMediaRpcIds.size < 512) seenMediaRpcIds.add(observationKey);
-          if (seenLiveRpcIds.size < 512) seenLiveRpcIds.add(observationKey);
+          if (seenObservationRpcIds.size < 512) seenObservationRpcIds.add(observationKey);
         }
         if (handshake?.method === "turn/start" && nativeLiveIdentity(handshake.params?.threadId)) {
           liveTurnProof.retireThread(handshake.params.threadId);
