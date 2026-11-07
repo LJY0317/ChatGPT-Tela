@@ -12,6 +12,7 @@ import {
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import { appOwnedDesktopCatalogPath } from "./app-owned-desktop-catalog";
+import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
 
 function common(root: string): Record<string, string> {
   return {
@@ -255,6 +256,9 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
     const ingress = { port: temporary.port, capability: "c".repeat(48) };
     await temporary.stop();
     let closes = 0, nativeRequests = 0;
+    const nativeResponses: string[] = [];
+    const webResponses: string[] = [];
+    const webModel = chatGptWebModelId(chatGptWebFamilyKey("App owned Web fixture"));
     const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
       expect(options.currentTurnSource).toBeUndefined();
       expect(options.mcp).toEqual({ kind: "external", abi: "stable" });
@@ -262,7 +266,13 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
         port: ingress.port, runtimeToken: ingress.capability, authentication: { kind: "path" },
       });
       const responses = await startLocalResponsesServer({ ...options.responses,
-        requestRouter: options.responses!.requestRouter! });
+        async requestRouter(request) {
+          const routed = await options.responses!.requestRouter!(request);
+          if (routed) return routed;
+          const body = await request.json() as { model: string };
+          webResponses.push(body.model);
+          return Response.json({ provider: "web", model: body.model });
+        } });
       return {
         responses,
         suppliedToolBridge: { inventory: () => [], async invoke() { throw Error("No fixture tool calls"); } },
@@ -280,8 +290,14 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
       } as unknown as ElectronDevelopmentRuntime;
     }) as typeof import("./electron").startElectronDevelopmentRuntime;
     const open = () => startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
-      nativeFetch: async () => {
+      nativeFetch: async request => {
         nativeRequests++;
+        expect(request.headers.get("authorization")).toBe("Bearer synthetic-native-auth");
+        if (new URL(request.url).pathname.endsWith("/responses")) {
+          const body = await request.json() as { model: string };
+          nativeResponses.push(body.model);
+          return Response.json({ provider: "native", model: body.model });
+        }
         return Response.json({ models: [{ slug: "native-fixture", display_name: "Fixture",
           visibility: "list", supported_in_api: true }] });
       } });
@@ -289,17 +305,26 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
     const url = first.responses.baseUrl;
     try {
       expect(url.pathname).toContain(ingress.capability);
-      expect((await fetch(new URL("models", url), { headers: { authorization: "Bearer native-fixture" } })).status).toBe(200);
+      expect((await fetch(new URL("models", url), { headers: { authorization: "Bearer synthetic-native-auth" } })).status).toBe(200);
+      const send = async (model: string) => (await fetch(new URL("responses", url), {
+        method: "POST", headers: { authorization: "Bearer synthetic-native-auth", "content-type": "application/json" },
+        body: JSON.stringify({ model, input: [] }),
+      })).json() as Promise<{ provider: string }>;
+      expect((await send("native-fixture")).provider).toBe("native");
+      expect((await send(webModel)).provider).toBe("web");
+      expect((await send("native-fixture")).provider).toBe("native");
+      expect(nativeResponses).toEqual(["native-fixture", "native-fixture"]);
+      expect(webResponses).toEqual([webModel]);
       expect((await fetch(`http://127.0.0.1:${ingress.port}/wrong/v1/models`)).status).toBe(401);
     } finally { await first.stop(); }
     const second = await open();
     try {
       expect(second.responses.baseUrl.href).toBe(url.href);
       expect((await fetch(new URL("models", second.responses.baseUrl),
-        { headers: { authorization: "Bearer native-fixture" } })).status).toBe(200);
+        { headers: { authorization: "Bearer synthetic-native-auth" } })).status).toBe(200);
     } finally { await second.stop(); }
     expect(closes).toBe(2);
-    expect(nativeRequests).toBe(2);
+    expect(nativeRequests).toBe(4);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

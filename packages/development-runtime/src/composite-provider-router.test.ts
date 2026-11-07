@@ -78,6 +78,43 @@ describe("default-profile composite provider router", () => {
     ]);
   });
 
+  test("app-owned composite routes Native -> Web -> Native with the original authorization", async () => {
+    const nativeModels: string[] = [];
+    const webModels: string[] = [];
+    const key = chatGptWebFamilyKey("Web Family");
+    const router = createDefaultProfileCompositeProviderRouter({
+      runtimeHeaderName: header,
+      discoverWebModelFamilies: async () => [{ key, label: "Web Family", availableEfforts: ["medium"] }],
+      async fetchUpstream(req) {
+        expect(req.headers.get("authorization")).toBe("Bearer native-auth");
+        expect(req.headers.has(header)).toBe(false);
+        const body = await req.json() as { model: string };
+        nativeModels.push(body.model);
+        return Response.json({ provider: "native", model: body.model });
+      },
+    });
+    await router.refreshWebModelFamilies();
+    const dispatch = async (model: string) => {
+      const incoming = request("/v1/responses", { model, input: [] });
+      const native = await router.route(incoming);
+      if (native) return native.json();
+      // Same downstream boundary as the existing app-owned requestRouter:
+      // only the recognized Web namespace is delivered to browser Responses.
+      expect(model).toBe(chatGptWebModelId(key));
+      webModels.push(model);
+      return { provider: "web", model };
+    };
+    expect((await dispatch("native-model") as any).provider).toBe("native");
+    expect((await dispatch(chatGptWebModelId(key)) as any).provider).toBe("web");
+    expect((await dispatch("native-model") as any).provider).toBe("native");
+    expect(nativeModels).toEqual(["native-model", "native-model"]);
+    expect(webModels).toEqual([chatGptWebModelId(key)]);
+    const unauthenticated = new Request("http://127.0.0.1:9000/v1/responses", {
+      method: "POST", body: JSON.stringify({ model: "native-model", input: [] }),
+    });
+    await expect(router.route(unauthenticated)).rejects.toThrow("first-party request authorization");
+  });
+
   test("augments native model discovery and coalesces/caches browser discovery", async () => {
     let discoveries = 0;
     let clock = 100;

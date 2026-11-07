@@ -11,7 +11,7 @@ test("isolated official config: dry-run, register, idempotent register, restore 
     mkdirSync(codex);
     const path = join(codex, "config.toml");
     const original = 'model_provider = "openai"\nmodel = "user-model"\n# keep this comment\n';
-    writeFileSync(path, original);
+    writeFileSync(path, original, { mode: 0o640 });
     const args = {
       configPath: path,
       installId: "d5c45404-59b6-49a4-995b-8de8dd03cdf0",
@@ -24,7 +24,7 @@ test("isolated official config: dry-run, register, idempotent register, restore 
     const added = readFileSync(path, "utf8");
     expect((Bun.TOML.parse(added) as any).model_provider).toBe("openai");
     expect(added).toContain('[model_providers.chatgpt_tela_local]');
-    expect(lstatSync(path).mode & 0o077).toBe(0);
+    expect(lstatSync(path).mode & 0o777).toBe(0o640);
     expect(editOfficialCodexProviderFile({ ...args, action: "restore", mode: "dry-run" })).toBe(true);
     expect(readFileSync(path, "utf8")).toBe(added);
     expect(editOfficialCodexProviderFile({ ...args, action: "restore", mode: "apply" })).toBe(true);

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
 import { prepareLocalChatPlugin } from "../../../../apps/local-mcp/src/plugin-package";
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "@chatgpt-tela/responses";
+import { editAppOwnedDesktopProviderConfig } from "@chatgpt-tela/default-desktop-target";
 import type { NativeGatewayOutcome } from "@chatgpt-tela/runtime";
 
 // Public Codex app-server + isolated synthetic Responses provider. No real model or browser.
@@ -23,6 +24,7 @@ const mcpEnabled = process.argv.includes("--mcp-enabled");
 const mcpDisabled = process.argv.includes("--mcp-disabled");
 const pluginEnabled = process.argv.includes("--plugin-enabled");
 const pluginDisabled = process.argv.includes("--plugin-disabled");
+const firstPartyAuth = process.argv.includes("--first-party-auth");
 const pluginFixture = pluginEnabled || pluginDisabled;
 const mcpActive = mcpEnabled || pluginEnabled;
 const mcpConfigured = mcpEnabled || mcpDisabled || pluginFixture;
@@ -35,7 +37,11 @@ assert(!pluginFixture || (!mcpEnabled && !mcpDisabled && inspectTools), "plugin 
 assert(!(mcpEnabled || mcpDisabled) || inspectTools, "MCP control requires tool inspection");
 const root = mkdtempSync(join(tmpdir(), "tela-official-tool-roundtrip-"));
 const home = join(root, "home"); mkdirSync(home);
-const model = chatGptWebModelId(chatGptWebFamilyKey("Official Tool Roundtrip Fixture"));
+if (firstPartyAuth) writeFileSync(join(home, "auth.json"), JSON.stringify({
+  auth_mode: "apikey", OPENAI_API_KEY: "synthetic-fixture-key", tokens: null,
+}));
+const model = firstPartyAuth ? "gpt-6-sol" : chatGptWebModelId(chatGptWebFamilyKey("Official Tool Roundtrip Fixture"));
+const providerId = firstPartyAuth ? "chatgpt_tela_local" : "fixture";
 const original = JSON.parse(readFileSync(catalogPath, "utf8")) as { models: Record<string, unknown>[] };
 const template = original.models[0]!;
 assert(template?.slug, "a public model catalog template is required");
@@ -71,9 +77,14 @@ let mcpDeclaredTools: string[] = [];
 let mcpDiscovery: { callId: string; names: string[]; status: string;
   schemaType: string | null; deferLoading: boolean | null } | null = null;
 let imageMatched = 0, effortMatched = 0, providerRequestClosed = false;
+let missingFirstPartyAuth = 0;
 let markBlocked!: () => void;
 const blockedRequest = new Promise<void>(resolve => { markBlocked = resolve; });
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+  if (firstPartyAuth && request.headers.get("authorization") !== "Bearer synthetic-fixture-key") {
+    missingFirstPartyAuth++;
+    return Response.json({ error: { message: "Fixture requires synthetic first-party authorization" } }, { status: 401 });
+  }
   const body = await request.json() as any;
   assert.equal(body.model, model);
   assert.equal(body.stream, true);
@@ -192,11 +203,14 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   return new Response(plan.frames.join(""), { headers: { "content-type": "text/event-stream" } });
 } });
 
-writeFileSync(join(home, "config.toml"), [
-  `model = ${JSON.stringify(model)}`, 'model_provider = "fixture"',
-  `model_catalog_json = ${JSON.stringify(modelCatalog)}`, 'model_reasoning_effort = "medium"',
-  '[model_providers.fixture]', 'name = "OpenAI"', `base_url = "${server.url}v1"`,
-  'wire_api = "responses"', 'requires_openai_auth = false',
+const providerConfig = [
+  `model = ${JSON.stringify(model)}`, `model_provider = "${providerId}"`,
+  ...(!firstPartyAuth ? [`model_catalog_json = ${JSON.stringify(modelCatalog)}`] : []),
+  'model_reasoning_effort = "medium"',
+  ...(!firstPartyAuth ? [
+    `[model_providers.${providerId}]`, 'name = "OpenAI"', `base_url = "${server.url}v1"`,
+    'wire_api = "responses"', 'requires_openai_auth = false',
+  ] : []),
   ...(mcpEnabled || mcpDisabled ? [
     // Official mcp_servers configuration, never an installed app/plugin toggle.
     '[mcp_servers.fixture_isolation]',
@@ -210,9 +224,15 @@ writeFileSync(join(home, "config.toml"), [
     '[plugins."tela-local-chat@tela-local-development".mcp_servers."tela-local-chat"]',
     `enabled = ${pluginEnabled}`,
   ] : []),
-].join("\n"));
+].join("\n");
+writeFileSync(join(home, "config.toml"), firstPartyAuth
+  ? editAppOwnedDesktopProviderConfig(providerConfig, "register", {
+    installId: "a7f1e18d-6020-4f0c-9684-c4370a8dd58f",
+    baseUrl: `${server.url}${"a".repeat(48)}/v1`,
+  }).content
+  : providerConfig);
 const child = Bun.spawn([engine, "app-server", "--stdio"], {
-  cwd: root, env: { PATH: process.env.PATH!, HOME: process.env.HOME!, CODEX_HOME: home,
+  cwd: root, env: { PATH: process.env.PATH!, HOME: root, CODEX_HOME: home,
     TMPDIR: process.env.TMPDIR ?? tmpdir() }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
 });
 let sequence = 0;
@@ -262,8 +282,9 @@ try {
     await rpc("plugin/install", { marketplacePath: pluginMarketplace, pluginName: "tela-local-chat" });
   }
   const catalog = await rpc("model/list", { includeHidden: true });
-  assert(catalog.data.some((item: any) => item.model === model));
-  const started = await rpc("thread/start", { model, modelProvider: "fixture", cwd: root,
+  assert(catalog.data.some((item: any) => item.model === model),
+    `synthetic model not listed (available=${catalog.data.map((item: any) => item.model).join(",")})`);
+  const started = await rpc("thread/start", { model, modelProvider: providerId, cwd: root,
     approvalPolicy: "never", sandbox: "danger-full-access", historyMode: "paginated",
     ephemeral: false, baseInstructions: "Execute only the supplied synthetic printf tool call." });
   const launched = await rpc("turn/start", { threadId: started.thread.id, model,
@@ -278,6 +299,7 @@ try {
   }
   const completed = await notification("turn/completed");
   assert.equal(completed.params.turn.status, interrupt ? "interrupted" : "completed");
+  if (firstPartyAuth) assert.equal(missingFirstPartyAuth, 0, "official provider did not forward first-party authorization");
   assert.equal(requestCount, interrupt || inspectTools && !mcpActive ? 1 : 2);
   assert.equal(toolResultSeen, interrupt || inspectTools ? 0 : 1);
   assert.equal(finalIssued, interrupt ? 0 : 1);
@@ -304,7 +326,7 @@ try {
   if (interrupt) assert(providerRequestClosed, "the blocked provider response must close on interrupt");
   if (imageEffort) { assert.equal(imageMatched, 2); assert.equal(effortMatched, 2); }
   const proof = { engineVersion: execFileSync(engine, ["--version"], { encoding: "utf8" }).trim(),
-    publicAppServer: true, syntheticProvider: true, responseUsage: null, requestCount,
+    publicAppServer: true, syntheticProvider: true, firstPartyAuth, responseUsage: null, requestCount,
     toolInspection: inspectTools, modelToolMode: defaultToolMode ? null : "direct",
     declaration,
     ...(inspectTools ? { modelVisibleToolNames: mcpDeclaredTools } : {}),

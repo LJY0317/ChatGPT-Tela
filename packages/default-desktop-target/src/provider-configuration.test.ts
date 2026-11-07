@@ -31,7 +31,7 @@ describe("explicit app-owned official Codex provider registration", () => {
       name: "ChatGPT Tela (local)",
       base_url: owned.baseUrl.slice(0, -1),
       wire_api: "responses",
-      requires_openai_auth: false,
+      requires_openai_auth: true,
       supports_websockets: false,
     });
     expect(editAppOwnedDesktopProviderConfig(added.content, "register", owned))
@@ -55,6 +55,8 @@ describe("explicit app-owned official Codex provider registration", () => {
     expect(() => editAppOwnedDesktopProviderConfig(changed, "register", owned)).toThrow("refusing");
     const selected = added.replace('model_provider = "openai"', `model_provider = "${TELA_APP_OWNED_PROVIDER_ID}"`);
     expect(() => editAppOwnedDesktopProviderConfig(selected, "restore", owned)).toThrow("Select another");
+    const profileSelected = added + `\n[profiles.work]\nmodel_provider = "${TELA_APP_OWNED_PROVIDER_ID}"\n`;
+    expect(() => editAppOwnedDesktopProviderConfig(profileSelected, "restore", owned)).toThrow("Select another");
   });
 
   test("rejects invalid app-owned URLs, malformed TOML and injected install IDs", () => {

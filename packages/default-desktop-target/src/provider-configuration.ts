@@ -31,7 +31,7 @@ function registrationBlock(input: AppOwnedProviderRegistration): string {
     'name = "ChatGPT Tela (local)"',
     `base_url = ${JSON.stringify(baseUrl)}`,
     'wire_api = "responses"',
-    "requires_openai_auth = false",
+    "requires_openai_auth = true",
     "supports_websockets = false",
     `# ChatGPT Tela provider end: ${input.installId}`,
     "",
@@ -55,7 +55,7 @@ function exactOwnedProvider(content: string, registration: AppOwnedProviderRegis
     name: "ChatGPT Tela (local)",
     base_url: new URL(registration.baseUrl).href.replace(/\/$/, ""),
     wire_api: "responses",
-    requires_openai_auth: false,
+    requires_openai_auth: true,
     supports_websockets: false,
   };
   const record = provider as Record<string, unknown>;
@@ -93,8 +93,13 @@ export function editAppOwnedDesktopProviderConfig(
     }
     return { content, changed: false };
   }
-  if ((Bun.TOML.parse(content) as Record<string, unknown>).model_provider === TELA_APP_OWNED_PROVIDER_ID) {
-    throw new Error("Select another user-level model_provider before restoring the Tela provider");
+  const settings = Bun.TOML.parse(content) as Record<string, unknown>;
+  const profiles = settings.profiles;
+  const selectedInProfile = profiles && typeof profiles === "object" && !Array.isArray(profiles)
+    && Object.values(profiles).some(profile => profile && typeof profile === "object"
+      && !Array.isArray(profile) && (profile as Record<string, unknown>).model_provider === TELA_APP_OWNED_PROVIDER_ID);
+  if (settings.model_provider === TELA_APP_OWNED_PROVIDER_ID || selectedInProfile) {
+    throw new Error("Select another user-level or profile model_provider before restoring the Tela provider");
   }
   // A byte-for-byte match of the owned block is required. Other user sections,
   // before or after it, are left untouched.

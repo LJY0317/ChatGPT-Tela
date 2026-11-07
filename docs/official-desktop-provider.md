@@ -24,7 +24,12 @@ user's default `model_provider`, `model`, `model_catalog_json`, or
 marking its exact ownership. Unknown or edited provider definitions block
 registration/restoration. Reapplying the same owned stanza is a no-op;
 restoring removes only that identical stanza and preserves unrelated settings.
-Changes are only written on `--apply` using a private file mode.
+Changes are only written on `--apply`, retaining the existing file permissions.
+The dedicated provider sets `requires_openai_auth = true`: official Codex passes
+its existing first-party authorization header to Tela, whose Native passthrough
+requires and forwards that header to the official backend. Tela does not read,
+persist, mint, or replace the account token. Synthetic Web-only success without
+this header does not verify Native compatibility.
 
 **Registration is not selection.** If the user wants to use this provider,
 they must deliberately select `chatgpt_tela_local` in their user-level
@@ -34,9 +39,11 @@ picker, and it does not install a model catalog. The app-owned Responses
 runtime must also be running on its configured port. A normal Desktop
 restart may be needed to load config changes; hot reload is not assumed.
 Restore the Tela provider before uninstalling Tela. An altered provider
-stanza is intentionally not removed automatically. If the user's
-`model_provider` currently selects Tela, the restore command refuses
-to remove that active provider until the user chooses a different one.
+stanza is intentionally not removed automatically. If the user's top-level
+or named-profile `model_provider` selects Tela, restore refuses removal until
+the user selects another provider. Session overrides are outside config-file
+inspection. The existing uninstall lifecycle does not expose a supported
+external Codex provider removal hook, so explicit restore precedes uninstall.
 
 An isolated official engine `0.167.0-alpha.3.2` with an explicit fixture
 model catalog accepted this provider configuration using
@@ -47,3 +54,12 @@ second turn in the same thread. This verifies the provider contract only:
 it does **not** constitute acceptance of production Desktop UI selection,
 Web model catalog admission, startup/restart behavior or user permissions.
 The app-owned route must remain opt-in until those are separately verified.
+
+An additional isolated official engine run used this repository's exact
+registered provider stanza, a fake `HOME`/`CODEX_HOME` with only a synthetic
+API-key login file, and a local Responses endpoint. The engine forwarded
+`Authorization: Bearer synthetic-fixture-key`, returned an actual host tool
+result and finished the turn in two Responses requests. The local app-owned
+ingress test separately traversed the existing composite router with
+Native → Web → Native and preserved the synthetic first-party header for
+both Native requests. No real login, keychain, browser or upstream call was made.
