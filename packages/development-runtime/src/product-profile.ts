@@ -221,9 +221,10 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     // router refresh may mask a transient browser error by retaining older rows.
     const families = webDiscovery.families;
     startupFamilies = families;
-    // Existing owned readiness is also a cleanup boundary for expired answers
-    // and negative receipts, even if the host never replays the old turn.
-    await resultStore.pruneExpiredResults().catch(error => {
+    // Existing owned readiness also retires old account results: a replaced
+    // binding may never be used again, so its expired bodies and receipts
+    // must not depend on a future host replay.
+    await FileNativeVisiblePrefixStageJournal.pruneProfileResults(config.browserProfile).catch(error => {
       emitDiagnosticEvent("chatgpt_tela_work", "provider_result_retention_failed", {
         ...diagnosticFailureFields(error),
       });
@@ -268,7 +269,11 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       stop() {
         if (stopping) return stopping;
         owned.prepareShutdown!();
-        return stopping = (async () => { try { await ownedMcp.stop(); } finally { await owned.stop(); } })();
+        return stopping = (async () => {
+          const failures = await Promise.allSettled([ownedMcp.stop(), owned.stop()]);
+          const rejected = failures.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+          if (rejected.length) throw new AggregateError(rejected.map(result => result.reason), "App-owned profile cleanup failed");
+        })().catch(error => { stopping = undefined; throw error; });
       },
     });
   } catch (error) {

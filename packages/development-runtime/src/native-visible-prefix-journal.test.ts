@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 
@@ -299,4 +299,40 @@ test("owned readiness and expired replay retire raw finals and negative receipts
   await writeFile(file, "=" + JSON.stringify(retained));
   expect(await journal.readSuppliedResult(active)).toBeUndefined();
   expect(JSON.parse((await readFile(file, "utf8")).slice(1)).suppliedResults).toEqual([]);
+}));
+
+test("profile readiness retires expired replaced-account results within its owned slot", () => fixture(async options => {
+  const root = dirname(dirname(options.directory));
+  const userDataDir = join(root, "Canary-Profile2");
+  const accountBindingPath = join(root, "account-bindings", "Profile2.json");
+  const scope = (accountFingerprint: string, slot = 2) => ({
+    directory: join(root, `Canary-Profile${slot}`, "native-visible-prefix-executions", accountFingerprint),
+    initializationPath: join(root, "account-bindings", `Profile${slot}.json.native-prefix-${accountFingerprint}`),
+  });
+  const oldAccount = hash("replaced-account"), currentAccount = hash("current-account");
+  const old = new FileNativeVisiblePrefixStageJournal(scope(oldAccount));
+  const expired = { profileSlot: 2, accountFingerprint: oldAccount,
+    threadId: "past-thread", turnId: "past-turn", requestFingerprint: hash("past") };
+  const negative = { ...expired, threadId: "negative", turnId: "negative" };
+  await old.preserveSuppliedResult({ ...expired, answer: "old answer" });
+  await old.preserveSuppliedResult({ ...negative, answer: "evicted answer" });
+  const staleFile = join(scope(oldAccount).directory, "state.json");
+  const stale = JSON.parse((await readFile(staleFile, "utf8")).slice(1));
+  for (const item of stale.suppliedResults) item.updatedAt -= 29 * 24 * 60 * 60 * 1000;
+  stale.suppliedResults.find((item: { turnId: string }) => item.turnId === "negative").answer = undefined;
+  await writeFile(staleFile, "=" + JSON.stringify(stale));
+  const current = { profileSlot: 2, accountFingerprint: currentAccount,
+    threadId: "current", turnId: "current", requestFingerprint: hash("current") };
+  const currentStore = new FileNativeVisiblePrefixStageJournal(scope(currentAccount));
+  await currentStore.preserveSuppliedResult({ ...current, answer: "current answer" });
+  const other = new FileNativeVisiblePrefixStageJournal(scope(oldAccount, 3));
+  await other.preserveSuppliedResult({ ...expired, profileSlot: 3, answer: "other slot" });
+  const otherFile = join(scope(oldAccount, 3).directory, "state.json");
+  const otherBefore = await readFile(otherFile, "utf8");
+
+  await FileNativeVisiblePrefixStageJournal.pruneProfileResults({ userDataDir, accountBindingPath });
+  expect(JSON.parse((await readFile(staleFile, "utf8")).slice(1)).suppliedResults).toEqual([]);
+  expect(await old.readSuppliedResult(expired)).toBeUndefined();
+  expect((await currentStore.readSuppliedResult(current))?.answer).toBe("current answer");
+  expect(await readFile(otherFile, "utf8")).toBe(otherBefore);
 }));

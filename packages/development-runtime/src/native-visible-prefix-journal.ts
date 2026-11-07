@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { mkdir, lstat, open, unlink } from "node:fs/promises";
-import { dirname, resolve, relative, isAbsolute, sep } from "node:path";
+import { mkdir, lstat, open, readdir, unlink } from "node:fs/promises";
+import { basename, dirname, resolve, relative, isAbsolute, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   NativeVisiblePrefixStageIdentity, NativeVisiblePrefixStageJournal, NativeVisiblePrefixStageReceipt,
@@ -141,6 +141,25 @@ function validate(value: unknown): State {
 export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixStageJournal {
   readonly directory: string;
   readonly initializationPath: string;
+  /** Reuse each existing account-owned ledger at profile readiness, including
+   * accounts replaced since the last launch. Never create historical ledgers. */
+  static async pruneProfileResults(input: { readonly userDataDir: string; readonly accountBindingPath: string }): Promise<void> {
+    const prefix = `${basename(input.accountBindingPath)}.native-prefix-`;
+    const receipts = await readdir(dirname(input.accountBindingPath), { withFileTypes: true });
+    let failed: unknown;
+    for (const receipt of receipts) {
+      if (!receipt.isFile() || !receipt.name.startsWith(prefix)) continue;
+      const accountFingerprint = receipt.name.slice(prefix.length);
+      if (!/^[a-f0-9]{64}$/.test(accountFingerprint)) continue;
+      try {
+        await new FileNativeVisiblePrefixStageJournal({
+          directory: resolve(input.userDataDir, "native-visible-prefix-executions", accountFingerprint),
+          initializationPath: resolve(dirname(input.accountBindingPath), receipt.name),
+        }).pruneExpiredResults();
+      } catch (error) { failed ??= error; }
+    }
+    if (failed) throw failed;
+  }
   constructor(input: { directory: string; initializationPath: string }) {
     this.directory = resolve(input.directory);
     this.initializationPath = resolve(input.initializationPath);
