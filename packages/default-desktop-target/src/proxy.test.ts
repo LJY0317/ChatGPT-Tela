@@ -602,3 +602,26 @@ test("history diagnostic tracking is bounded without dropping unanswered reads",
     expect(JSON.stringify(events)).not.toContain("private-thread");
   } finally { client.close(); await proxy.close(); upstream.stop(true); }
 });
+
+
+test("rejected routing records structural failure boundary without request content", async () => {
+  const events: {stage:string; fields:any}[]=[];
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,
+    fetch(request,server){return server.upgrade(request)?undefined:new Response(null,{status:400});},
+    websocket:{message(){}},
+  });
+  const proxy=await startDefaultDesktopAppServerProxy({upstreamEndpoint:`ws://127.0.0.1:${upstream.port}/`,
+    route:createDefaultDesktopResponsesRoute({baseUrl:"http://127.0.0.1:18741/v1",envKey:"TEST_KEY",credential:"s".repeat(48)}),
+    onDiagnostic:(stage,fields)=>events.push({stage,fields})});
+  const client=await openSocket(proxy.endpoint);
+  try {
+    const closed=new Promise<void>(resolve=>client.addEventListener("close",()=>resolve(),{once:true}));
+    client.send(JSON.stringify({id:1,method:"thread/resume",params:{threadId:"private-thread",config:["private-config"]}}));
+    await closed;
+    const failure=events.find(row=>row.stage==="desktop_transport_failed");
+    expect(failure?.fields).toMatchObject({reason_class:"invalid_routed_request",routing_phase:"route_rewrite",
+      method_class:"thread/resume",params_shape:"object",config_shape:"array",providers_shape:"undefined"});
+    expect(JSON.stringify(events)).not.toContain("private-thread");
+    expect(JSON.stringify(events)).not.toContain("private-config");
+  } finally {client.close();await proxy.close();upstream.stop(true);}
+});
