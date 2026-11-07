@@ -11,7 +11,7 @@ export function restorableWorkProfiles(profiles: readonly CodexProfileStatus[], 
 }
 
 /** Startup is one restoration pass; startProfile owns the fresh target check. */
-export async function restoreWorkProfiles(service: Pick<CodexService, "profiles" | "startProfile">,
+export async function restoreWorkProfiles(service: Pick<CodexService, "config" | "profiles" | "startProfile">,
   identities: readonly string[], signal: AbortSignal): Promise<void> {
   emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_started", { count: identities.length });
   let restored = 0, failed = 0;
@@ -34,7 +34,9 @@ export async function restoreWorkProfiles(service: Pick<CodexService, "profiles"
     if (signal.aborted) break;
     emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_attempted", { slot });
     try {
-      const result = await service.startProfile(slot, { requireStopped: true });
+      const result = service.config.appOwnedResponses?.some(ingress => ingress.slot === slot)
+        ? await service.startProfile(slot)
+        : await service.startProfile(slot, { requireStopped: true });
       restored++;
       emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_succeeded", { slot,
         native_ready: result.targetSessionState === "ready", web_ready: result.webModelsReady === true });
