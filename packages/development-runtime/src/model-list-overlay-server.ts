@@ -6,6 +6,32 @@ import type { ChatGptWebModelFamily } from "@chatgpt-tela/chatgpt";
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
+/** The public Plura model/list callback body, reusable behind an existing owned HTTP listener. */
+export async function handleModelListOverlayRequest(input: {
+  readonly request: Request;
+  readonly families: () => readonly ChatGptWebModelFamily[];
+  readonly localCompaction?: boolean;
+}): Promise<Response> {
+  if (input.request.method !== "POST") return new Response(null, { status: 405 });
+  try {
+    const bytes = await input.request.arrayBuffer();
+    if (bytes.byteLength > MAX_BODY_BYTES) return Response.json({ error: "too_large" }, { status: 413 });
+    const value: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || (value as Record<string, unknown>).contractVersion !== 1 || !("result" in value)) {
+      return Response.json({ error: "invalid_contract" }, { status: 400 });
+    }
+    const native = (value as Record<string, unknown>).result;
+    const result = native && typeof native === "object" && !Array.isArray(native)
+      && Array.isArray((native as Record<string, unknown>).models)
+      ? augmentNativeCodexModelCatalog(native, input.families(), { localCompaction: input.localCompaction === true })
+      : augmentCodexAppServerModelList(native, input.families());
+    return Response.json({ contractVersion: 1, result });
+  } catch {
+    return Response.json({ error: "invalid_result" }, { status: 400 });
+  }
+}
+
 export interface ModelListOverlayServer {
   readonly url: string;
   close(): Promise<void>;
@@ -54,19 +80,15 @@ export async function startModelListOverlayServer(input: {
         }
         chunks.push(bytes);
       }
-      const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      if (!value || typeof value !== "object" || Array.isArray(value)
-        || (value as Record<string, unknown>).contractVersion !== 1
-        || !("result" in value)) {
-        json(response, 400, { error: "invalid_contract" });
-        return;
-      }
-      const native = (value as Record<string, unknown>).result;
-      const result = native && typeof native === "object" && !Array.isArray(native)
-        && Array.isArray((native as Record<string, unknown>).models)
-        ? augmentNativeCodexModelCatalog(native, input.families(), { localCompaction: input.localCompaction === true })
-        : augmentCodexAppServerModelList(native, input.families());
-      json(response, 200, { contractVersion: 1, result });
+      const handled = await handleModelListOverlayRequest({
+        request: new Request("http://127.0.0.1/model-list-overlay", {
+          method: "POST", body: Buffer.concat(chunks),
+        }),
+        families: input.families,
+        ...(input.localCompaction !== undefined ? { localCompaction: input.localCompaction } : {}),
+      });
+      response.writeHead(handled.status, { "content-type": "application/json", "cache-control": "no-store" });
+      response.end(await handled.text());
     } catch {
       json(response, 400, { error: "invalid_result" });
     }

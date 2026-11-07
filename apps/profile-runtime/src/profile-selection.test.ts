@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadProductProfileRuntimeConfig } from "@chatgpt-tela/development-runtime";
@@ -10,14 +10,15 @@ test("install-owned configuration opts into a stable app-owned endpoint without 
   const home = mkdtempSync(join(tmpdir(), "tela-app-owned-config-"));
   const path = join(home, "product-v1.json");
   try {
-    const profile = loadProductProfileRuntimeConfig({
+    const environment = {
       CHATGPT_TELA_PROFILE_ROOT: join(home, "profiles"),
       CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "1",
       CHATGPT_TELA_PRODUCT_ROUTE_ID: "route1234",
       CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN: "r".repeat(48),
       CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN: "m".repeat(48),
       CHATGPT_TELA_PRODUCT_UI_TOKEN: "u".repeat(48),
-    });
+    };
+    const profile = loadProductProfileRuntimeConfig(environment);
     const base = {
       version: 1,
       publicMcpAbi: "stable",
@@ -34,7 +35,16 @@ test("install-owned configuration opts into a stable app-owned endpoint without 
     expect(afterRestart).toEqual(first);
     expect(() => selectAppOwnedProfileIngress({ ...profile, nativeTarget: {
       kind: "multi-profile", targetId: "external", launcherCli: "/fixture",
-    } }, readProductConfig(path))).toThrow("managed native target");
+    } }, readProductConfig(path))).toThrow("does not match its Desktop profile slot");
+    const launcher = join(home, "plura.fixture");
+    writeFileSync(launcher, "fixture");
+    const additional = loadProductProfileRuntimeConfig({ ...environment,
+      CHATGPT_TELA_PRODUCT_PROFILE_SLOT: "2", CHATGPT_TELA_PRODUCT_NATIVE_TARGET_KIND: "multi-profile",
+      CHATGPT_TELA_PRODUCT_TARGET_ID: "managed.fixture.2", CHATGPT_TELA_PRODUCT_LAUNCHER_CLI: launcher,
+    });
+    expect(selectAppOwnedProfileIngress(additional, { ...parseProductConfig(base),
+      appOwnedResponses: [{ slot: 2, port: 18745, capability: "b".repeat(48) }],
+    })).toEqual({ port: 18745, capability: "b".repeat(48) });
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

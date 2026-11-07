@@ -52,6 +52,18 @@ function targetsContract(overrides: Record<string, unknown> = {}): Record<string
 }
 
 describe("optional Multi-Profile control client", () => {
+  test("app-owned managed route rejects a different or default profile before launch", async () => {
+    for (const target of [{ profileIndex: 3 }, { id: "default", managed: false, role: "default", profileIndex: undefined }]) {
+      const runner = new FixtureRunner();
+      runner.results.push(result(targetsContract(target)));
+      await expect(new MultiProfileControlClient({ command: ["fixture"], runner }).launchRoutedTarget({
+        targetId: target.id ?? "local.plura-desktop.profile2", expectedProfileIndex: 2,
+        responsesBaseUrl: "http://127.0.0.1:18744/v1", responsesEnvKey: "TELA_TOKEN",
+        responsesToken: "a".repeat(48),
+      })).rejects.toThrow("does not own the requested profile slot");
+      expect(runner.calls.map(call => call.arguments[0])).toEqual(["targets"]);
+    }
+  });
   test("engine selection requires advertised support and an exact live engine byte identity", async () => {
     const engine = { executable: "/fixture/codex", sha256: "e".repeat(64) };
     for (const returnedHash of [undefined, "f".repeat(64), engine.sha256]) {

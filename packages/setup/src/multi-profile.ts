@@ -349,6 +349,8 @@ export class MultiProfileControlClient {
    */
   async launchRoutedTarget(input: {
     readonly targetId: string;
+    /** An installed managed slot must be proven before launch, never inferred from a target ID. */
+    readonly expectedProfileIndex?: number;
     readonly responsesBaseUrl: URL | string;
     readonly responsesEnvKey: string;
     readonly responsesToken: string;
@@ -382,6 +384,7 @@ export class MultiProfileControlClient {
 
   async #launchRoutedTarget(input: {
     readonly targetId: string;
+    readonly expectedProfileIndex?: number;
     readonly responsesBaseUrl: URL | string;
     readonly responsesEnvKey: string;
     readonly responsesToken: string;
@@ -405,6 +408,10 @@ export class MultiProfileControlClient {
     const matches = targets.filter(target => target.id === expectedTargetId);
     if (matches.length !== 1) throw new Error(`Multi-Profile target is not available: ${expectedTargetId}`);
     const target = matches[0]!;
+    if (input.expectedProfileIndex !== undefined
+      && (!target.managed || target.profileIndex !== input.expectedProfileIndex)) {
+      throw new Error("Multi-Profile target does not own the requested profile slot");
+    }
     if (input.nativeEngine) {
       if (target.engineOverrideSupported !== true) throw new Error("Multi-Profile target does not support explicit engine selection");
       if (!isAbsolute(input.nativeEngine.executable) || /[\u0000\r\n]/.test(input.nativeEngine.executable)) throw new Error("Multi-Profile engine executable path is invalid");

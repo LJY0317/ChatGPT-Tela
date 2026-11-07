@@ -12,6 +12,8 @@ import {
   startAppOwnedProductResponsesRuntime,
 } from "./product-profile";
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
+import { MultiProfileControlClient, type MultiProfileControlRunner } from "@chatgpt-tela/setup";
+import { connectCodexTurnBridge } from "@chatgpt-tela/mcp";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 import { appOwnedDesktopCatalogPath } from "./app-owned-desktop-catalog";
 import { readDefaultDesktopNativeCatalog, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
@@ -340,6 +342,234 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
     expect(closes).toBe(2);
     expect(nativeRequests).toBe(4);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("two managed app-owned profiles keep independent fixed header routes, overlay and Plura lifetime across a Tela restart", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-app-owned-managed-"));
+  const launcher = join(root, "fixture-plura");
+  writeFileSync(launcher, "fixture");
+  const profiles = [2, 3] as const;
+  const capabilities: Record<number, string> = { 2: "c".repeat(48), 3: "d".repeat(48) };
+  const fixtureIds = profiles.map(slot => `managed.fixture.${slot}`);
+  const sessions = new Map<string, { route: string; overlay: string; body: Record<string, unknown> }>();
+  let createdSessions = 0;
+  const calls: string[] = [];
+  const toolCalls: number[] = [];
+  const runner: MultiProfileControlRunner = {
+    async run(_command, input) {
+      const [action, ...args] = input.arguments;
+      calls.push(action!);
+      const argument = (name: string) => args[args.indexOf(name) + 1]!;
+      const id = argument("--target");
+      const output = action === "targets" ? {
+        contractVersion: 1,
+        targets: profiles.map(slot => ({
+          id: `managed.fixture.${slot}`, displayName: `Fixture ${slot}`,
+          managed: true, role: "managed", state: "stopped", sessionState: "available",
+          sharedAppServerSupported: true, responsesRouteSupported: true,
+          modelListOverlaySupported: true, startupModelCatalogSupported: true, profileIndex: slot,
+        })),
+      } : (() => {
+        if (action !== "launch-target" || !fixtureIds.includes(id as typeof fixtureIds[number])) {
+          throw Error("Unexpected fixture public control operation");
+        }
+        const route = argument("--responses-base-url");
+        const overlay = argument("--model-list-overlay-url");
+        const before = sessions.get(id);
+        if (before && (before.route !== route || before.overlay !== overlay)) {
+          throw Error("Existing Plura session route changed: normal quit required");
+        }
+        if (!before) {
+          createdSessions++;
+          sessions.set(id, {
+            route, overlay,
+            body: {
+              contractVersion: 1, targetID: id, state: "ready",
+              endpoint: `ws://127.0.0.1:${19000 + profiles.indexOf(Number(id.split(".").at(-1)) as 2 | 3)}`,
+              desktopProcessID: 4200 + Number(id.split(".").at(-1)),
+              responsesRouteFingerprint: createHash("sha256").update(route).digest("hex"),
+              modelListOverlayFingerprint: createHash("sha256").update(overlay).digest("hex"),
+            },
+          });
+        }
+        expect(args).toContain("--startup-model-catalog");
+        expect(input.environment?.CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN).toBe(capabilities[Number(id.split(".").at(-1))]);
+        return sessions.get(id)!.body;
+      })();
+      return { stdout: JSON.stringify(output), stderr: "", exitCode: 0 };
+    },
+  };
+  const client = new MultiProfileControlClient({ command: [launcher], runner });
+  const active: Array<Awaited<ReturnType<typeof startAppOwnedProductResponsesRuntime>>> = [];
+  try {
+    const configs = profiles.map(slot => {
+      const config = loadProductProfileRuntimeConfig({
+        ...common(root), CHATGPT_TELA_PRODUCT_PROFILE_SLOT: String(slot),
+        CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN: (slot === 2 ? "m" : "n").repeat(48),
+        CHATGPT_TELA_PRODUCT_TARGET_ID: `managed.fixture.${slot}`,
+        CHATGPT_TELA_PRODUCT_NATIVE_TARGET_KIND: "multi-profile",
+        CHATGPT_TELA_PRODUCT_LAUNCHER_CLI: launcher,
+      });
+      mkdirSync(config.browserProfile.userDataDir, { recursive: true });
+      bindChatGptTelaAccount(config.browserProfile, String(slot).repeat(64));
+      return config;
+    });
+    const family = { key: chatGptWebFamilyKey("Managed fixture Web"),
+      label: "Managed fixture Web", availableEfforts: ["medium"] as const };
+    const nativeBySlot = new Map<number, string[]>();
+    const webBySlot = new Map<number, string[]>();
+    const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
+      const slot = options.profileSlot!;
+      expect(options.responses?.authentication).toEqual({ kind: "header", name: "OpenAI-Organization" });
+      expect(options.responses?.modelListOverlay).toBeDefined();
+      const responses = await startLocalResponsesServer({ ...options.responses,
+        async requestRouter(request) {
+          const routed = await options.responses!.requestRouter!(request);
+          if (routed) return routed;
+          const body = await request.json() as { model: string };
+          webBySlot.set(slot, [...webBySlot.get(slot) ?? [], body.model]);
+          return Response.json({ provider: "web", slot });
+        },
+      });
+      return {
+        responses,
+        suppliedToolBridge: {
+          inventory: () => [{ wireName: "fixture_echo", name: "fixture_echo", kind: "function" as const,
+            description: "Fixture profile-bound tool", inputSchema: { type: "object" }, observedFrom: ["fixture"] }],
+          async invoke(_capability: unknown, invocation: { callId: string }) {
+            toolCalls.push(slot);
+            return { callId: invocation.callId, isError: false, content: `profile-${slot}-fixture-result` };
+          },
+        },
+        shutdownReadiness: () => "ready", prepareShutdown() {},
+        async prepareChatGptWebSession(input: any) {
+          input.onProfile?.({ account: { accountFingerprint: String(slot).repeat(64),
+            accountStructure: "personal", containerFingerprint: `fixture-${slot}` } });
+          input.onFamilies?.([family]); input.onConnectorStarting?.(); input.onConnectorProven?.();
+          return { families: [family] };
+        },
+        async discoverChatGptWebModelFamilies() { return [family]; },
+        async stop() { await responses.stop(); },
+      } as unknown as ElectronDevelopmentRuntime;
+    }) as typeof import("./electron").startElectronDevelopmentRuntime;
+    const open = (slot: number, control = client, signal?: AbortSignal) => startAppOwnedProductResponsesRuntime({
+      config: configs[profiles.indexOf(slot as 2 | 3)]!, ingress: { port: ports[slot]!, capability: capabilities[slot]! },
+      electronStarter: starter, multiProfileClient: control,
+      ...(signal ? { signal } : {}),
+      nativeFetch: async request => {
+        expect(request.headers.get("OpenAI-Organization")).toBeNull();
+        expect(request.headers.get("authorization")).toBe("Bearer synthetic-native-auth");
+        if (request.method === "GET") return Response.json({ models: [] });
+        const body = await request.json() as { model: string };
+        nativeBySlot.set(slot, [...nativeBySlot.get(slot) ?? [], body.model]);
+        return Response.json({ provider: "native", slot });
+      },
+    });
+    const ports: Record<number, number> = {};
+    for (const slot of profiles) {
+      const reserve = await startLocalResponsesServer({ requestRouter: async () => new Response(null, { status: 404 }) });
+      ports[slot] = reserve.port;
+      await reserve.stop();
+    }
+    const first = await open(2); active.push(first);
+    const second = await open(3); active.push(second);
+    expect(createdSessions).toBe(2);
+    const models = { contractVersion: 1, result: { models: [
+      { slug: "native-model", display_name: "Native", visibility: "list", supported_in_api: true,
+        supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] },
+    ] } };
+    for (const [i, owned] of active.entries()) {
+      const slot = profiles[i]!;
+      const base = owned.responses.baseUrl;
+      expect(base.pathname).toBe("/v1/");
+      const overlay = new URL("/model-list-overlay", base);
+      expect((await fetch(overlay, { method: "POST", headers: {
+        authorization: "Bearer wrong", "content-type": "application/json",
+      }, body: JSON.stringify(models) })).status).toBe(401);
+      const catalog = await fetch(overlay, { method: "POST", headers: {
+        authorization: `Bearer ${capabilities[slot]}`, "content-type": "application/json",
+      }, body: JSON.stringify(models) });
+      expect(catalog.status).toBe(200);
+      const projected = await catalog.json() as { result: { models: { slug: string }[] } };
+      expect(projected.result.models.map(value => value.slug)).toEqual(["native-model", chatGptWebModelId(family.key)]);
+      const send = async (model: string, token = capabilities[slot]!) => fetch(new URL("responses", base), {
+        method: "POST", headers: {
+          "OpenAI-Organization": token,
+          authorization: "Bearer synthetic-native-auth", "content-type": "application/json",
+        }, body: JSON.stringify({ model, input: [] }),
+      });
+      expect((await send("native-model", "wrong")).status).toBe(401);
+      expect((await send("native-model", capabilities[slot === 2 ? 3 : 2])).status).toBe(401);
+      expect((await (await send("native-model")).json()).slot).toBe(slot);
+      expect((await (await send(chatGptWebModelId(family.key))).json()).provider).toBe("web");
+    }
+    expect(nativeBySlot.get(2)).toEqual(["native-model"]);
+    expect(nativeBySlot.get(3)).toEqual(["native-model"]);
+    expect(webBySlot.get(2)).toEqual([chatGptWebModelId(family.key)]);
+    expect(webBySlot.get(3)).toEqual([chatGptWebModelId(family.key)]);
+    for (const [i, owned] of active.entries()) {
+      const bridge = await connectCodexTurnBridge({ endpoint: owned.internalMcp.endpointUrl,
+        bearerToken: configs[i]!.internalMcpToken });
+      try {
+        const capability = `turnr_fixture_profile_${profiles[i]}_capability`;
+        expect((await bridge.inventory(capability)).map(tool => tool.wireName)).toEqual(["fixture_echo"]);
+        const result = await bridge.invoke(capability, {
+          callId: `fixture-tool-${i}`, wireName: "fixture_echo", mode: "structured", arguments: {},
+        });
+        expect(result.content).toBe(`profile-${profiles[i]}-fixture-result`);
+      } finally { await bridge.close(); }
+    }
+    expect(toolCalls).toEqual([2, 3]);
+    bindChatGptTelaAccount(configs[1]!.browserProfile, "e".repeat(64));
+    const changedAccountCatalog = await fetch(new URL("/model-list-overlay", second.responses.baseUrl), {
+      method: "POST", headers: { authorization: `Bearer ${capabilities[3]}`, "content-type": "application/json" },
+      body: JSON.stringify(models),
+    });
+    expect((await changedAccountCatalog.json() as { result: { models: { slug: string }[] } })
+      .result.models.map(model => model.slug)).toEqual(["native-model"]);
+    bindChatGptTelaAccount(configs[1]!.browserProfile, "3".repeat(64));
+    await first.stop(); active.splice(0, 1);
+    const restarted = await open(2); active.push(restarted);
+    expect(restarted.responses.baseUrl.href).toBe(first.responses.baseUrl.href);
+    expect(createdSessions).toBe(2);
+    expect((await fetch(new URL("models", second.responses.baseUrl), {
+      headers: { "OpenAI-Organization": capabilities[3]!, authorization: "Bearer synthetic-native-auth" },
+    })).status).toBe(200);
+    expect(calls).not.toContain("quit-target");
+    await restarted.stop(); active.splice(active.indexOf(restarted), 1);
+    const rejectedClient = new MultiProfileControlClient({ command: [launcher], runner: {
+      async run(_command, input) {
+        expect(input.arguments[0]).toBe("targets");
+        return { stderr: "", exitCode: 0, stdout: JSON.stringify({ contractVersion: 1, targets: [{
+          id: "managed.fixture.2", displayName: "Wrong owner", managed: true, role: "managed",
+          state: "stopped", sessionState: "available", profileIndex: 3,
+          sharedAppServerSupported: true, responsesRouteSupported: true,
+          modelListOverlaySupported: true, startupModelCatalogSupported: true,
+        }] }) };
+      },
+    } });
+    await expect(open(2, rejectedClient)).rejects.toThrow("does not own the requested profile slot");
+    const abort = new AbortController();
+    const cancellingClient = new MultiProfileControlClient({ command: [launcher], runner: {
+      async run(_command, input) {
+        if (input.arguments[0] === "targets") return { stderr: "", exitCode: 0,
+          stdout: JSON.stringify({ contractVersion: 1, targets: [{
+            id: "managed.fixture.2", displayName: "Fixture 2", managed: true, role: "managed",
+            state: "stopped", sessionState: "available", profileIndex: 2,
+            sharedAppServerSupported: true, responsesRouteSupported: true,
+            modelListOverlaySupported: true, startupModelCatalogSupported: true,
+          }] }) };
+        abort.abort();
+        throw new DOMException("Fixture launch cancelled", "AbortError");
+      },
+    } });
+    await expect(open(2, cancellingClient, abort.signal)).rejects.toThrow("Fixture launch cancelled");
+    const recovered = await open(2); active.push(recovered);
+    expect(createdSessions).toBe(2);
+  } finally {
+    await Promise.allSettled(active.map(item => item.stop()));
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("app-owned production shutdown resumes a failed browser close through the HTTP receipt and rebinds the same route", async () => {

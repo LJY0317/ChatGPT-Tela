@@ -52,7 +52,7 @@ import type { NativeCodexFetch } from "./native-passthrough";
 import { augmentCodexAppServerModelList } from "./app-server-model-list";
 import { augmentNativeCodexModelCatalog } from "./web-model-catalog";
 import { publishAppOwnedDesktopCatalog } from "./app-owned-desktop-catalog";
-import { startModelListOverlayServer, type ModelListOverlayServer } from "./model-list-overlay-server";
+import { handleModelListOverlayRequest, startModelListOverlayServer, type ModelListOverlayServer } from "./model-list-overlay-server";
 
 export const PRODUCT_RESPONSES_ENV_KEY = "CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN";
 export const PRODUCT_UI_ENV_KEY = "CHATGPT_TELA_PRODUCT_UI_TOKEN";
@@ -121,16 +121,18 @@ export interface ProductProfileRuntime {
 }
 
 /**
- * App-owned Desktop provider adapter. The official Desktop and its Native engine
- * are intentionally not started, inspected or stopped here. The caller supplies
- * the install-owned fixed Responses port/capability from product configuration.
- * An explicit initial Desktop provider configuration points at responses.baseUrl;
- * later Tela restarts rebind the same listener without changing that address.
+ * App-owned Responses ingress with an install-owned fixed port and capability.
+ * The independent default Desktop keeps its explicit provider configuration;
+ * additional managed targets use Plura's public routed-launch and model overlay.
+ * Tela never owns or quits those Native/Desktop processes, and rebinding the
+ * same callback on restart does not replace their existing Plura session.
  */
 export async function startAppOwnedProductResponsesRuntime(input: {
   readonly config: ProductProfileRuntimeConfig;
   readonly ingress: { readonly port: number; readonly capability: string };
   readonly electronStarter?: typeof startElectronDevelopmentRuntime;
+  /** Only for isolated public-control fixtures. Production uses the configured launcher. */
+  readonly multiProfileClient?: MultiProfileControlClient;
   readonly nativeFetch?: NativeCodexFetch;
   readonly signal?: AbortSignal;
   /** Installed profile runtime publishes only to the exact install-owned resource. */
@@ -147,14 +149,18 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   stop(): Promise<void>;
 }> {
   const { config, ingress } = input;
-  if (config.nativeTarget.kind !== "default-desktop") {
-    throw new Error("App-owned Desktop Responses serves only the default independent Desktop profile");
+  if (config.nativeTarget.kind === "multi-profile" && config.slot < 2) {
+    throw new Error("App-owned additional Desktop requires a managed profile slot");
+  }
+  if (config.nativeTarget.kind !== "default-desktop" && input.catalogPreparation) {
+    throw new Error("Managed Desktop must use its public model-list overlay, not the default Desktop catalog");
   }
   if (!Number.isSafeInteger(ingress.port) || ingress.port < 1 || ingress.port > 65535
     || !/^[A-Za-z0-9_-]{43,128}$/.test(ingress.capability)) {
     throw new Error("App-owned Responses requires an install-owned fixed port and URL capability");
   }
   const identity = productPublicMcpIdentity(config.publicMcpAbi);
+  const managed = config.nativeTarget.kind === "multi-profile";
   let completedResults: import("./supplied-request-gateway").SuppliedResultScope | undefined;
   // Runtime and login discovery can begin without a binding. The validated
   // account owns the result journal only after the existing readiness proof.
@@ -195,7 +201,16 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       hostname: "127.0.0.1",
       port: ingress.port,
       runtimeToken: ingress.capability,
-      authentication: { kind: "path" },
+      authentication: managed ? { kind: "header", name: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER } : { kind: "path" },
+      ...(managed ? { modelListOverlay: {
+        token: ingress.capability,
+        handle: (request: Request) => handleModelListOverlayRequest({ request,
+          families: () => {
+            const binding = readChatGptTelaAccountBinding(config.browserProfile);
+            return binding && binding.accountFingerprint === completedResults?.accountFingerprint
+              ? router.cachedWebModelFamilies : [];
+          } }),
+      } } : {}),
       requestRouter: request => router.route(request),
     },
     electron: { userDataDir: config.browserProfile.userDataDir },
@@ -254,6 +269,27 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       throw Error("App-owned runtime did not expose its operation lifecycle");
     internalMcp = await startCodexBridgeMcpHttpServer({ bridge: runtime.suppliedToolBridge,
       port: 0, authentication: { kind: "bearer", token: config.internalMcpToken } });
+    if (config.nativeTarget.kind === "multi-profile") {
+      const client = input.multiProfileClient ?? new MultiProfileControlClient({ command: [config.nativeTarget.launcherCli] });
+      // The Responses listener and overlay callback have the same stable install-owned port
+      // and credential across Tela restarts. Plura reuses an exact matching live session.
+      // Plura owns its Desktop/app-server lifetime; Tela must never quit it during cleanup.
+      await client.launchRoutedTarget({
+        targetId: config.nativeTarget.targetId,
+        expectedProfileIndex: config.slot,
+        responsesBaseUrl: runtime.responses.baseUrl,
+        responsesEnvKey: PRODUCT_RESPONSES_ENV_KEY,
+        responsesToken: ingress.capability,
+        runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
+        startupModelCatalog: true,
+        modelListOverlay: {
+          url: new URL("/model-list-overlay", runtime.responses.baseUrl).href,
+          envKey: PRODUCT_RESPONSES_ENV_KEY,
+          token: ingress.capability,
+        },
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+    }
     const ownedMcp = internalMcp;
     const owned = runtime;
     let stopping: Promise<void> | undefined;

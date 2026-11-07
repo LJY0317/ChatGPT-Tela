@@ -182,9 +182,9 @@ async function main(config: ReturnType<typeof loadProductProfileRuntimeConfig>):
   await stop();
 }
 
-/** A separately owned Responses profile: no Native RPC, Desktop launch, quit,
- * or first-party Native turn authority. Its distinct ready stage must not be
- * accepted as a managed Desktop lease by the Codex controller. */
+/** A separately owned Responses profile. Optional Plura launch remains owned by
+ * Plura, never by this process; the distinct ready stage cannot claim a Native
+ * Desktop lease or first-party terminal authority. */
 async function mainAppOwned(
   config: ReturnType<typeof loadProductProfileRuntimeConfig>,
   ingress: { readonly port: number; readonly capability: string },
@@ -210,7 +210,8 @@ async function mainAppOwned(
     const installId = process.env.CHATGPT_TELA_INSTALL_ID;
     runtime = await startAppOwnedProductResponsesRuntime({
       config, ingress, signal: lifecycle.signal,
-      ...(installId ? { catalogPreparation: { paths: resolveProductPaths(), installId } } : {}),
+      ...(installId && config.nativeTarget.kind === "default-desktop"
+        ? { catalogPreparation: { paths: resolveProductPaths(), installId } } : {}),
     });
     const owned = runtime;
     const web = owned.runtime;

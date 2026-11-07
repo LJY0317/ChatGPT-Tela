@@ -151,6 +151,7 @@ export interface ElectronDevelopmentRuntimeOptions {
     readonly runtimeToken?: string;
     readonly authentication?: import("@chatgpt-tela/local-server").LocalResponsesAuthentication;
     readonly requestRouter?: import("@chatgpt-tela/local-server").LocalResponsesRequestRouter;
+    readonly modelListOverlay?: import("@chatgpt-tela/local-server").LocalResponsesModelListOverlay;
     readonly maxRequestBodyBytes?: number;
   };
   readonly electron?: {

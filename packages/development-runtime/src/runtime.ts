@@ -176,6 +176,7 @@ export interface DevelopmentRuntimeOptions {
     readonly runtimeToken?: string;
     readonly authentication?: LocalResponsesAuthentication;
     readonly requestRouter?: LocalResponsesRequestRouter;
+    readonly modelListOverlay?: import("@chatgpt-tela/local-server").LocalResponsesModelListOverlay;
     readonly maxRequestBodyBytes?: number;
   };
 }

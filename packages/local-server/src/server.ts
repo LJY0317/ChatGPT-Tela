@@ -51,6 +51,13 @@ export type LocalResponsesAuthentication =
 
 export type LocalResponsesRequestRouter = (request: Request) => Promise<Response | undefined>;
 
+/** A distinct authenticated Plura callback on the same install-owned listener.
+ * Sharing its stable port avoids relaunching a live Desktop just to replace an ephemeral overlay. */
+export interface LocalResponsesModelListOverlay {
+  readonly token: string;
+  readonly handle: (request: Request) => Promise<Response>;
+}
+
 function bearerToken(request: Request): string | undefined {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) return undefined;
@@ -121,12 +128,16 @@ export async function startLocalResponsesServer(input: {
    * The hook receives a clone so inspection cannot consume the gateway's request body.
    */
   readonly requestRouter?: LocalResponsesRequestRouter;
+  readonly modelListOverlay?: LocalResponsesModelListOverlay;
   readonly maxRequestBodyBytes?: number;
 }): Promise<LocalResponsesServer> {
   if (!input.gateway && !input.requestRouter) throw new Error("Responses server requires a gateway or explicit router");
   const hostname = input.hostname ?? DEFAULT_HOSTNAME;
   const runtimeToken = input.runtimeToken ?? randomBytes(32).toString("base64url");
   if (runtimeToken.length < 32) throw new Error("ChatGPT Tela runtime token must contain at least 32 characters");
+  if (input.modelListOverlay && input.modelListOverlay.token.length < 32) {
+    throw new Error("Model-list overlay token must contain at least 32 characters");
+  }
   const authentication = input.authentication ?? Object.freeze({ kind: "bearer" as const });
   if (authentication.kind === "header"
     && !/^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/.test(authentication.name)) {
@@ -144,6 +155,14 @@ export async function startLocalResponsesServer(input: {
     request.signal.throwIfAborted();
     const url = new URL(request.url);
     if (request.headers.has("origin")) return forbiddenBrowserOrigin();
+    if (url.pathname === "/model-list-overlay" && input.modelListOverlay) {
+      if (!sameSecret(bearerToken(request), input.modelListOverlay.token)) {
+        return unauthorized({ kind: "bearer" });
+      }
+      if (request.method !== "POST") return new Response(null, { status: 405 });
+      try { return await input.modelListOverlay.handle(request); }
+      catch { return Response.json({ error: "invalid_result" }, { status: 400 }); }
+    }
     if (!sameSecret(authenticationToken(request, authentication), runtimeToken)) {
       return unauthorized(authentication);
     }
