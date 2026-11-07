@@ -3,6 +3,11 @@ import { startCodexBridgeMcpHttpServer } from './http-server';
 import { connectCodexTurnBridge } from './remote-turn-bridge';
 
 test('each remote operation releases its session and never replays calls', async () => {
+  const { diagnosticFingerprint, observeDiagnosticEvents } = await import('@chatgpt-tela/core');
+  const events: any[] = [];
+  const stop = observeDiagnosticEvents(row => {
+    if (row.stage === 'native_mcp_result_received') events.push(row);
+  });
   let calls = 0;
   const server = await startCodexBridgeMcpHttpServer({
     bridge: {
@@ -32,9 +37,19 @@ test('each remote operation releases its session and never replays calls', async
     expect(rejected.isError).toBe(true);
     expect(calls).toBe(2);
     expect(server.activeSessionCount).toBe(0);
+    expect(events).toContainEqual(expect.objectContaining({phase:'inventory',
+      control_fingerprint:diagnosticFingerprint('turnr_Fixture1_opaque_capability'),
+      delivery:'mcp_client_result_received'}));
+    expect(events).toContainEqual(expect.objectContaining({phase:'invoke',
+      control_fingerprint:diagnosticFingerprint('turnr_Fixture1_opaque_capability'),
+      operation_fingerprint:diagnosticFingerprint('fixture-call'),is_error:false,
+      delivery:'mcp_client_result_received'}));
+    expect(events).toContainEqual(expect.objectContaining({phase:'invoke',
+      operation_fingerprint:diagnosticFingerprint('reject-call'),is_error:true}));
+    expect(JSON.stringify(events)).not.toContain('opaque_capability');
     await bridge.close();
     await expect(bridge.inventory('turnr_Fixture1_opaque_capability')).rejects.toThrow('closed');
-  } finally { await bridge.close(); await server.stop(); }
+  } finally { stop?.(); await bridge.close(); await server.stop(); }
 });
 
 test('SDK request timeouts record the observed adapter phase and never replay a Native invocation',async()=>{
@@ -61,7 +76,7 @@ test('SDK request timeouts record the observed adapter phase and never replay a 
 });
 
 test('rejected Native inventory emits a bounded failure-stage diagnostic', async () => {
-  const { observeDiagnosticEvents } = await import('@chatgpt-tela/core');
+  const { diagnosticFingerprint, observeDiagnosticEvents } = await import('@chatgpt-tela/core');
   const events: any[] = [];
   const stop = observeDiagnosticEvents(row => {
     if (row.stage === 'native_mcp_inventory_rejected') events.push(row);
@@ -76,7 +91,8 @@ test('rejected Native inventory emits a bounded failure-stage diagnostic', async
   try {
     await expect(bridge.inventory('turnr_Fixture1_opaque_capability')).rejects.toThrow('rejected Native tool inventory request');
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ phase: 'inventory_result', reason_class: 'tool_result_error' });
+    expect(events[0]).toMatchObject({ phase: 'inventory_result', reason_class: 'tool_result_error',
+      control_fingerprint: diagnosticFingerprint('turnr_Fixture1_opaque_capability') });
     expect(JSON.stringify(events)).not.toContain('PRIVATE_INVENTORY_FAILURE');
   } finally { stop?.(); await bridge.close(); await server.stop(); }
 });

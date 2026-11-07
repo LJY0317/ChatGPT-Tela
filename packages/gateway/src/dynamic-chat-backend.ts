@@ -70,7 +70,10 @@ export class DynamicChatBackend {
           phase: capability === "goal_control_inventory" ? "inventory" : "call",
           ...(controlFingerprint ? { control_fingerprint: controlFingerprint } : {}),
           reason_class: error instanceof Error && error.message === "unknown or retired turn capability"
-            ? "unknown_or_retired_control" : "inventory_error",
+            ? "unknown_or_retired_control"
+            : error && typeof error === "object" && "code" in error
+              && error.code === "tela_native_inventory_rejected"
+              ? "native_inventory_rejected" : "inventory_error",
         });
         throw error;
       }

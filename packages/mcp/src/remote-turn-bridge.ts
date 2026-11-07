@@ -1,5 +1,5 @@
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
-import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -78,7 +78,8 @@ export async function connectCodexTurnBridge(input: {
   const active = new Set<Client>();
   // The server reclaims idle MCP sessions. Each local operation owns a fresh session;
   // never keep an idle lease or replay a possibly accepted tool invocation.
-  async function withClient<T>(operation: (client: Client) => Promise<T>): Promise<T> {
+  async function withClient<T>(operation: (client: Client) => Promise<T>,
+    evidence: Readonly<Record<string, string>> = {}): Promise<T> {
     if (closed) throw new Error("remote turn bridge is closed");
     const transport = new StreamableHTTPClientTransport(endpoint, {
       requestInit: { headers: { authorization: `Bearer ${input.bearerToken}` } },
@@ -92,10 +93,11 @@ export async function connectCodexTurnBridge(input: {
       phase = "invoke";
       return await operation(client);
     } catch (error) {
-      const evidence = diagnosticFailureFields(error);
+      const failure = diagnosticFailureFields(error);
       emitDiagnosticEvent("chatgpt_tela_mcp", "native_mcp_call_failed", {
-        phase, ...evidence,
-        reason_class: error instanceof McpError && error.code === ErrorCode.RequestTimeout ? "timeout" : evidence.reason_class,
+        phase, ...evidence, ...failure,
+        reason_class: error instanceof McpError && error.code === ErrorCode.RequestTimeout
+          ? "timeout" : failure.reason_class,
       });
       throw error;
     } finally {
@@ -112,6 +114,7 @@ export async function connectCodexTurnBridge(input: {
   await withClient(async () => {});
   return Object.freeze({
     async inventory(capability: string, query = "") {
+      const controlFingerprint = diagnosticFingerprint(capability);
       const result = await withClient(async client => {
         const response = await client.callTool({
           name: CHATGPT_TELA_CODEX_TOOL_INVENTORY,
@@ -120,11 +123,18 @@ export async function connectCodexTurnBridge(input: {
         if (response.isError) {
           emitDiagnosticEvent("chatgpt_tela_mcp", "native_mcp_inventory_rejected", {
             phase: "inventory_result", reason_class: "tool_result_error",
+            control_fingerprint: controlFingerprint,
           });
-          throw new Error("remote turn bridge rejected Native tool inventory request");
+          throw Object.assign(new Error("remote turn bridge rejected Native tool inventory request"), {
+            code: "tela_native_inventory_rejected",
+          });
         }
+        emitDiagnosticEvent("chatgpt_tela_mcp", "native_mcp_result_received", {
+          phase: "inventory", control_fingerprint: controlFingerprint,
+          is_error: false, delivery: "mcp_client_result_received",
+        });
         return response;
-      });
+      }, { control_fingerprint: controlFingerprint });
       let parsed: unknown;
       try { parsed = JSON.parse(textContent(result)); }
       catch (error) { throw new Error("remote turn bridge returned invalid Native tool inventory JSON", { cause: error }); }
@@ -132,6 +142,8 @@ export async function connectCodexTurnBridge(input: {
       return Object.freeze(parsed.map(inventoryEntry));
     },
     async invoke(capability: string, invocation: NativeToolInvocation): Promise<NativeToolResult> {
+      const controlFingerprint = diagnosticFingerprint(capability);
+      const operationFingerprint = diagnosticFingerprint(invocation.callId);
       const arguments_ = invocation.mode === "structured"
         ? {
             turn_capability: capability,
@@ -147,7 +159,15 @@ export async function connectCodexTurnBridge(input: {
             mode: "freeform" as const,
             input: invocation.input,
           };
-      const result = await withClient(client => client.callTool({ name: CHATGPT_TELA_CODEX_TOOL_CALL, arguments: arguments_ }));
+      const result = await withClient(async client => {
+        const response = await client.callTool({ name: CHATGPT_TELA_CODEX_TOOL_CALL, arguments: arguments_ });
+        emitDiagnosticEvent("chatgpt_tela_mcp", "native_mcp_result_received", {
+          phase: "invoke", control_fingerprint: controlFingerprint,
+          operation_fingerprint: operationFingerprint,
+          is_error: response.isError === true, delivery: "mcp_client_result_received",
+        });
+        return response;
+      }, { control_fingerprint: controlFingerprint, operation_fingerprint: operationFingerprint });
       return Object.freeze({
         callId: invocation.callId,
         content: textContent(result),

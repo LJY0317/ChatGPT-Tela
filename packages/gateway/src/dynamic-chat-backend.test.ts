@@ -128,6 +128,25 @@ test("expired Goal control is reported as inventory rejection before Native invo
   } finally { stop?.(); }
 });
 
+test("MCP inventory result rejection remains distinct from a retired Goal control", async () => {
+  const rows: Array<{ stage: string; [key: string]: unknown }> = [];
+  const stop = observeDiagnosticEvents(event => {
+    if (event.stage === "native_goal_control_inventory_rejected") rows.push(event);
+  });
+  const failure = Object.assign(new Error("remote inventory failed"), { code: "tela_native_inventory_rejected" });
+  const backend = new DynamicChatBackend(() => undefined, {
+    inventory() { throw failure; },
+    async invoke() { throw Error("must not invoke Native"); },
+  });
+  try {
+    await expect(backend.call("goal_control_inventory", { goal_control: "scoped-control" })).rejects.toBe(failure);
+    expect(rows).toEqual([expect.objectContaining({
+      phase: "inventory", reason_class: "native_inventory_rejected",
+      control_fingerprint: diagnosticFingerprint("scoped-control"),
+    })]);
+  } finally { stop?.(); }
+});
+
 test("schema-valid but un-fingerprintable Goal controls preserve inventory errors", async () => {
   for (const [capability, control] of [
     ["goal_control_inventory", ""],
