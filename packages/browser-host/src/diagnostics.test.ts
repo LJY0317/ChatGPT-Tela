@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
-import { diagnosticFingerprint, readDiagnosticTail, setPrivateDiagnosticCapture, withDiagnosticContext } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, emitDiagnosticEvent, listDiagnosticIncidents, readDiagnosticIncident, readDiagnosticTail, setPrivateDiagnosticCapture, withDiagnosticContext } from "@chatgpt-tela/core";
 import { captureBrowserDiagnosticEvidence, captureBrowserDiagnosticCheckpoint, DIAGNOSTIC_DOM_CAPTURE } from "./diagnostics";
 import { BROWSER_PAGE_AUTOMATION } from "./page-automation";
 import { BROWSER_READ_ONLY_PREVIEW, type BrowserSurfaceLease } from "./index";
@@ -63,6 +63,37 @@ test.each(["turn_failure", "approval_anomaly", "approval_preparation_failed", "p
 test("broken diagnostic capability cannot replace the primary outcome",async()=>{
   const surface={capability(){throw new Error("broken");},taskId:"diagnostic",epochId:"epoch"} as unknown as BrowserSurfaceLease;
   await expect(captureBrowserDiagnosticEvidence(surface,"turn_failure")).resolves.toBeUndefined();
+});
+
+test("opt-in browser capture passes exact retained artifact refs into its incident receipt", async () => {
+  const root=mkdtempSync(join(tmpdir(),"tela-browser-incident-receipt-"));roots.push(root);
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE=join(root,"events.jsonl");
+  const operation=diagnosticFingerprint("browser-incident-receipt");
+  const surface={taskId:"receipt-task",epochId:"receipt-epoch",leaseId:"receipt-lease",async navigate(){},async reveal(){},async hide(){},
+    capability(cap:unknown){
+      if(cap===BROWSER_PAGE_AUTOMATION)return{async evaluate(){return{capture_safe:true,html:"<div>private document</div>",focus_html:"<div>latest shell</div>"};}};
+      if(cap===BROWSER_READ_ONLY_PREVIEW)return{async captureJpeg(){return new Uint8Array([1,2,3,4]);}};
+    }} as BrowserSurfaceLease;
+  const center=join(root,"diagnostics");
+  setPrivateDiagnosticCapture(center,"until-disabled");
+  await withDiagnosticContext({operation_fingerprint:operation},()=>captureBrowserDiagnosticEvidence(surface,"turn_failure"));
+  const incidents=listDiagnosticIncidents(center,true);
+  expect(incidents).toHaveLength(1);
+  const incident=readDiagnosticIncident(center,incidents[0]!.ref) as any;
+  expect(incident.stage).toBe("private_capture_recorded");
+  expect(incident.privateArtifactCount).toBe(3);
+  expect(incident.availablePrivateArtifactCount).toBe(3);
+  expect(incident.privateArtifacts.map((item:any)=>item.kind).sort()).toEqual(["html","html","jpg"]);
+  await withDiagnosticContext({operation_fingerprint:operation},()=>emitDiagnosticEvent("chatgpt_tela_work","web_turn_failed"));
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  const failureIncident=listDiagnosticIncidents(center,true).find(item=>item.stage==="web_turn_failed");
+  expect(failureIncident).toBeDefined();
+  const failure=readDiagnosticIncident(center,failureIncident!.ref) as any;
+  expect(failure.privateArtifactCount).toBe(3);
+  expect(failure.availablePrivateArtifactCount).toBe(3);
+  expect(failure.privateArtifacts.map((item:any)=>item.ref).sort()).toEqual(incident.privateArtifacts.map((item:any)=>item.ref).sort());
+  const events=readDiagnosticTail(join(root,"events.jsonl")).events;
+  expect(events.find(row=>row.stage==="private_capture_recorded")).toMatchObject({operation_fingerprint:operation,retained_count:3,omitted_count:0});
 });
 
 
