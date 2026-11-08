@@ -150,17 +150,23 @@ Neither route has been exercised against the live installed baseline. Build 7
 has a synthetic version, ad-hoc signature and test feed, so it is not an
 approved public Sparkle update or an accepted production installer.
 
-The current Native-first installation is **not ready for a direct engine-free
-Sparkle update**. `application-update finish` automatically resumes services
-that were running before replacement; it does not pause for an operator to
-run `configure`. The isolated replacement test preconfigures both app-owned
-routes before replacement, so it does not validate migration from empty routes.
-The approved routes must be prepared through the owning lifecycle before its
-first service resume. That integrated transition has not been implemented or
-accepted. Keep the installed baseline until this boundary is resolved; do not
-publish this candidate as an update for Native-first installations.
+Source now prepares missing app-owned routes inside `application-update finish`,
+after recording the verified replacement and before restoring any service.
+It reuses the existing configure implementation: slot 1 is prepared, and
+additional managed targets are prepared only when detected and already saved
+as Work connections. Disconnected targets are not enabled, existing routes and
+preferences are preserved, and an unavailable optional provider does not block
+the independent default profile. Provider registration and official Desktop
+model selection remain explicit user actions.
 
-Required transition order, once that prerequisite is supported:
+The Native-first replacement regression starts with an empty route list,
+verifies preparation before service readiness, and interrupts/resumes restoration
+without changing route credentials or user settings. This is isolated acceptance,
+not a real Desktop/account migration. Build 9 predates this fix; do not publish
+that artifact as a direct update for Native-first installations. A newly built,
+signed candidate and actual transition acceptance remain required.
+
+Required transition order:
 
 1. Finish or explicitly cancel active Work/Native tasks; use the existing
    controls to disconnect affected profiles. Preserve the installed signed
@@ -175,13 +181,11 @@ Required transition order, once that prerequisite is supported:
    owner-controlled removal, followed by a new signed install and dry-run.
    Do not invoke macOS `upgrade`, restore an old legacy updater or treat the
    synthetic build-7 label as a release number.
-3. Prepare the approved per-profile routes **before service restoration**,
-   preserving `multiProfile` and distinct private ports and capabilities.
-   The existing `configure --enable-app-owned-desktop [--slot N]` logic is the
-   configuration boundary to reuse, not a command an operator can race against
-   Sparkle's relaunch. An unconverted profile must remain disconnected; do not
-   recreate the removed Native engine or reuse another profile's credentials.
-4. Only after route configuration, restore services and reconnect
+3. Let update completion prepare the routes **before service restoration**,
+   preserving `multiProfile`, connection preferences and distinct private ports
+   and capabilities. No postinstall command should race Sparkle's relaunch.
+   Do not recreate the removed Native engine or reuse another profile's credentials.
+4. After route configuration, restore services and reconnect
    the approved slot 1 and require account-bound Web discovery
    and its Native+Web model catalog to reach **Ready**. Review
    `desktop-provider register --dry-run` and explicitly apply registration

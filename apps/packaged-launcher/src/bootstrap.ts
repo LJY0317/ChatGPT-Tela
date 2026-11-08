@@ -1,10 +1,10 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
-import { parseProductConfig, readProductConfig, writeProductConfig } from "@chatgpt-tela/product-config";
+import { parseProductConfig, readProductConfig, writeProductConfig, type ProductConfig } from "@chatgpt-tela/product-config";
 import {
   acquireProductActivity, prepareOwnedDirectory, productActivityPath, releaseProductActivity,
-  type ProductPathOptions,
+  type OwnershipManifest, type ProductPaths, type ProductPathOptions,
 } from "@chatgpt-tela/product-lifecycle";
 import { readServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
@@ -52,6 +52,66 @@ function configurationExists(path: string): boolean {
   }
 }
 
+/** Shared installed configuration boundary; callers prove the payload/transition first. */
+export async function prepareProductConfiguration(input: {
+  readonly config: ProductConfig;
+  readonly paths: ProductPaths;
+  readonly ownership: OwnershipManifest;
+  readonly enableAppOwnedSlot?: number;
+  readonly multiProfileTargetAdapter?: Pick<CodexNativeTargetAdapter, "resolve">;
+}) {
+  const { config, paths, ownership } = input;
+  const configPath = join(paths.configRoot, "product-v1.json");
+  const enableAppOwned = input.enableAppOwnedSlot !== undefined;
+  const selectedSlot = input.enableAppOwnedSlot ?? 1;
+  const existingConfig = configurationExists(configPath) ? readProductConfig(configPath) : undefined;
+  const existingAppOwnedResponses = config.appOwnedResponses === undefined
+    ? existingConfig?.appOwnedResponses : undefined;
+  const effectiveMultiProfile = config.multiProfile ?? existingConfig?.multiProfile;
+  if (enableAppOwned && selectedSlot > 1) {
+    if (!effectiveMultiProfile) throw new Error("additional app-owned profile requires the optional Multi-Profile adapter");
+    const adapter = input.multiProfileTargetAdapter ?? new MultiProfileNativeTargetAdapter(effectiveMultiProfile);
+    const found = await adapter.resolve(selectedSlot);
+    if (found.target.slot !== selectedSlot || found.target.adapterKind !== "multi-profile" || !found.target.managed) {
+      throw new Error(`profile slot ${selectedSlot} is not a detected managed Multi-Profile target`);
+    }
+  }
+  const prepared = await prepareOwnedDirectory({ manifestPath: paths.installManifest,
+    installId: ownership.installId, productVersion: ownership.productVersion,
+    resource: { kind: "directory", id: "product-config", owner: "product", path: paths.configRoot, dataClass: "config" } });
+  if (prepared.state === "external-existing") throw new Error("existing configuration directory is not owned by this Tela install; it was preserved");
+  // Reserve persistent/runtime directories before the first packaged service writes into them.
+  // Existing unmarked directories stay external; this never adopts old user data.
+  const directories = [
+    { id: "product-cache", owner: "product" as const, path: paths.cacheRoot, dataClass: "cache" as const },
+    { id: "product-logs", owner: "product" as const, path: paths.logsRoot, dataClass: "logs" as const },
+    ...(["gateway", "chat", "codex"] as const).flatMap(service => [
+      { id: `${service}-state`, owner: service, path: paths.serviceState(service), dataClass: "state" as const },
+      { id: `${service}-runtime`, owner: service, path: paths.serviceRuntime(service), dataClass: "runtime" as const },
+    ]),
+    ...(enableAppOwned || config.appOwnedResponses !== undefined || existingAppOwnedResponses !== undefined
+      ? [{ id: "app-owned-desktop-model-catalog", owner: "product" as const,
+      path: join(paths.stateRoot, "install", "desktop-model-catalog"), dataClass: "config" as const }] : []),
+  ];
+  for (const directory of directories) await prepareOwnedDirectory({ manifestPath: paths.installManifest,
+    installId: ownership.installId, productVersion: ownership.productVersion, resource: { kind: "directory", ...directory } });
+  const configuredResponses = config.appOwnedResponses ?? existingAppOwnedResponses;
+  const appOwnedResponses = enableAppOwned && !configuredResponses?.some(route => route.slot === selectedSlot)
+    ? [...(configuredResponses ?? []), { slot: selectedSlot,
+      port: (() => {
+        const used = new Set([config.exposure.localPort, ...(configuredResponses ?? []).map(route => route.port)]);
+        let candidate = 18744;
+        while (used.has(candidate)) candidate++;
+        return candidate;
+      })(), capability: randomBytes(32).toString("base64url") }]
+    : configuredResponses;
+  const preserved = config.multiProfile || !existingConfig?.multiProfile
+    ? config : { ...config, multiProfile: existingConfig.multiProfile };
+  writeProductConfig(appOwnedResponses ? { ...preserved, appOwnedResponses } : preserved, configPath);
+  return { configured: true, publicMcpAbi: config.publicMcpAbi, exposure: config.exposure.kind,
+    appOwnedDesktop: Boolean(appOwnedResponses?.some(route => route.slot === selectedSlot)) };
+}
+
 /** Bootstrap uses the installed receipt and existing setup implementation, never a source checkout. */
 export async function runPackagedBootstrapCommand(args: readonly string[], options: PackagedBootstrapOptions) {
   const command = args[0];
@@ -92,52 +152,9 @@ export async function runPackagedBootstrapCommand(args: readonly string[], optio
     const { paths, ownership } = verifyInstalledPackage(options);
     const configPath = join(paths.configRoot, "product-v1.json");
     if (commandArgs.includes("--if-missing") && configurationExists(configPath)) throw new Error("configuration already exists; first-use setup preserved it");
-    const existingConfig = configurationExists(configPath) ? readProductConfig(configPath) : undefined;
-    const existingAppOwnedResponses = config.appOwnedResponses === undefined
-      ? existingConfig?.appOwnedResponses : undefined;
-    const effectiveMultiProfile = config.multiProfile ?? existingConfig?.multiProfile;
-    if (enableAppOwned && selectedSlot > 1) {
-      if (!effectiveMultiProfile) throw new Error("additional app-owned profile requires the optional Multi-Profile adapter");
-      const adapter = options.multiProfileTargetAdapter ?? new MultiProfileNativeTargetAdapter(effectiveMultiProfile);
-      const found = await adapter.resolve(selectedSlot);
-      if (found.target.slot !== selectedSlot || found.target.adapterKind !== "multi-profile" || !found.target.managed) {
-        throw new Error(`profile slot ${selectedSlot} is not a detected managed Multi-Profile target`);
-      }
-    }
-    const prepared = await prepareOwnedDirectory({ manifestPath: paths.installManifest,
-      installId: ownership.installId, productVersion: ownership.productVersion,
-      resource: { kind: "directory", id: "product-config", owner: "product", path: paths.configRoot, dataClass: "config" } });
-    if (prepared.state === "external-existing") throw new Error("existing configuration directory is not owned by this Tela install; it was preserved");
-    // Reserve persistent/runtime directories before the first packaged service writes into them.
-    // Existing unmarked directories stay external; this never adopts old user data.
-    const directories = [
-      { id: "product-cache", owner: "product" as const, path: paths.cacheRoot, dataClass: "cache" as const },
-      { id: "product-logs", owner: "product" as const, path: paths.logsRoot, dataClass: "logs" as const },
-      ...(["gateway", "chat", "codex"] as const).flatMap(service => [
-        { id: `${service}-state`, owner: service, path: paths.serviceState(service), dataClass: "state" as const },
-        { id: `${service}-runtime`, owner: service, path: paths.serviceRuntime(service), dataClass: "runtime" as const },
-      ]),
-      ...(enableAppOwned || config.appOwnedResponses !== undefined || existingAppOwnedResponses !== undefined
-        ? [{ id: "app-owned-desktop-model-catalog", owner: "product" as const,
-        path: join(paths.stateRoot, "install", "desktop-model-catalog"), dataClass: "config" as const }] : []),
-    ];
-    for (const directory of directories) await prepareOwnedDirectory({ manifestPath: paths.installManifest,
-      installId: ownership.installId, productVersion: ownership.productVersion, resource: { kind: "directory", ...directory } });
-    const configuredResponses = config.appOwnedResponses ?? existingAppOwnedResponses;
-    const appOwnedResponses = enableAppOwned && !configuredResponses?.some(route => route.slot === selectedSlot)
-      ? [...(configuredResponses ?? []), { slot: selectedSlot,
-        port: (() => {
-          const used = new Set([config.exposure.localPort, ...(configuredResponses ?? []).map(route => route.port)]);
-          let candidate = 18744;
-          while (used.has(candidate)) candidate++;
-          return candidate;
-        })(), capability: randomBytes(32).toString("base64url") }]
-      : configuredResponses;
-    const preserved = config.multiProfile || !existingConfig?.multiProfile
-      ? config : { ...config, multiProfile: existingConfig.multiProfile };
-    writeProductConfig(appOwnedResponses ? { ...preserved, appOwnedResponses } : preserved, configPath);
-    return { configured: true, publicMcpAbi: config.publicMcpAbi, exposure: config.exposure.kind,
-      appOwnedDesktop: Boolean(appOwnedResponses?.some(route => route.slot === selectedSlot)) };
+    return prepareProductConfiguration({ config, paths, ownership,
+      ...(enableAppOwned ? { enableAppOwnedSlot: selectedSlot } : {}),
+      ...(options.multiProfileTargetAdapter ? { multiProfileTargetAdapter: options.multiProfileTargetAdapter } : {}) });
   }
   if (command !== "setup" || !(args.length === 1 || (args.length === 3 && args[1] === "--slot"))) {
     throw new Error("usage: setup [--slot <profile>]");

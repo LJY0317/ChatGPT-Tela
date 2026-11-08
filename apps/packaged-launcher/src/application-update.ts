@@ -1,17 +1,20 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   assertNoActivePackagedTransition, createPackagedInstallBlueprint, FilesystemOwnershipObserver,
   macApplicationUpdatePath, mutateOwnershipManifest, packagedInstallSpecFromPayload, packagedPayloadFingerprint,
   PackagedPlatformServiceController, PackagedServiceShutdownNotStartedError, readMacApplicationUpdate,
-  readOwnershipManifest, recordInstalledApplicationPayload, resolveProductPaths, ServiceRegistrationInstaller,
+  readOwnershipManifest, readPackagedProductManifest, recordInstalledApplicationPayload, resolveProductPaths, ServiceRegistrationInstaller,
   withPackagedTransitionOwner, type MacApplicationUpdate, type TelaServiceId,
 } from "@chatgpt-tela/product-lifecycle";
 import { interruptOwnedWork, ownedServiceShutdown } from "./service-shutdown";
 import type { PackagedLifecycleOptions } from "./lifecycle";
 import { verifyInstalledPackage } from "./runtime";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { readProductConfig, readProductPreferences, resolveProductPreferencesPath } from "@chatgpt-tela/product-config";
+import { MultiProfileNativeTargetAdapter, optionalNativeTargetProfiles, type CodexNativeTargetAdapter } from "../../../packages/codex-service/src/native-target";
+import { prepareProductConfiguration } from "./bootstrap";
 
 const stopOrder: readonly TelaServiceId[] = ["gateway", "codex", "chat"];
 const startOrder: readonly TelaServiceId[] = ["chat", "codex", "gateway"];
@@ -23,6 +26,7 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
   readBuild?: (path: string) => string;
   waitForShutdownService?: (service: TelaServiceId, signal?: AbortSignal) => Promise<void>;
   waitSignal?: AbortSignal;
+  multiProfileTargetAdapter?: Pick<CodexNativeTargetAdapter, "profiles" | "resolve">;
 }) {
   const options = input.options ?? {}, paths = resolveProductPaths(options);
   const step = async <T>(phase: string, run: () => T | Promise<T>, service?: TelaServiceId): Promise<T> => {
@@ -111,8 +115,30 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
         || ![state.sourceVersion, state.resumeVersion].includes(current.productVersion)) throw Error("application update ledger changed");
       state = save({ ...state, phase: "resuming", resumeVersion: spec.productVersion, resumeFingerprint: fingerprint });
       await step("payload_record", () => recordInstalledApplicationPayload(blueprint.payload.resource, current, spec.productVersion, fingerprint));
-      const manifest = await step("ownership_record", () => mutateOwnershipManifest({ path: paths.installManifest, installId: current.installId,
+      let manifest = await step("ownership_record", () => mutateOwnershipManifest({ path: paths.installManifest, installId: current.installId,
         productVersion: spec.productVersion, mutate(value) { return { ...value, productVersion: spec.productVersion, updatedAt: new Date().toISOString() }; } }));
+      // Prepare the engine-free routes inside the existing transition, before
+      // any service can consume the old Native-first configuration. Registration
+      // and official Desktop model selection remain separate user actions.
+      const configPath = join(paths.configRoot, "product-v1.json");
+      if (!readPackagedProductManifest(root).nativeEngine && existsSync(configPath)) {
+        await step("configuration_prepare", async () => {
+          const config = readProductConfig(configPath);
+          const identities = readProductPreferences(resolveProductPreferencesPath(options)).workProfileConnections ?? [];
+          const adapter = config.multiProfile && identities.some(id => id !== "default")
+            ? input.multiProfileTargetAdapter ?? new MultiProfileNativeTargetAdapter(config.multiProfile) : undefined;
+          const slots = [1, ...(await optionalNativeTargetProfiles(adapter))
+            .filter(({ target }) => target.slot > 1 && target.managed && identities.includes(target.id))
+            .map(({ target }) => target.slot)];
+          for (const slot of slots) {
+            const currentConfig = readProductConfig(configPath);
+            if (currentConfig.appOwnedResponses?.some(route => route.slot === slot)) continue;
+            await prepareProductConfiguration({ config: currentConfig, paths, ownership: manifest,
+              enableAppOwnedSlot: slot, ...(adapter ? { multiProfileTargetAdapter: adapter } : {}) });
+          }
+          manifest = readOwnershipManifest(paths.installManifest)!;
+        });
+      }
       // Unknown stop settlement never authorizes replacing a service owner. Restore only acknowledged peers.
       const admitted = state.pendingStop ? state.stoppedServices : startOrder;
       for (const service of admitted) {

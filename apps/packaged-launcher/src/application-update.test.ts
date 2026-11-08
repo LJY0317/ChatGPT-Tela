@@ -12,8 +12,9 @@ import {
 import { LaunchdUpgradeRunner } from "../../../tests/support/launchd-upgrade-runner";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { runApplicationUpdate } from "./application-update";
+import type { CodexNativeTargetAdapter } from "../../../packages/codex-service/src/native-target";
 import { verifyInstalledPackage } from "./runtime";
-import { writeProductConfig } from "@chatgpt-tela/product-config";
+import { readProductConfig, writeProductConfig, writeProductPreferences, resolveProductPreferencesPath } from "@chatgpt-tela/product-config";
 
 // Synthetic launchd tests need a synthetic uid where the host has no POSIX uid.
 const needsFixtureUid = typeof process.getuid !== "function";
@@ -163,6 +164,75 @@ test("Sparkle source rollback and engine-free replacement preserve app-owned pro
     expect(f.runner.jobs.get("com.openai.chatgpt-tela.chat")?.running).toBe(true);
     expect(f.runner.jobs.get("com.openai.chatgpt-tela.gateway")?.running).toBe(true);
     expect(f.runner.jobs.get("com.openai.chatgpt-tela.codex")?.running).toBe(false);
+    expect(existsSync(macApplicationUpdatePath(f.paths))).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test.each(["available", "unavailable"])("Native-first replacement prepares routes before resume and preserves recovery (%s optional provider)", async availability => {
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-native-first-transition-"));
+  try {
+    const f = await fixture(root, true, true);
+    const owner = readOwnershipManifest(f.paths.installManifest)!;
+    await prepareOwnedDirectory({ manifestPath: f.paths.installManifest, installId: owner.installId,
+      productVersion: owner.productVersion, resource: { kind: "directory", id: "product-config",
+        owner: "product", path: f.paths.configRoot, dataClass: "config" } });
+    const launcherCli = join(root, "plura-desktop"); writeFileSync(launcherCli, "fixture");
+    const configPath = join(f.paths.configRoot, "product-v1.json");
+    const config = { version: 1 as const, multiProfile: { launcherCli }, publicMcpAbi: "stable" as const,
+      exposure: { kind: "existing-https" as const, publicUrl: "https://example.invalid/mcp",
+        localPort: 18744, authentication: "none" as const, allowUnauthenticatedPublicEndpoint: true as const },
+      appOwnedResponses: [] };
+    writeProductConfig(config, configPath);
+    const preferencesPath = resolveProductPreferencesPath(f.input.options);
+    writeProductPreferences({ version: 1, approvalAutomation: "off",
+      workProfileConnections: ["default", "managed-second", "removed-target"] }, preferencesPath);
+    const preferences = readFileSync(preferencesPath);
+    const officialConfig = join(f.input.options.home, ".codex", "config.toml");
+    mkdirSync(dirname(officialConfig), { recursive: true });
+    writeFileSync(officialConfig, 'model_provider = "openai"\nmodel = "native-choice"\n');
+    const officialBytes = readFileSync(officialConfig);
+    const target = (slot: number) => ({ target: { slot, id: slot === 2 ? "managed-second" : "unselected-third",
+      adapterKind: "multi-profile" as const, displayName: "Fixture", managed: true, state: "stopped" },
+      session: { targetId: slot === 2 ? "managed-second" : "unselected-third", state: "available" } });
+    const adapter: Pick<CodexNativeTargetAdapter, "profiles" | "resolve"> = {
+      async profiles() { if (availability === "unavailable") throw Error("optional fixture missing"); return [target(2), target(3)]; },
+      async resolve(slot) { return target(slot); },
+    };
+    let refuseReadiness = true;
+    const input = { ...f.input, multiProfileTargetAdapter: adapter, options: { ...f.input.options,
+      async waitUntilReady(service: TelaServiceId) {
+        const routes = readProductConfig(configPath).appOwnedResponses!;
+        expect(routes.map(route => route.slot)).toEqual(availability === "available" ? [1, 2] : [1]);
+        expect(new Set(routes.map(route => route.port)).size).toBe(routes.length);
+        expect(routes.every(route => route.port !== config.exposure.localPort)).toBe(true);
+        expect(new Set(routes.map(route => route.capability)).size).toBe(routes.length);
+        expect(readFileSync(officialConfig)).toEqual(officialBytes);
+        expect(readFileSync(preferencesPath)).toEqual(preferences);
+        if (refuseReadiness) { refuseReadiness = false; throw Error("fixture readiness interruption"); }
+        await f.input.options.waitUntilReady(service);
+      } } };
+    f.runner.jobs.get("com.openai.chatgpt-tela.codex")!.running = true;
+    await runApplicationUpdate("prepare", { ...input, targetBuild: "2" });
+    const beforeReplacement = readFileSync(configPath);
+    // Cancellation must not opt a Native-first source into the new route.
+    await runApplicationUpdate("cancel", f.input);
+    expect(readFileSync(configPath)).toEqual(beforeReplacement);
+    // Readiness is only checked after the replacement in the next transition.
+    refuseReadiness = true;
+    await runApplicationUpdate("prepare", { ...input, targetBuild: "2" });
+    const { nativeEngine: _nativeEngine, ...engineFreeManifest } = f.manifest;
+    writeFileSync(packagedProductManifestPath(f.sourceRoot), JSON.stringify({ ...engineFreeManifest, productVersion: "2.0.0" }));
+    rmSync(join(f.sourceRoot, "Contents/Helpers/native-engine"), { recursive: true });
+    writeFileSync(join(f.sourceRoot, "Contents/Resources/build.txt"), "2");
+    await expect(runApplicationUpdate("finish", input)).rejects.toThrow("fixture readiness interruption");
+    const preparedConfig = readFileSync(configPath);
+    expect(readMacApplicationUpdate(f.paths)?.phase).toBe("resuming");
+    expect(await runApplicationUpdate("finish", input)).toMatchObject({ ready: true, restored: true });
+    expect(readFileSync(configPath)).toEqual(preparedConfig);
+    expect(readProductConfig(configPath).multiProfile).toEqual(config.multiProfile);
+    expect(readFileSync(preferencesPath)).toEqual(preferences);
+    expect(readFileSync(officialConfig)).toEqual(officialBytes);
+    expect(readOwnershipManifest(f.paths.installManifest)?.resources.some(resource => resource.id === "app-owned-desktop-model-catalog")).toBe(true);
     expect(existsSync(macApplicationUpdatePath(f.paths))).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

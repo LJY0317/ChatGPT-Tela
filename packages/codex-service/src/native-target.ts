@@ -184,6 +184,17 @@ export class DefaultDesktopNativeTargetAdapter implements CodexNativeTargetAdapt
   }
 }
 
+/** Optional provider discovery cannot disable the independent default Desktop. */
+export async function optionalNativeTargetProfiles(
+  adapter: Pick<CodexNativeTargetAdapter, "profiles"> | undefined, signal?: AbortSignal,
+) {
+  try { return adapter ? await adapter.profiles(signal) : []; }
+  catch (error) {
+    if (signal?.aborted) throw error;
+    return [];
+  }
+}
+
 export class CompositeNativeTargetAdapter implements CodexNativeTargetAdapter {
   readonly kind = "composite" as const;
   readonly #defaultDesktop: CodexNativeTargetAdapter;
@@ -199,14 +210,7 @@ export class CompositeNativeTargetAdapter implements CodexNativeTargetAdapter {
 
   async profiles(signal?: AbortSignal) {
     const primary = await this.#defaultDesktop.resolve(1, signal);
-    if (!this.#multiProfile) return Object.freeze([primary]);
-    let optionalProfiles: readonly { readonly target: CodexNativeTarget; readonly session: CodexNativeTargetSession }[];
-    try {
-      optionalProfiles = await this.#multiProfile.profiles(signal);
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      return Object.freeze([primary]);
-    }
+    const optionalProfiles = await optionalNativeTargetProfiles(this.#multiProfile, signal);
     const extras = optionalProfiles.filter(item => item.target.slot > 1);
     const slots = new Set<number>([1]);
     for (const item of extras) {
