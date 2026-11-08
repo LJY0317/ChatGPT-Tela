@@ -117,6 +117,45 @@ describe("product lifecycle ownership", () => {
     }
   });
 
+  test("keep-data removal retires only recognized owned upgrade rollback copies", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-recovery-uninstall-"));
+    try {
+      const recovery = join(root, "recovery");
+      const user = join(root, "user-state");
+      let manifest = createOwnershipManifest("0.0.0");
+      manifest = withOwnedResource(manifest, { kind: "directory", id: "upgrade-recovery-artifact",
+        owner: "product", path: recovery, dataClass: "state" });
+      manifest = withOwnedResource(manifest, { kind: "directory", id: "user-state",
+        owner: "chat", path: user, dataClass: "state" });
+      writeOwnershipMarker(recovery, manifest, "upgrade-recovery-artifact");
+      writeOwnershipMarker(user, manifest, "user-state");
+      mkdirSync(join(recovery, "source"));
+      const observer = new FilesystemOwnershipObserver();
+      const plan = await planUninstall({ manifest, observer, removeData: false });
+      expect(plan.steps.map(step => [step.resourceId, step.action])).toEqual([
+        ["upgrade-recovery-artifact", "remove"], ["user-state", "preserve"],
+      ]);
+      writeFileSync(join(recovery, "unexpected-user-file"), "preserve");
+      const changed = await applyUninstallPlan({ manifest, plan, operator: {
+        observe: (resource, current) => observer.observe(resource, current),
+        async remove(resource) { rmSync((resource as { path: string }).path, { recursive: true });
+          return { removed: true, detail: "removed" }; },
+      } });
+      expect(changed.steps[0]?.outcome).toBe("preserved");
+      expect(existsSync(join(recovery, "unexpected-user-file"))).toBe(true);
+      expect(existsSync(user)).toBe(true);
+      rmSync(join(recovery, "unexpected-user-file"));
+      const settled = await applyUninstallPlan({ manifest, plan, operator: {
+        observe: (resource, current) => observer.observe(resource, current),
+        async remove(resource) { if (resource.kind !== "directory") throw Error("unexpected resource");
+          rmSync(resource.path, { recursive: true }); return { removed: true, detail: "removed" }; },
+      } });
+      expect(settled.steps[0]?.outcome).toBe("removed");
+      expect(existsSync(recovery)).toBe(false);
+      expect(existsSync(user)).toBe(true);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("credential data is preserved by default and removable only with --remove-data", async () => {
     let manifest = createOwnershipManifest("0.0.0");
     manifest = withOwnedResource(manifest, {

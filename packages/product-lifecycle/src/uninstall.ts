@@ -1,6 +1,6 @@
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import type { OwnedResource, OwnershipManifest } from "./ownership";
-import { readOwnershipMarker } from "./ownership";
+import { OWNERSHIP_MARKER, readOwnershipMarker } from "./ownership";
 
 export type OwnershipObservation =
   | "missing"
@@ -53,6 +53,10 @@ export interface UninstallApplyResult {
 
 function dataPreserved(resource: OwnedResource, removeData: boolean): boolean {
   if (resource.kind === "credential") return !removeData;
+  // Upgrade rollback copies contain only installed payloads. Once the owned
+  // installation is removed they are no longer recovery state for user work.
+  if (resource.kind === "directory" && resource.owner === "product"
+    && resource.id === "upgrade-recovery-artifact" && resource.dataClass === "state") return false;
   return resource.kind === "directory"
     && !removeData
     && (["config", "state", "browser-profile"] as const).includes(resource.dataClass as never);
@@ -205,6 +209,11 @@ export class FilesystemOwnershipObserver implements UninstallObserver {
     try { marker = readOwnershipMarker(resource); }
     catch { return "unsafe"; }
     if (!marker) return "ownership-drift";
+    if (resource.owner === "product" && resource.id === "upgrade-recovery-artifact" && resource.dataClass === "state") {
+      // The rollback store has fixed, product-created slots. Preserve any
+      // additional entries because they cannot be attributed to an upgrade.
+      if (readdirSync(resource.path).some(name => ![OWNERSHIP_MARKER, "source", "previous", "pending"].includes(name))) return "dirty";
+    }
     return marker.installId === manifest.installId && marker.resourceId === resource.id
       ? "owned"
       : "ownership-drift";
