@@ -76,10 +76,9 @@ export async function prepareProductConfiguration(input: {
       throw new Error(`profile slot ${selectedSlot} is not a detected managed Multi-Profile target`);
     }
   }
-  const prepared = await prepareOwnedDirectory({ manifestPath: paths.installManifest,
+  await prepareOwnedDirectory({ manifestPath: paths.installManifest,
     installId: ownership.installId, productVersion: ownership.productVersion,
     resource: { kind: "directory", id: "product-config", owner: "product", path: paths.configRoot, dataClass: "config" } });
-  if (prepared.state === "external-existing") throw new Error("existing configuration directory is not owned by this Tela install; it was preserved");
   // Reserve persistent/runtime directories before the first packaged service writes into them.
   // Existing unmarked directories stay external; this never adopts old user data.
   const directories = [

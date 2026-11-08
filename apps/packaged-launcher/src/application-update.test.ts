@@ -173,9 +173,15 @@ test.each(["available", "unavailable"])("Native-first replacement prepares route
   try {
     const f = await fixture(root, true, true);
     const owner = readOwnershipManifest(f.paths.installManifest)!;
-    await prepareOwnedDirectory({ manifestPath: f.paths.installManifest, installId: owner.installId,
-      productVersion: owner.productVersion, resource: { kind: "directory", id: "product-config",
-        owner: "product", path: f.paths.configRoot, dataClass: "config" } });
+    if (availability === "unavailable") {
+      await prepareOwnedDirectory({ manifestPath: f.paths.installManifest, installId: owner.installId,
+        productVersion: owner.productVersion, resource: { kind: "directory", id: "product-config",
+          owner: "product", path: f.paths.configRoot, dataClass: "config" } });
+    } else {
+      // Existing user-managed settings are writable, but never adopted for removal.
+      mkdirSync(f.paths.configRoot, { recursive: true });
+      writeFileSync(join(f.paths.configRoot, "user-notes.txt"), "preserve user data");
+    }
     const launcherCli = join(root, "plura-desktop"); writeFileSync(launcherCli, "fixture");
     const configPath = join(f.paths.configRoot, "product-v1.json");
     const config = { version: 1 as const, multiProfile: { launcherCli }, publicMcpAbi: "stable" as const,
@@ -229,6 +235,10 @@ test.each(["available", "unavailable"])("Native-first replacement prepares route
     expect(readMacApplicationUpdate(f.paths)?.phase).toBe("resuming");
     expect(await runApplicationUpdate("finish", input)).toMatchObject({ ready: true, restored: true });
     expect(readFileSync(configPath)).toEqual(preparedConfig);
+    if (availability === "available") {
+      expect(readFileSync(join(f.paths.configRoot, "user-notes.txt"), "utf8")).toBe("preserve user data");
+      expect(readOwnershipManifest(f.paths.installManifest)?.resources.some(resource => resource.id === "product-config")).toBe(false);
+    }
     expect(readProductConfig(configPath).multiProfile).toEqual(config.multiProfile);
     expect(readFileSync(preferencesPath)).toEqual(preferences);
     expect(readFileSync(officialConfig)).toEqual(officialBytes);
