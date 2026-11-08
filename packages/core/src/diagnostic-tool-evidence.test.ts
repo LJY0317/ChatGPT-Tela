@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { diagnosticToolContract, inspectMcpSessionCalls } from "./diagnostic-tool-evidence";
 import { traceDiagnosticToolCall } from "./diagnostic-trace";
-import { structuralDiagnosticEvent } from "./diagnostic-store";
+import { structuralDiagnosticEvent, type StructuralDiagnosticEvent } from "./diagnostic-store";
 
 test("MCP session evidence keeps two conversations separate and rejects reused RPC identities", () => {
   const s1="a".repeat(24), s2="b".repeat(24), c1="c".repeat(24), c2="d".repeat(24), rpc="e".repeat(24);
@@ -75,7 +75,7 @@ test("MCP Chat calls join one parent request to the capability result and HTTP c
   const ambiguous = [...rows, row("chatgpt_tela_mcp", "mcp_rpc_received", { scope_fingerprint: scope,
     connection_fingerprint: connection, rpc_fingerprint: rpc, request_fingerprint: parent,
     method_class: "tools_call", kind: "chat_call" })];
-  expect(inspectMcpSessionCalls(ambiguous)[0]?.chatHttp.correlation).toBe("parent_request_ambiguous");
+  expect(inspectMcpSessionCalls(ambiguous)[0]?.chatHttp?.correlation).toBe("parent_request_ambiguous");
   expect(JSON.stringify(inspectMcpSessionCalls(rows))).not.toMatch(/read_many|PRIVATE|arguments/);
 });
 

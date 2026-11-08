@@ -890,7 +890,7 @@ test("app-owned catalog retires prior Web rows before a failed account-bound dis
     const nativeCatalog = { object: "list", models: [{ slug: "native-current", visibility: "list",
       supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] };
     const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
-      responses = await startLocalResponsesServer(options.responses);
+      responses = await startLocalResponsesServer(options.responses!);
       return {
         responses,
         suppliedToolBridge: {} as any,

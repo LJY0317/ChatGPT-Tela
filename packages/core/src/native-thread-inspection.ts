@@ -692,7 +692,7 @@ export function inspectNativeThreadHistoricalEvidence(input: {
     } : null,
     // MCP session fingerprints are joined to their own parent/child HTTP request
     // evidence. They are intentionally not attributed to this Native turn.
-    mcpCalls: Object.freeze(inspectMcpSessionCalls(allEvents).slice(-MAX_TIMELINE)),
+    mcpCalls: Object.freeze(inspectMcpSessionCalls(logs.events).slice(-MAX_TIMELINE)),
     deliveryBoundary: Object.freeze({
       browserFinalObserved: events.some(event => event.stage === "web_turn_final_observed" || event.stage === "web_turn_completed"),
       nativeFinalItemObserved: events.some(event => event.stage === "native_public_item_observed"
