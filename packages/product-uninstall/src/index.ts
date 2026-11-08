@@ -295,6 +295,11 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
         && inside(resource.path, coordinatorResource(paths).path)) return "dirty" as const;
       if (resource.kind === "directory" && resource.id === "product-binaries" && resource.dataClass === "binary") {
         const payload = observeInstalledPackagedPayload(resource, currentManifest);
+        // Finder can remove the .app independently of its external, install-owned
+        // receipt. Retire that exact metadata root after proving its owner; do
+        // not require the already-absent app to supply a payload fingerprint.
+        if (payload.state === "missing" && resource.metadataRoot && !existsSync(resource.path)
+          && filesystemObserver.observe(resource, currentManifest) === "owned") return "owned" as const;
         return payload.state === "owned" && payload.receipt.productVersion === currentManifest.productVersion
           ? "owned" as const : payload.state === "missing" ? "ownership-drift" as const : payload.state;
       }

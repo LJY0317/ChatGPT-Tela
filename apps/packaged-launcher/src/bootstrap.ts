@@ -102,8 +102,16 @@ export async function runPackagedBootstrapCommand(args: readonly string[], optio
     ];
     for (const directory of directories) await prepareOwnedDirectory({ manifestPath: paths.installManifest,
       installId: ownership.installId, productVersion: ownership.productVersion, resource: { kind: "directory", ...directory } });
-    const appOwnedResponses = config.appOwnedResponses ?? existingAppOwnedResponses
-      ?? (enableAppOwned ? [{ slot: 1, port: 18744, capability: randomBytes(32).toString("base64url") }] : undefined);
+    const configuredResponses = config.appOwnedResponses ?? existingAppOwnedResponses;
+    const appOwnedResponses = enableAppOwned && !configuredResponses?.some(route => route.slot === 1)
+      ? [...(configuredResponses ?? []), { slot: 1,
+        port: (() => {
+          const used = new Set([config.exposure.localPort, ...(configuredResponses ?? []).map(route => route.port)]);
+          let candidate = 18744;
+          while (used.has(candidate)) candidate++;
+          return candidate;
+        })(), capability: randomBytes(32).toString("base64url") }]
+      : configuredResponses;
     const preserved = config.multiProfile || !existingConfig?.multiProfile
       ? config : { ...config, multiProfile: existingConfig.multiProfile };
     writeProductConfig(appOwnedResponses ? { ...preserved, appOwnedResponses } : preserved, configPath);

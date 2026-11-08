@@ -245,6 +245,23 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     writeFileSync(configFile, JSON.stringify({ ...(JSON.parse(configurationInput) as object), appOwnedResponses: [] }));
     await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
     expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).appOwnedResponses).toEqual([]);
+    // Explicit opt-in after an already configured empty route list activates the
+    // default Desktop without replacing independently configured managed slots.
+    writeFileSync(configFile, JSON.stringify({ ...(JSON.parse(configurationInput) as object),
+      multiProfile: optionalAdapter,
+      appOwnedResponses: [{ slot: 2, port: 18744, capability: "b".repeat(48) }] }));
+    await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
+    await runPackagedBootstrapCommand(["configure", "--file", configFile, "--enable-app-owned-desktop"], bootstrap);
+    const both = JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8"));
+    expect(both.appOwnedResponses).toHaveLength(2);
+    expect(both.appOwnedResponses[0]).toEqual({ slot: 2, port: 18744, capability: "b".repeat(48) });
+    expect(both.appOwnedResponses[1]).toMatchObject({ slot: 1, port: 18745 });
+    expect(both.appOwnedResponses[1].capability).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    writeFileSync(configFile, JSON.stringify({ ...(JSON.parse(configurationInput) as object), appOwnedResponses: [] }));
+    await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
+    await runPackagedBootstrapCommand(["configure", "--file", configFile, "--enable-app-owned-desktop"], bootstrap);
+    expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).appOwnedResponses)
+      .toMatchObject([{ slot: 1, port: 18744 }]);
     writeFileSync(configFile, JSON.stringify({ ...(JSON.parse(configurationInput) as object), appOwnedResponses }));
     await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
     writeFileSync(join(paths.logsRoot, "fixture.log"), "synthetic diagnostic\n");
