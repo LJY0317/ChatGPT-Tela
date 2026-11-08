@@ -150,7 +150,17 @@ Neither route has been exercised against the live installed baseline. Build 7
 has a synthetic version, ad-hoc signature and test feed, so it is not an
 approved public Sparkle update or an accepted production installer.
 
-For a supervised transition after release acceptance:
+The current Native-first installation is **not ready for a direct engine-free
+Sparkle update**. `application-update finish` automatically resumes services
+that were running before replacement; it does not pause for an operator to
+run `configure`. The isolated replacement test preconfigures both app-owned
+routes before replacement, so it does not validate migration from empty routes.
+The approved routes must be prepared through the owning lifecycle before its
+first service resume. That integrated transition has not been implemented or
+accepted. Keep the installed baseline until this boundary is resolved; do not
+publish this candidate as an update for Native-first installations.
+
+Required transition order, once that prerequisite is supported:
 
 1. Finish or explicitly cancel active Work/Native tasks; use the existing
    controls to disconnect affected profiles. Preserve the installed signed
@@ -165,18 +175,13 @@ For a supervised transition after release acceptance:
    owner-controlled removal, followed by a new signed install and dry-run.
    Do not invoke macOS `upgrade`, restore an old legacy updater or treat the
    synthetic build-7 label as a release number.
-3. **Do not resume the existing empty-route Native-first services merely
-   because the engine-free application bytes were replaced.** Obtain the user's
-   separate per-profile conversion approval and reviewed settings during the
-   supervised transition. Before reconnecting Work or resuming those profiles,
-   run the **newly installed** launcher's
-   `configure --file <reviewed-product-config.json> --enable-app-owned-desktop`.
-   Preserve `multiProfile`; this prepares slot 1 only. For a detected managed
-   Plura target, separately run the same command with `--slot 2`. The launcher
-   prepares a distinct private port and capability. If the second target cannot
-   be proven, leave it disconnected and defer its conversion; do not silently
-   replace it with an unmanaged Native engine or reuse slot-1 credentials.
-4. Only after explicit route configuration, run `services start`, reconnect
+3. Prepare the approved per-profile routes **before service restoration**,
+   preserving `multiProfile` and distinct private ports and capabilities.
+   The existing `configure --enable-app-owned-desktop [--slot N]` logic is the
+   configuration boundary to reuse, not a command an operator can race against
+   Sparkle's relaunch. An unconverted profile must remain disconnected; do not
+   recreate the removed Native engine or reuse another profile's credentials.
+4. Only after route configuration, restore services and reconnect
    the approved slot 1 and require account-bound Web discovery
    and its Native+Web model catalog to reach **Ready**. Review
    `desktop-provider register --dry-run` and explicitly apply registration
