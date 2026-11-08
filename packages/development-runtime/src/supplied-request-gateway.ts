@@ -76,6 +76,7 @@ export function createSuppliedRequestGateway(input: {
   readonly toolBridge: TurnBridgeBackend;
   shutdownReadiness(): "ready" | "blocked";
   prepareShutdown(): void;
+  resetWebAccount(): Promise<void>;
   ownsCapability(capability: string): boolean;
   browserRetention(surfaceId?: string): ReturnType<RetainedBrowserEpochRegistry["retention"]>;
   close(): Promise<void>;
@@ -120,6 +121,12 @@ export function createSuppliedRequestGateway(input: {
   return {
     toolBridge,
     shutdownReadiness,
+    async resetWebAccount() {
+      if (shutdownReadiness() !== "ready") throw Error("Finish active Web work before changing the account");
+      await epochs.retireAll();
+      operations.clear();
+      superseded.clear();
+    },
     prepareShutdown() {
       if (shutdownReadiness() !== "ready") throw Error("Finish active Web work or receive its answer before shutdown");
       controller.abort(new Error("Web provider admission closed"));

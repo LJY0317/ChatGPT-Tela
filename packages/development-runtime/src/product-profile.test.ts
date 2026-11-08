@@ -18,7 +18,7 @@ import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } 
 import { appOwnedDesktopCatalogPath, publishAppOwnedDesktopCatalog } from "./app-owned-desktop-catalog";
 import { readDefaultDesktopNativeCatalog, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
-import { startProfileBridgePreviewServer } from "../../../apps/profile-runtime/src/bridge-preview-server";
+import { startAppOwnedProfileBridge, startProfileBridgePreviewServer } from "../../../apps/profile-runtime/src/bridge-preview-server";
 import { startDevelopmentRuntime } from "./runtime";
 import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
 
@@ -197,7 +197,7 @@ describe("product profile native-target selection", () => {
 });
 
 
-import { bindChatGptTelaAccount } from "./browser-profile";
+import { bindChatGptTelaAccount, readChatGptTelaAccountBinding } from "./browser-profile";
 import { ConnectorProbeState } from "./connector-probe-state";
 import type { ElectronDevelopmentRuntime } from "./electron";
 import type { ChatGptWebPreparationOptions } from "./profile-control";
@@ -911,4 +911,72 @@ test("app-owned catalog retires prior Web rows before a failed account-bound dis
     await responses?.stop();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("app-owned production account controls verify Web, guard work and revalidate the human-selected account", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-app-owned-account-controls-"));
+  const config = loadProductProfileRuntimeConfig(common(root));
+  mkdirSync(config.browserProfile.userDataDir, { recursive: true });
+  bindChatGptTelaAccount(config.browserProfile, "a".repeat(64));
+  const temporary = await startLocalResponsesServer({ requestRouter: async () => new Response(null, { status: 404 }) });
+  const ingress = { port: temporary.port, capability: "s".repeat(48) }; await temporary.stop();
+  let account = "a".repeat(64), busy = false, opens = 0, reveals = 0, closes = 0, failClose = false;
+  let hide: (() => void) | undefined;
+  const family = { key: chatGptWebFamilyKey("Account fixture"), label: "Account fixture", availableEfforts: ["medium"] as const };
+  const browserHost = new ControlledBrowserHost(async () => ({ async navigate() {}, async reveal() {}, async hide() {}, async close() {} }));
+  const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
+    const actual = await startDevelopmentRuntime({ browserHost, mcp: options.mcp,
+      planWebTurn: createNativeRequestDevelopmentWebTurnPlanner(),
+      ...(options.responses ? { responses: options.responses } : {}),
+      ...(options.profileSlot ? { profileSlot: options.profileSlot } : {}),
+      ...(options.completedResults ? { completedResults: options.completedResults } : {}) });
+    return { ...actual, shutdownReadiness: () => busy ? "blocked" : actual.shutdownReadiness!(),
+      async prepareChatGptWebSession(input: any) {
+        input.onProfile?.({ account: { accountFingerprint: account, accountStructure: "personal", containerFingerprint: "b".repeat(64) } });
+        input.onFamilies?.([family]); input.onConnectorStarting?.(); input.onConnectorProven?.(); return { families: [family] };
+      },
+      async discoverChatGptWebModelFamilies() { return [family]; },
+      async probeChatGptAccount() { return { accountFingerprint: account, accountStructure: "personal", containerFingerprint: "b".repeat(64) }; },
+      async probeChatGptAccountDisplay() { return { state: "signed-in", email: "person@example.test" }; },
+      async openProfileSetupSurface() {
+        opens++;
+        return { leaseId: "account-fixture", onUserHide(callback: () => void) { hide = callback; return () => { hide = undefined; }; },
+          async probeChatGptProfile() { return { account: { accountFingerprint: account } }; },
+          async reveal() { reveals++; }, async close() { closes++; if (failClose) { failClose = false; throw Error("fixture close not acknowledged"); } } };
+      },
+    } as unknown as import("./electron").ElectronDevelopmentRuntime;
+  }) as typeof import("./electron").startElectronDevelopmentRuntime;
+  let owned: Awaited<ReturnType<typeof startAppOwnedProductResponsesRuntime>> | undefined;
+  let preview: Awaited<ReturnType<typeof startAppOwnedProfileBridge>> | undefined;
+  const signal = new AbortController();
+  try {
+    owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
+      nativeFetch: async () => Response.json({ models: [] }) });
+    preview = await startAppOwnedProfileBridge(config, owned, signal.signal);
+    const call = (path: string, method = "GET") => fetch(new URL("v1/" + path, preview!.endpoint),
+      { method, headers: { authorization: `Bearer ${config.uiToken}` } });
+    const display = await (await call("account-display")).json();
+    expect(display).toMatchObject({ native: { state: "unavailable" }, web: { state: "signed-in" }, comparison: "unavailable" });
+    expect(await (await call("account-check")).json()).toMatchObject({ nativeSignIn: "unavailable", webBinding: "matching", webSignIn: "signed-in" });
+    busy = true; expect((await call("account-browser", "POST")).status).toBe(409); expect(opens).toBe(0);
+    busy = false;
+    const opened = await Promise.all([call("account-browser", "POST"), call("account-browser", "POST")]);
+    expect(opened.map(response => response.status)).toEqual([204, 204]); expect(opens).toBe(1);
+    expect(reveals).toBeGreaterThan(0); expect(owned.accountManagementActive).toBe(true);
+    expect(await (await call("web-state")).json()).toMatchObject({ accountManagementActive: true });
+    const blocked = await fetch(new URL("responses", owned.responses.baseUrl), { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: chatGptWebModelId(family.key), input: [] }) });
+    expect(blocked.status).toBe(409); expect(owned.shutdownReadiness()).toBe("blocked");
+    account = "c".repeat(64); failClose = true;
+    expect((await call("account-browser-close", "POST")).status).toBe(409);
+    expect(owned.accountManagementActive).toBe(true);
+    expect((await call("account-browser-close", "POST")).status).toBe(204);
+    expect(closes).toBe(2); expect(owned.accountManagementActive).toBe(false);
+    expect(readChatGptTelaAccountBinding(config.browserProfile)?.accountFingerprint).toBe(account);
+    expect(await (await call("web-state")).json()).toMatchObject({ webState: "ready", accountManagementActive: false });
+    expect(owned.shutdownReadiness()).toBe("ready");
+    await owned.openWebAccountBrowser(); hide?.(); await owned.closeWebAccountBrowser();
+    expect(owned.accountManagementActive).toBe(false);
+  } finally { await preview?.close(); await owned?.stop(); rmSync(root, { recursive: true, force: true }); }
 });

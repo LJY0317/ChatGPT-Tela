@@ -1,4 +1,8 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { createAccountCheck } from "./account-check";
+import { createAccountDisplay } from "./account-display";
+import { readChatGptTelaAccountBinding } from "../../../packages/development-runtime/src/browser-profile";
+import type { ProductProfileRuntimeConfig, startAppOwnedProductResponsesRuntime } from "../../../packages/development-runtime/src/product-profile";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { startWebHttpServer, type WebHttpServer } from "@chatgpt-tela/http-host";
 import type { AccountCheck } from "./account-check";
@@ -272,5 +276,38 @@ export async function startProfileBridgePreviewServer(input: {
       closed = true;
       await server.stop();
     },
+  });
+}
+
+/** Account and browser controls belong to the Web runtime, not a Native terminal. */
+export function startAppOwnedProfileBridge(config: ProductProfileRuntimeConfig,
+  owned: Awaited<ReturnType<typeof startAppOwnedProductResponsesRuntime>>, signal: AbortSignal) {
+  const web = owned.runtime;
+  return startProfileBridgePreviewServer({
+    slot: config.slot,
+    bearerToken: config.uiToken,
+    accountCheck: createAccountCheck({ signal,
+      native: async () => undefined, web: signal => web.probeChatGptAccount(signal),
+      binding: () => readChatGptTelaAccountBinding(config.browserProfile)?.accountFingerprint }),
+    accountDisplay: createAccountDisplay({ signal,
+      native: async () => undefined, web: signal => web.probeChatGptAccountDisplay(signal),
+      revision: () => owned.accountRevision }),
+    webState: () => ({ contractVersion: 1, slot: config.slot, webState: owned.webState,
+      webModelIds: owned.webModelIds, accountManagementActive: owned.accountManagementActive }),
+    waitForWeb: async () => { if (owned.webState !== "ready") await owned.reconnectWeb(); },
+    reconnectWeb: () => owned.reconnectWeb(),
+    openAccountBrowser: () => owned.openWebAccountBrowser(),
+    closeAccountBrowser: () => owned.closeWebAccountBrowser(),
+    shutdownReadiness: () => owned.shutdownReadiness(),
+    shutdownProfile: async () => {
+      await owned.stop();
+      return { responsesRouteFingerprint: createHash("sha256").update(owned.responses.baseUrl.href).digest("hex") };
+    },
+    surfaces: () => web.bridgeSurfaces(),
+    onSurfacesChanged: listener => web.onBridgeSurfacesChanged(listener),
+    observe: (id, threadId) => web.observeBridgePreview(id, threadId),
+    reveal: (id, interactive) => web.revealBridgeSurface(id, interactive),
+    probeModelSelection: () => web.probeChatGptWebModelSelection(),
+    probeContextAttachment: signal => web.probeChatGptContextAttachment(signal),
   });
 }

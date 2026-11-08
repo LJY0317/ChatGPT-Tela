@@ -9,7 +9,7 @@ import { readProductConfigIfPresent } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { app } from "electron";
 import { writeSync } from "node:fs";
-import { startProfileBridgePreviewServer, type ProfileBridgePreviewServer } from "./bridge-preview-server";
+import { startAppOwnedProfileBridge, startProfileBridgePreviewServer, type ProfileBridgePreviewServer } from "./bridge-preview-server";
 import { createProfileSupervisorLifecycle } from "./supervision";
 import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import { createAccountCheck } from "./account-check";
@@ -214,22 +214,7 @@ async function mainAppOwned(
         ? { catalogPreparation: { paths: resolveProductPaths(), installId } } : {}),
     });
     const owned = runtime;
-    const web = owned.runtime;
-    preview = await startProfileBridgePreviewServer({
-      slot: config.slot,
-      bearerToken: config.uiToken,
-      shutdownReadiness: () => owned.shutdownReadiness(),
-      shutdownProfile: async () => {
-        await owned.stop();
-        return { responsesRouteFingerprint: createHash("sha256").update(owned.responses.baseUrl.href).digest("hex") };
-      },
-      surfaces: () => web.bridgeSurfaces(),
-      onSurfacesChanged: listener => web.onBridgeSurfacesChanged(listener),
-      observe: (id, threadId) => web.observeBridgePreview(id, threadId),
-      reveal: (id, interactive) => web.revealBridgeSurface(id, interactive),
-      probeModelSelection: () => web.probeChatGptWebModelSelection(),
-      probeContextAttachment: signal => web.probeChatGptContextAttachment(signal),
-    });
+    preview = await startAppOwnedProfileBridge(config, owned, lifecycle.signal);
     lifecycle.signal.throwIfAborted();
     await lifecycle.publishReady({
       stage: "app-owned-profile-ready",

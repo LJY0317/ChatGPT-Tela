@@ -20,7 +20,7 @@ import {
   type DefaultDesktopTargetRuntime,
 } from "@chatgpt-tela/default-desktop-target";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider } from "@chatgpt-tela/chatgpt";
+import { chatGptWebModelId, CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider } from "@chatgpt-tela/chatgpt";
 import {
   CHATGPT_TELA_DISPLAY_NAME,
   startCodexBridgeMcpHttpServer,
@@ -32,6 +32,7 @@ import {
 } from "@chatgpt-tela/setup";
 import {
   assertChatGptTelaAccountBinding,
+  bindChatGptTelaAccount,
   readChatGptTelaAccountBinding,
   resolveChatGptTelaBrowserProfile,
   type ChatGptTelaBrowserProfile,
@@ -127,6 +128,8 @@ export interface ProductProfileRuntime {
  * Tela never owns or quits those Native/Desktop processes, and rebinding the
  * same callback on restart does not replace their existing Plura session.
  */
+type AccountSurface = Awaited<ReturnType<ElectronDevelopmentRuntime["openProfileSetupSurface"]>>;
+
 export async function startAppOwnedProductResponsesRuntime(input: {
   readonly config: ProductProfileRuntimeConfig;
   readonly ingress: { readonly port: number; readonly capability: string };
@@ -145,6 +148,13 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   readonly runtime: ElectronDevelopmentRuntime;
   readonly responses: ElectronDevelopmentRuntime["responses"];
   readonly internalMcp: CodexBridgeMcpHttpServer;
+  readonly webState: "preparing" | "ready" | "failed";
+  readonly webModelIds: readonly string[];
+  readonly accountManagementActive: boolean;
+  readonly accountRevision: number;
+  openWebAccountBrowser(): Promise<void>;
+  closeWebAccountBrowser(): Promise<void>;
+  reconnectWeb(): Promise<void>;
   shutdownReadiness(): "ready" | "blocked";
   stop(): Promise<void>;
 }> {
@@ -162,6 +172,23 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   const identity = productPublicMcpIdentity(config.publicMcpAbi);
   const managed = config.nativeTarget.kind === "multi-profile";
   let completedResults: import("./supplied-request-gateway").SuppliedResultScope | undefined;
+  let webState: "preparing" | "ready" | "failed" = "preparing";
+  let accountRevision = 0;
+  let accountSurface: AccountSurface | undefined;
+  let detachAccount: (() => void) | undefined;
+  let accountOpening: Promise<void> | undefined;
+  let accountClosing: Promise<void> | undefined;
+  let preparation: Promise<void> | undefined;
+  let revalidate!: () => Promise<void>;
+  const accountActive = () => !!(accountOpening || accountSurface || accountClosing);
+  const reconnect = (): Promise<void> => {
+    if (preparation) return preparation;
+    webState = "preparing";
+    completedResults = undefined;
+    preparation = revalidate().then(() => { webState = "ready"; }, error => { webState = "failed"; throw error; })
+      .finally(() => { preparation = undefined; });
+    return preparation;
+  };
   // Runtime and login discovery can begin without a binding. The validated
   // account owns the result journal only after the existing readiness proof.
   const resultScope = () => {
@@ -173,7 +200,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     return completedResults;
   };
   const webAccountCurrent = () => {
-    if (!completedResults) return false;
+    if (!completedResults || accountActive() || webState !== "ready") return false;
     const binding = readChatGptTelaAccountBinding(config.browserProfile);
     return binding?.accountFingerprint === completedResults.accountFingerprint;
   };
@@ -213,7 +240,13 @@ export async function startAppOwnedProductResponsesRuntime(input: {
         handle: (request: Request) => handleModelListOverlayRequest({ request,
           families: () => webAccountCurrent() ? router.cachedWebModelFamilies : [] }),
       } } : {}),
-      requestRouter: request => router.route(request),
+      requestRouter: async request => {
+        const native = await router.route(request);
+        if (native) return native;
+        if (accountActive() || webState !== "ready") return Response.json({ error: {
+          code: "tela_web_not_ready", message: "Finish account management and reconnect Web before continuing." } }, { status: 409 });
+        return undefined;
+      },
     },
     electron: { userDataDir: config.browserProfile.userDataDir },
   });
@@ -228,50 +261,53 @@ export async function startAppOwnedProductResponsesRuntime(input: {
         ? preparation.readNativeCatalog()
         : readDefaultDesktopNativeCatalog({ installation: installation!, ...(input.signal ? { signal: input.signal } : {}) }))
       : undefined;
-    // Retire any Web rows from a previous account before attempting discovery.
-    // If login, quota or model discovery fails, the install-owned registration
-    // artifact remains usable with Native models only.
-    if (preparation && nativeCatalog !== undefined) {
-      await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId,
-        nativeCatalog, webFamilies: [], assertCurrentAccount: () => {} });
-    }
-    const webDiscovery = await prepareProductWebDiscovery({
-      runtime, browserProfile: config.browserProfile, connectorName: identity.connectorName,
-      signal: input.signal ?? new AbortController().signal, stage: () => {},
-    });
-    const binding = assertChatGptTelaAccountBinding(config.browserProfile, webDiscovery.accountFingerprint);
-    const resultStore = new FileNativeVisiblePrefixStageJournal({
-      directory: resolve(config.browserProfile.userDataDir, "native-visible-prefix-executions", binding.accountFingerprint),
-      initializationPath: `${config.browserProfile.accountBindingPath}.native-prefix-${binding.accountFingerprint}`,
-    });
-    completedResults = {
-      profileSlot: config.slot, accountFingerprint: binding.accountFingerprint,
-      store: resultStore,
+    revalidate = async () => {
+      // Retire any Web rows from a previous account before attempting discovery.
+      // If login, quota or model discovery fails, the install-owned registration
+      // artifact remains usable with Native models only.
+      if (preparation && nativeCatalog !== undefined) {
+        await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId,
+          nativeCatalog, webFamilies: [], assertCurrentAccount: () => {} });
+      }
+      const webDiscovery = await prepareProductWebDiscovery({
+        runtime, browserProfile: config.browserProfile, connectorName: identity.connectorName,
+        signal: input.signal ?? new AbortController().signal, stage: () => {},
+      });
+      const binding = assertChatGptTelaAccountBinding(config.browserProfile, webDiscovery.accountFingerprint);
+      const resultStore = new FileNativeVisiblePrefixStageJournal({
+        directory: resolve(config.browserProfile.userDataDir, "native-visible-prefix-executions", binding.accountFingerprint),
+        initializationPath: `${config.browserProfile.accountBindingPath}.native-prefix-${binding.accountFingerprint}`,
+      });
+      completedResults = {
+        profileSlot: config.slot, accountFingerprint: binding.accountFingerprint,
+        store: resultStore,
+      };
+      // Use this same readiness proof as the initial /models projection. A subsequent
+      // router refresh may mask a transient browser error by retaining older rows.
+      const families = webDiscovery.families;
+      startupFamilies = families;
+      // Existing owned readiness also retires old account results: a replaced
+      // binding may never be used again, so its expired bodies and receipts
+      // must not depend on a future host replay.
+      await FileNativeVisiblePrefixStageJournal.pruneProfileResults(config.browserProfile).catch(error => {
+        emitDiagnosticEvent("chatgpt_tela_work", "provider_result_retention_failed", {
+          ...diagnosticFailureFields(error),
+        });
+      });
+      await router.refreshWebModelFamilies(input.signal);
+      if (preparation && nativeCatalog !== undefined) {
+        await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId,
+          nativeCatalog, webFamilies: families,
+          assertCurrentAccount: () => {
+            const current = readChatGptTelaAccountBinding(config.browserProfile);
+            if (!current || current.accountFingerprint !== binding.accountFingerprint) {
+              throw new Error("Desktop model catalog account binding changed during preparation");
+            }
+          },
+        });
+      }
     };
-    // Use this same readiness proof as the initial /models projection. A subsequent
-    // router refresh may mask a transient browser error by retaining older rows.
-    const families = webDiscovery.families;
-    startupFamilies = families;
-    // Existing owned readiness also retires old account results: a replaced
-    // binding may never be used again, so its expired bodies and receipts
-    // must not depend on a future host replay.
-    await FileNativeVisiblePrefixStageJournal.pruneProfileResults(config.browserProfile).catch(error => {
-      emitDiagnosticEvent("chatgpt_tela_work", "provider_result_retention_failed", {
-        ...diagnosticFailureFields(error),
-      });
-    });
-    await router.refreshWebModelFamilies(input.signal);
-    if (preparation && nativeCatalog !== undefined) {
-      await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId,
-        nativeCatalog, webFamilies: families,
-        assertCurrentAccount: () => {
-          const current = readChatGptTelaAccountBinding(config.browserProfile);
-          if (!current || current.accountFingerprint !== binding.accountFingerprint) {
-            throw new Error("Desktop model catalog account binding changed during preparation");
-          }
-        },
-      });
-    }
+    await reconnect();
     input.signal?.throwIfAborted();
     if (!runtime.suppliedToolBridge || !runtime.shutdownReadiness || !runtime.prepareShutdown)
       throw Error("App-owned runtime did not expose its operation lifecycle");
@@ -300,6 +336,45 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     }
     const ownedMcp = internalMcp;
     const owned = runtime;
+    const closeAccount = (): Promise<void> => {
+      if (accountClosing) return accountClosing;
+      if (accountOpening) return accountOpening.then(() => closeAccount());
+      if (!accountSurface) return Promise.resolve();
+      const surface = accountSurface;
+      detachAccount?.(); detachAccount = undefined;
+      accountRevision++;
+      accountClosing = (async () => {
+        try {
+          // Only this explicit human account-management session can replace a binding.
+          const observed = await surface.probeChatGptProfile(input.signal);
+          bindChatGptTelaAccount(config.browserProfile, observed.account.accountFingerprint);
+        } finally {
+          await surface.close();
+          if (accountSurface === surface) accountSurface = undefined;
+        }
+        await reconnect();
+      })().catch(error => { webState = "failed"; throw error; })
+        .finally(() => { accountClosing = undefined; });
+      return accountClosing;
+    };
+    const openAccount = (): Promise<void> => {
+      if (accountClosing) return Promise.reject(Error("Finish account revalidation first"));
+      if (accountOpening) return accountOpening;
+      if (accountSurface) return accountSurface.reveal();
+      if (owned.shutdownReadiness!() !== "ready") return Promise.reject(Error("Finish the current Web task before changing the account"));
+      accountRevision++;
+      accountOpening = (async () => {
+        if (!owned.resetWebAccount) throw Error("Web account management is unavailable");
+        await owned.resetWebAccount();
+        const surface = await owned.openProfileSetupSurface({ reveal: false });
+        accountSurface = surface;
+        detachAccount = surface.onUserHide(() => { void closeAccount().catch(error =>
+          emitDiagnosticEvent("chatgpt_tela_profile_startup", "web_account_browser_settle_failed", diagnosticFailureFields(error))); });
+        try { await surface.reveal(); }
+        catch (error) { detachAccount?.(); detachAccount = undefined; await surface.close(); accountSurface = undefined; throw error; }
+      })().finally(() => { accountOpening = undefined; });
+      return accountOpening;
+    };
     let stopping: Promise<void> | undefined;
     let mcpClosed = false;
     let runtimeClosed = false;
@@ -307,12 +382,26 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       runtime: owned,
       responses: owned.responses,
       internalMcp: ownedMcp,
-      shutdownReadiness: () => owned.shutdownReadiness!(),
+      get webState() { return webState; },
+      get webModelIds() { return webState === "ready" ? router.cachedWebModelFamilies.map(family => chatGptWebModelId(family.key)) : []; },
+      get accountManagementActive() { return accountActive(); },
+      get accountRevision() { return accountRevision; },
+      openWebAccountBrowser: openAccount,
+      closeWebAccountBrowser: closeAccount,
+      reconnectWeb() {
+        return accountActive() || owned.shutdownReadiness!() !== "ready"
+          ? Promise.reject(Error("Finish account management and active Web work first")) : reconnect();
+      },
+      shutdownReadiness: () => accountActive() ? "blocked" : owned.shutdownReadiness!(),
       // Close admission only after exact work is settled, in the same JS turn.
       stop() {
         if (stopping) return stopping;
         owned.prepareShutdown!();
         return stopping = (async () => {
+          await accountOpening?.catch(() => {});
+          detachAccount?.(); detachAccount = undefined;
+          await accountClosing?.catch(() => {});
+          await accountSurface?.close(); accountSurface = undefined;
           const failures = await Promise.allSettled([
             ...(mcpClosed ? [] : [(async () => { await ownedMcp.stop(); mcpClosed = true; })()]),
             ...(runtimeClosed ? [] : [(async () => { await owned.stop(); runtimeClosed = true; })()]),

@@ -109,6 +109,29 @@ test("input-only dispatch joins duplicate observers and reuses settled response 
   expect(f.closed).toBe(true);
 });
 
+test("account reset releases retained context and prevents an earlier account's in-memory replay", async () => {
+  const f = fixture();
+  const server = await startLocalResponsesServer({ gateway: f.gateway });
+  const send = async () => {
+    const response = await fetch(new URL("responses", server.baseUrl), { method: "POST",
+      headers: { authorization: `Bearer ${server.runtimeToken}`, "content-type": "application/json" },
+      body: JSON.stringify(request()) });
+    expect(response.status).toBe(200);
+    await response.text();
+  };
+  try {
+    await send();
+    await send();
+    expect(f.submissions).toHaveLength(1);
+    expect(f.gateway.shutdownReadiness()).toBe("ready");
+    await f.gateway.resetWebAccount();
+    expect(f.released).toEqual(["surface-1"]);
+    await send();
+    expect(f.submissions).toHaveLength(2);
+    expect(f.acquisitions).toBe(2);
+  } finally { await server.stop(); await f.gateway.close(); }
+});
+
 test("durably preserved final releases shutdown and replays after gateway restart without model submission", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-supplied-final-"));
   const accountFingerprint = "a".repeat(64);

@@ -217,6 +217,10 @@ export class RetainedBrowserEpochRegistry {
     await this.#release(taskId, current);
   }
 
+  async retireAll(): Promise<void> {
+    for (const taskId of [...this.#byTask.keys()]) await this.retire(taskId);
+  }
+
   async retire(taskId: string): Promise<void> {
     if (this.#acquiring.has(taskId)) throw new Error("cannot retire a busy retained browser epoch");
     const current = this.#byTask.get(taskId);

@@ -102,6 +102,7 @@ export interface DevelopmentRuntime {
   readonly suppliedToolBridge?: TurnBridgeBackend;
   shutdownReadiness?(): "ready" | "blocked";
   prepareShutdown?(): void;
+  resetWebAccount?(): Promise<void>;
   browserRetention(surfaceId?: string): import("@chatgpt-tela/core").BrowserRetentionObservation;
   readonly responses: LocalResponsesServer;
   readonly mcp: DevelopmentMcpRuntime;
@@ -219,6 +220,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
       suppliedToolBridge: createProfileTurnBridge(new McpTurnBridge(turns), gateway),
       shutdownReadiness: () => gateway.shutdownReadiness(),
       prepareShutdown: () => gateway.prepareShutdown(),
+      resetWebAccount: () => gateway.resetWebAccount(),
       mcp: { kind: "external", abi: webMcpContract, async close() {} },
       browserRetention: surfaceId => gateway.browserRetention(surfaceId),
       stop() {
