@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { webObservationFailureReason, startTurnDiagnosticSummary, diagnosticContext, capturePrivateDiagnosticValue, nativeTextHash, diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, type DiagnosticContext } from "@chatgpt-tela/core";
+
+export const SUPPLIED_FAILURE_DIAGNOSTICS = Symbol.for("chatgpt-tela.supplied-failure-diagnostics");
+export interface SuppliedFailureDiagnostics { readonly context: DiagnosticContext; readonly finish: () => void; }
 import {
   bindNativeTurnRequest,
   extractNativeToolResults,

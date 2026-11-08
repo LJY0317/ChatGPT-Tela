@@ -477,6 +477,7 @@ async function configure(
     version: 1,
     ...(launcher ? { multiProfile: { launcherCli: launcher } }
       : existingConfig?.multiProfile ? { multiProfile: existingConfig.multiProfile } : {}),
+    ...(existingConfig?.appOwnedResponses ? { appOwnedResponses: existingConfig.appOwnedResponses } : {}),
     publicMcpAbi,
     exposure: manageTailscale
       ? {

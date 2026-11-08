@@ -555,6 +555,17 @@ automation, connection details, and maintenance.
 CLI users and other platforms can use `chatgpt-tela configure --file ./product-config.json`, followed by
 `chatgpt-tela services start` and `chatgpt-tela setup [--slot N]`. The minimal configuration remains:
 
+An installed candidate can explicitly opt the default Desktop slot into the Web-owned Responses route
+with `chatgpt-tela configure --file ./product-config.json --enable-app-owned-desktop`. This creates
+the private slot-1 ingress on first use; a later `configure --file` preserves its route unless the
+file explicitly supplies `appOwnedResponses` (including `[]` to clear it). Extra slots require a
+detected optional multi-profile launcher and separate `appOwnedResponses` entries with distinct
+slots, ports and private capabilities. The source CLI preserves configured routes on ordinary
+reconfiguration but does not generate new ones. After changing a route, reconnect the affected
+stopped profile and explicitly select its Desktop provider; an already-running Native-first
+session is not silently converted. This candidate does not bundle an official Native engine, so
+an existing Native-first installation cannot be replaced unchanged.
+
 ```json
 {
   "version": 1,

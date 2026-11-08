@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { NativeResponsesGateway } from "@chatgpt-tela/runtime";
 import { NativeProgressStream } from "./live-progress";
+import { SUPPLIED_FAILURE_DIAGNOSTICS } from "@chatgpt-tela/runtime";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +53,43 @@ test("cancelling a waiting stream settles its reader and removes its active idle
   const pending = reader.read(); await reader.cancel();
   expect((await pending).done).toBe(true); expect(stream.signal.signal.aborted).toBe(true);
   expect((await reader.read()).done).toBe(true);
+});
+
+test("an unread SSE body closes its diagnostic lifecycle when the request aborts", async () => {
+  const rows: any[] = [];
+  const stop = observeDiagnosticEvents(row => rows.push(row));
+  const request = new AbortController();
+  try {
+    const stream = new NativeProgressStream("fixture", 0);
+    stream.progress("queued");
+    stream.finish({ type: "final", answer: "answer", delivery: { capability: "fixture" } } as any, { commit() {} });
+    stream.response(request.signal);
+    request.abort();
+    expect(rows.find(row => row.stage === "public_progress_stream_closed")).toMatchObject({ reason_class: "request_aborted" });
+  } finally { stop?.(); }
+});
+
+test("a supplied provider failure after progress closes the same diagnostic cycle after the failed SSE frame drains", async () => {
+  const rows: any[] = [];
+  const stop = observeDiagnosticEvents(row => rows.push(row));
+  let finished = 0;
+  try {
+    const stream = new NativeProgressStream("fixture", 0);
+    stream.progress("preparing");
+    const error = new Error("private provider detail");
+    Object.defineProperty(error, SUPPLIED_FAILURE_DIAGNOSTICS, { value: {
+      context: { scope_fingerprint: diagnosticFingerprint("scope"), turn_fingerprint: diagnosticFingerprint("turn") },
+      finish: () => { finished++; },
+    } });
+    stream.fail(error);
+    const wire = await stream.response().text();
+    expect(wire).toContain("response.failed");
+    expect(wire).not.toContain("private provider detail");
+    expect(rows.find(row => row.stage === "public_progress_stream_closed")).toMatchObject({
+      reason_class: "drained", failed_response_count: 1, completed_response_count: 0,
+    });
+    expect(finished).toBe(1);
+  } finally { stop?.(); }
 });
 
  test("completion diagnostics distinguish a delivered delta from completed history-bearing frames", async () => {

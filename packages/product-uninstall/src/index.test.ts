@@ -17,6 +17,8 @@ import {
 } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "./index";
 import { editOfficialCodexProviderFile } from "@chatgpt-tela/default-desktop-target";
+import type { MultiProfileControlClient } from "@chatgpt-tela/setup";
+// Managed profile route retirement uses Plura's public target/session reads.
 import { startUninstallCheckpoint, writeUninstallCheckpoint } from "./coordination";
 
 async function binaryFixture(root: string, externalMetadata = false, installId = "install-uninstall-fixture") {
@@ -47,6 +49,52 @@ async function binaryFixture(root: string, externalMetadata = false, installId =
   }));
   return { home, paths, options };
 }
+
+test("managed route uninstall waits for public target retirement", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-route-retirement-"));
+  try {
+    const fixture = await binaryFixture(root);
+    const launcher = join(root, "plura-stub");
+    writeFileSync(launcher, "synthetic");
+    mkdirSync(fixture.paths.configRoot, { recursive: true });
+    writeFileSync(join(fixture.paths.configRoot, "product-v1.json"), JSON.stringify({
+      version: 1, multiProfile: { launcherCli: launcher },
+      publicMcpAbi: "stable",
+      exposure: { kind: "existing-https", publicUrl: "https://example.test/mcp",
+        localPort: 18743, authentication: "none", allowUnauthenticatedPublicEndpoint: true },
+      appOwnedResponses: [{ slot: 2, port: 18744, capability: "b".repeat(48) }],
+    }));
+    let state = "ready";
+    let route: string | undefined = "a".repeat(64);
+    let profileIndex = 2;
+    const observations: string[] = [];
+    const client = {
+      async targets() {
+        observations.push("targets");
+        return [{ managed: true, id: "fixture.target.2", profileIndex }];
+      },
+      async targetSession(id: string) {
+        observations.push("session:" + id);
+        return { targetId: id, state, ...(route ? { responsesRouteFingerprint: route } : {}) };
+      },
+    } as unknown as Pick<MultiProfileControlClient, "targets" | "targetSession">;
+    const options = { ...fixture.options, multiProfileControlClient: client };
+    expect((await runProductUninstall({ ...options, mode: "dry-run" })).managedRouteBlockers)
+      .toEqual([expect.stringContaining("fixture.target.2")]);
+    const blocked = await runProductUninstall({ ...options, mode: "apply" });
+    expect(blocked).toMatchObject({ applied: false, status: "uninstall-blocked", destructiveActions: 0 });
+    expect(existsSync(fixture.paths.binaryRoot)).toBe(true);
+    expect(observations).toEqual(["targets", "session:fixture.target.2", "targets", "session:fixture.target.2"]);
+    route = undefined;
+    expect((await runProductUninstall({ ...options, mode: "dry-run" })).managedRouteBlockers)
+      .toEqual([expect.stringContaining("unproven")]);
+    state = "available";
+    expect((await runProductUninstall({ ...options, mode: "dry-run" })).managedRouteBlockers).toEqual([]);
+    profileIndex = 3;
+    expect((await runProductUninstall({ ...options, mode: "dry-run" })).managedRouteBlockers)
+      .toEqual([expect.stringContaining("cannot be uniquely observed")]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("owned Desktop provider register, re-register and selected uninstall restore in an isolated HOME", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-provider-uninstall-"));

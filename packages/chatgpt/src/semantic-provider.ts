@@ -2229,6 +2229,12 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       }
       signal?.throwIfAborted();
       if (publicProgress && publicProgress.length <= 16384 && tracked.publicProgress !== publicProgress) {
+        // The DOM contains the accumulated public status rows. Forward only newly
+        // appended rows; otherwise each snapshot repeats earlier progress in a
+        // fresh SSE summary. An edited row is still sent verbatim.
+        const previous = tracked.publicProgress;
+        const appended = previous && publicProgress.startsWith(previous + "\n\n")
+          ? publicProgress.slice(previous.length + 2) : publicProgress;
         tracked.publicProgress = publicProgress;
         emitDiagnosticEvent("chatgpt_tela_work", "web_public_progress_ready", {
           progress_characters: publicProgress.length, public_progress_part_count: assistant?.publicProgress?.length ?? 0,
@@ -2236,7 +2242,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         });
         tracked.observeAgain = true;
         return { state: "proven", value: { kind: "progress", providerTurnId: tracked.handle.providerTurnId,
-          summary: publicProgress }, evidence: evidence("public progress from the proven assistant lineage") };
+          summary: appended }, evidence: evidence("public progress from the proven assistant lineage") };
       }
       // Pending authority decisions dominate display completion controls. Never commit a
       // progress message or clear a tool continuation while its approval remains unresolved.

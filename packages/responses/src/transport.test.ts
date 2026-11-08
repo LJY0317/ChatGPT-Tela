@@ -58,6 +58,30 @@ function post(value: unknown): Request {
   });
 }
 
+test("an unread HTTP response closes its observer when the request disconnects", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-unread-response-"));
+  const path = join(root, "events.jsonl"), previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = path;
+  const gateway = new NativeResponsesGateway(source, new ActiveTurnRegistry(), async turn => {
+    turn.channel.markSubmitted(); turn.channel.markAccepted(); turn.channel.complete("private result");
+  });
+  const controller = new AbortController();
+  try {
+    const response = await handleNativeResponsesHttp(new Request("http://127.0.0.1/responses", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body([], false)), signal: controller.signal,
+    }), gateway);
+    expect(response.status).toBe(200);
+    expect(readDiagnosticTail(path).events.filter(row => row.stage === "native_response_body_closed")).toHaveLength(0);
+    controller.abort();
+    const rows = readDiagnosticTail(path).events.filter(row => row.stage === "native_response_body_closed");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ reason_class: "request_aborted", outcome: "final", outcome_committed: false });
+  } finally {
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE; else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    await gateway.close(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("HTTP disconnect aborts its observer while a subsequent request reuses the single Web execution", async () => {
   let release!: () => void, ready!: () => void, launches = 0;
   const gate = new Promise<void>(resolve => { release = resolve; });

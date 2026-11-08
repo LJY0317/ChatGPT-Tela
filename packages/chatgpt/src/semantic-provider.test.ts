@@ -1961,6 +1961,45 @@ describe("ChatGPT semantic provider", () => {
     } finally { await surface.host.close(); }
   });
 
+  test("appended public progress delivers only new rows while a changed row remains visible", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider();
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw Error("fixture submission");
+      const users = driver.current.turns.filter(turn => turn.role === "user");
+      const progress = (revision: string, rows: string[]) => {
+        driver.queued.push({ ...driver.current, revision, turns: [...users, {
+          key: "assistant", role: "assistant" as const, parentUserTurnKey: "user-turn-1",
+          phase: "streaming" as const, publicProgress: rows,
+        }] });
+      };
+      progress("first-row", ["Checking running task"]);
+      expect(await provider.waitForTurnEvent(surface.lease, submitted.value)).toMatchObject({
+        state: "proven", value: { kind: "progress", summary: "Checking running task" },
+      });
+      progress("second-row", ["Checking running task", "Inspecting result"]);
+      expect(await provider.waitForTurnEvent(surface.lease, submitted.value)).toMatchObject({
+        state: "proven", value: { kind: "progress", summary: "Inspecting result" },
+      });
+      progress("edited-row", ["Checking running task", "Inspected result"]);
+      expect(await provider.waitForTurnEvent(surface.lease, submitted.value)).toMatchObject({
+        state: "proven", value: { kind: "progress", summary: "Checking running task\n\nInspected result" },
+      });
+      driver.queued.push({ ...driver.current, revision: "completed", turns: [...users, {
+        key: "assistant", role: "assistant", parentUserTurnKey: "user-turn-1",
+        phase: "complete", text: "done", publicProgress: ["Checking running task", "Inspected result"],
+      }] });
+      expect(await provider.waitForTurnEvent(surface.lease, submitted.value)).toMatchObject({
+        state: "proven", value: { kind: "completed", answer: "done" },
+      });
+    } finally { await surface.host.close(); }
+  });
+
   test("title-only progress is diagnosed once without changing final delivery", async () => {
     const scratch=mkdtempSync(join(tmpdir(),"tela-title-only-"));
     const prior=process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;

@@ -2,6 +2,7 @@ import { coordinatorResource, finalizeUninstall, readUninstallCheckpoint, startU
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { editOfficialCodexProviderFile, officialCodexConfigPath } from "@chatgpt-tela/default-desktop-target";
 import { readProductConfig } from "@chatgpt-tela/product-config";
+import { MultiProfileControlClient } from "@chatgpt-tela/setup";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   hasPendingFileImports,
@@ -58,6 +59,8 @@ export interface ProductUninstallOptions extends ProductPathOptions {
   readonly paths?: ProductPaths;
   readonly executingBinaryPath?: string;
   readonly serviceRegistrationRunner?: ServiceRegistrationCommandRunner;
+  /** Isolated public launcher adapter for tests; production uses the configured launcher. */
+  readonly multiProfileControlClient?: Pick<MultiProfileControlClient, "targets" | "targetSession">;
 }
 
 function serviceDescriptorPath(paths: ProductPaths, service: TelaServiceId): string {
@@ -162,6 +165,52 @@ function restoreOwnedDesktopProvider(input: ProductUninstallOptions, paths: Prod
   }
 }
 
+/**
+ * The canonical Plura supervisor owns managed Desktop sessions. Its public API
+ * can observe a routed session or normally quit the entire target, but cannot
+ * detach a Responses/overlay route from a running Desktop. Uninstall therefore
+ * waits for the user's explicit normal quit; Tela must never quit or adopt an
+ * unproven target merely because its profile index is configured here.
+ */
+async function managedDesktopRouteDependencies(
+  input: ProductUninstallOptions, paths: ProductPaths,
+): Promise<readonly string[]> {
+  const productPath = join(paths.configRoot, "product-v1.json");
+  if (!existsSync(productPath)) return [];
+  let config: ReturnType<typeof readProductConfig>;
+  try { config = readProductConfig(productPath); }
+  catch { return ["Installed product configuration cannot be read to prove managed Desktop route retirement"]; }
+  const managed = config.appOwnedResponses?.filter(row => row.slot > 1) ?? [];
+  if (managed.length === 0) return [];
+  if (!config.multiProfile) return ["Managed Desktop launcher ownership is unavailable"];
+  const client = input.multiProfileControlClient
+    ?? new MultiProfileControlClient({ command: [config.multiProfile.launcherCli] });
+  try {
+    const targets = await client.targets();
+    const blockers: string[] = [];
+    for (const { slot } of managed) {
+      const matching = targets.filter(target => target.managed && target.profileIndex === slot);
+      if (matching.length !== 1) {
+        blockers.push(`Managed Desktop slot ${slot} cannot be uniquely observed for route retirement`);
+        continue;
+      }
+      const session = await client.targetSession(matching[0]!.id);
+      if (session.targetId !== matching[0]!.id) {
+        blockers.push(`Managed Desktop slot ${slot} returned a different target session`);
+      } else if (session.responsesRouteFingerprint || session.modelListOverlayFingerprint) {
+        blockers.push(`Managed Desktop slot ${slot} target ${session.targetId} still has a live route; quit this target normally in Plura before uninstall`);
+      } else if (!["available", "unavailable", "unsupported", "stopped"].includes(session.state)) {
+        // A running target with no route proof is someone else's Desktop.
+        // Its absence of a Tela route cannot be inferred from arbitrary state.
+        blockers.push(`Managed Desktop slot ${slot} route state is unproven; inspect its target session before uninstall`);
+      }
+    }
+    return blockers;
+  } catch {
+    return ["Managed Desktop target/session state cannot be observed; leave installed routes intact"];
+  }
+}
+
 async function runProductUninstallOwned(input: ProductUninstallOptions): Promise<Readonly<Record<string, unknown>>> {
   const platform = input.platform ?? process.platform;
   const environment = input.environment ?? process.env;
@@ -192,6 +241,7 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
     }
   }
   let providerRestore = restoreOwnedDesktopProvider({ ...input, mode: "dry-run" }, paths, manifest.installId, manifest);
+  const managedRouteBlockers = await managedDesktopRouteDependencies(input, paths);
 
   const filesystemObserver = new FilesystemOwnershipObserver();
   const hasManagedWorktrees = manifest.resources.some(resource => resource.kind === "managed-worktree");
@@ -294,15 +344,15 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
   const recoveryNotice = hasPendingFileImports(join(paths.serviceState("chat"), "imports-v2"))
     ? { fileImportRecoveryPending: true, recoveryNotice: "Resolve pending file imports in Tela before removing saved data; recovery records are preserved." } : {};
   if (input.mode === "dry-run") {
-    return Object.freeze({ dryRun: true, activityBlockers, providerRestore, ...recoveryNotice, ...plan });
+    return Object.freeze({ dryRun: true, activityBlockers, managedRouteBlockers, providerRestore, ...recoveryNotice, ...plan });
   }
   const nothingRemovable = plan.removableCount === 0 && plan.preservedCount > 0 && providerRestore.status === "planned";
   // Activity admission and external provider ownership must settle before
   // stopping services or modifying the user's Codex settings.
-  if (activityBlockers.length > 0 || providerDependency || nothingRemovable) {
+  if (activityBlockers.length > 0 || managedRouteBlockers.length > 0 || providerDependency || nothingRemovable) {
     return Object.freeze({ applied: false, status: "uninstall-blocked", providerRestore,
-      activityBlockers, removedCount: 0, preservedCount: Number(providerDependency),
-      failedCount: 1, shutdownFailures, destructiveActions: 0,
+      activityBlockers, managedRouteBlockers, removedCount: 0, preservedCount: Number(providerDependency),
+      failedCount: managedRouteBlockers.length || 1, shutdownFailures, destructiveActions: 0,
       ...(nothingRemovable ? { reason: "No owned resources can be removed; Codex provider selection was preserved" } : {}) });
   }
   if (input.mode === "apply") {

@@ -9,6 +9,7 @@ import {
   nativeResponsesSsePlan,
 } from "./protocol";
 import { NativeProgressStream } from "./live-progress";
+import { SUPPLIED_FAILURE_DIAGNOSTICS, type SuppliedFailureDiagnostics } from "@chatgpt-tela/runtime";
 import { encodeTelaCompactionSummary } from "@chatgpt-tela/codex";
 
 /** Response delivery does not itself require Native tool/history authority. */
@@ -35,12 +36,19 @@ function observedBody(input: {
   readonly commit?: () => void;
   readonly outcome: NativeGatewayOutcome["type"] | "failed";
   readonly onClosed?: () => void;
+  readonly signal?: AbortSignal;
 }): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   let index = 0;
   let committed = false;
+  let closedOnce = false;
+  let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
   const diagnostics = diagnosticContext();
+  const onAbort = () => { closed("request_aborted"); try { controllerRef?.error(input.signal?.reason); } catch { /* Already closed. */ } };
   const closed = (reason: string) => {
+    if (closedOnce) return;
+    closedOnce = true;
+    if (input.signal) input.signal.removeEventListener("abort", onAbort);
     withDiagnosticContext(diagnostics, () => emitDiagnosticEvent("chatgpt_tela_work", "native_response_body_closed", {
       reason_class: reason, outcome: input.outcome, outcome_committed: committed,
       pulled_frame_count: index, queued_frame_count: input.chunks.length - index,
@@ -49,7 +57,8 @@ function observedBody(input: {
     try { input.onClosed?.(); } catch { /* Diagnostics never change response delivery. */ }
   };
 
-  return new ReadableStream<Uint8Array>({
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) { controllerRef = controller; if (input.signal?.aborted) onAbort(); else input.signal?.addEventListener("abort", onAbort, { once: true }); },
     pull(controller) {
       try {
         if (index >= input.chunks.length) {
@@ -68,6 +77,7 @@ function observedBody(input: {
     },
     cancel() { closed("consumer_cancelled"); },
   }, { highWaterMark: 0 });
+  return stream;
 }
 
 function responseForOutcome(input: {
@@ -76,6 +86,7 @@ function responseForOutcome(input: {
   readonly model: string;
   readonly stream: boolean;
   readonly createdAt: number;
+  readonly signal?: AbortSignal;
 }): Response {
   const encoded = encodeNativeResponsesOutcome({
     outcome: input.outcome,
@@ -89,7 +100,7 @@ function responseForOutcome(input: {
       chunks: [json],
       commitAfterChunk: 0,
       commit: () => input.gateway.commit(input.outcome),
-      outcome: input.outcome.type,
+      outcome: input.outcome.type, ...(input.signal ? { signal: input.signal } : {}),
       ...(input.outcome.delivery.finishDiagnostics ? { onClosed: input.outcome.delivery.finishDiagnostics } : {}),
     })), {
       headers: { "content-type": "application/json" },
@@ -153,7 +164,7 @@ export async function handleNativeResponsesHttp(
       if (first === null) {
         void pending.then(value => progress.finish(value, gateway), error => progress.fail(error))
           .catch(error => progress.fail(error));
-        return progress.response();
+        return progress.response(request.signal);
       }
       outcome = first.value;
       progress.signal.abort();
@@ -161,9 +172,12 @@ export async function handleNativeResponsesHttp(
   } catch (error) {
     // A late SSE failure already committed HTTP 200; a subsequent replay
     // returns the same public cause as a terminal HTTP 400 without re-execution.
-    return new Response(observedBody({
-      chunks: [JSON.stringify({ error: nativeFailure(error).error })], outcome: "failed",
-    }), { status: 400, headers: { "content-type": "application/json" } });
+    const supplied = error !== null && (typeof error === "object" || typeof error === "function")
+      ? (error as { [SUPPLIED_FAILURE_DIAGNOSTICS]?: SuppliedFailureDiagnostics })[SUPPLIED_FAILURE_DIAGNOSTICS] : undefined;
+    return new Response(withDiagnosticContext(supplied?.context ?? diagnosticContext(), () => observedBody({
+      chunks: [JSON.stringify({ error: nativeFailure(supplied ? new Error("Supplied Web response failed") : error).error })], outcome: "failed", signal: request.signal,
+      ...(supplied ? { onClosed: supplied.finish } : {}),
+    })), { status: 400, headers: { "content-type": "application/json" } });
   }
 
   return responseForOutcome({
@@ -172,6 +186,7 @@ export async function handleNativeResponsesHttp(
     model: body.model,
     stream: body.stream === true,
     createdAt,
+    signal: request.signal,
   });
 }
 

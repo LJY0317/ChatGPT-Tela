@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { encodeNativeToolInvocation, extractNativeToolResults, parseNativeTurnClaim, parseNativeTurnReplayIdentity } from "@chatgpt-tela/codex";
-import { NativeToolInventory, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, startTurnDiagnosticSummary, withDiagnosticContext, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
+import { NativeToolInventory, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticContext, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, startTurnDiagnosticSummary, withDiagnosticContext, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
 import type { TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import { selectChatGptWebModel, type WebConversationProvider } from "@chatgpt-tela/chatgpt";
 import type { ResponsesGateway } from "@chatgpt-tela/responses";
 import {
   RetainedBrowserEpochRegistry, WEB_EPOCH_IDLE_RETENTION_MS, assertWebMessageFitsComposer,
   bindWebEpochDocument, runBrowserTurnOnSurface, ExactToolRound, createRoutedOperationCapability, type NativeGatewayOutcome,
+  SUPPLIED_FAILURE_DIAGNOSTICS, type SuppliedFailureDiagnostics,
 } from "@chatgpt-tela/runtime";
 import {
   createNativeRequestDevelopmentWebTurnPlanner, nativeRequestBrowserModelRoute,
@@ -43,6 +44,7 @@ interface Operation {
   delivered: boolean;
   progress?: string;
   diagnostics?: ReturnType<typeof startTurnDiagnosticSummary>;
+  diagnosticContext?: ReturnType<typeof diagnosticContext>;
 }
 
 function fingerprint(body: unknown): string {
@@ -106,7 +108,8 @@ export function createSuppliedRequestGateway(input: {
       if (!tool || invocation.mode !== "structured") throw Error("supplied operation did not advertise this Goal function");
       const result = op.round.open(invocation);
       op.offer({ type: "tool-call", item: encodeNativeToolInvocation(tool, invocation),
-        delivery: { capability, callId: invocation.callId } });
+        delivery: { capability, callId: invocation.callId,
+          ...(op.diagnosticContext ? { diagnosticContext: op.diagnosticContext, responseSource: "supplied" as const } : {}) } });
       return result;
     },
   };
@@ -205,6 +208,7 @@ export function createSuppliedRequestGateway(input: {
             const correlation = { scope_fingerprint: diagnosticFingerprint(identity.threadId),
               turn_fingerprint: diagnosticFingerprint(identity.turnId),
               request_fingerprint: diagnosticFingerprint(hash) };
+            owned.diagnosticContext = correlation;
             const diagnostics = withDiagnosticContext(correlation, () => startTurnDiagnosticSummary(
               correlation.scope_fingerprint, correlation.turn_fingerprint, correlation.request_fingerprint));
             owned.diagnostics = diagnostics;
@@ -288,6 +292,11 @@ export function createSuppliedRequestGateway(input: {
                 boundary: !plan ? "planning" : acquired ? "browser" : "acquisition",
                 ...diagnosticFailureFields(error),
               }));
+              if (error !== null && (typeof error === "object" || typeof error === "function")) {
+                try { Object.defineProperty(error, SUPPLIED_FAILURE_DIAGNOSTICS, { configurable: true,
+                  value: { context: failureContext, finish: () => diagnostics?.finish() } satisfies SuppliedFailureDiagnostics }); }
+                catch { /* Preserve the original provider failure. */ }
+              }
               if (!plan) capturePrivateDiagnosticValue("web_preparation_failure", {
                 phase: "provider_input", request: body,
                 error: error instanceof Error ? { name: error.name, message: error.message } : { name: "unknown" },
@@ -297,7 +306,7 @@ export function createSuppliedRequestGateway(input: {
               if (plan && acquired) await epochs.fail(plan.nativeTaskId, plan.webEpochId, true).catch(() => {});
               owned.round.fail(error instanceof Error ? error : new Error(String(error)));
               throw error;
-            } finally { owned.finishedAt = Date.now(); if (owned.failed) diagnostics?.finish(); }
+            } finally { owned.finishedAt = Date.now(); }
           }),
         };
         owned.webRun = owned.outcome;

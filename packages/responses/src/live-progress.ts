@@ -1,6 +1,7 @@
 import { nativeFailure } from "./native-failure";
 import { randomBytes } from "node:crypto";
 import type { NativeGatewayOutcome, NativeResponsesGateway } from "@chatgpt-tela/runtime";
+import { SUPPLIED_FAILURE_DIAGNOSTICS, type SuppliedFailureDiagnostics } from "@chatgpt-tela/runtime";
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "./protocol";
 import { diagnosticContext, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 
@@ -16,6 +17,9 @@ export class NativeProgressStream {
   }; completion?: "summary_part" | "reasoning_item" | "response" | "failure" }> = [];
   readonly #summaries: string[] = [];
    #diagnostics = diagnosticContext();
+  #finishDiagnostics?: () => void;
+  #requestSignal?: AbortSignal;
+  #requestAbort?: () => void;
   #pulledFrames = 0;
   #pulledSummaries = 0;
   #diagnosticClosed = false;
@@ -28,6 +32,7 @@ export class NativeProgressStream {
   #recordDelivery(reason: string): void {
     if (this.#diagnosticClosed) return;
     this.#diagnosticClosed = true;
+    if (this.#requestSignal && this.#requestAbort) this.#requestSignal.removeEventListener("abort", this.#requestAbort);
     withDiagnosticContext(this.#diagnostics, () => emitDiagnosticEvent("chatgpt_tela_work", "public_progress_stream_closed", {
       reason_class: reason, response_fingerprint: diagnosticFingerprint(this.#responseId),
       reasoning_item_fingerprint: diagnosticFingerprint(this.#itemId),
@@ -39,6 +44,7 @@ export class NativeProgressStream {
       pulled_frame_count: this.#pulledFrames, pulled_summary_count: this.#pulledSummaries,
       queued_frame_count: this.#frames.length, producer_ended: this.#ended,
     }));
+    try { this.#finishDiagnostics?.(); } catch { /* Diagnostics never change stream delivery. */ }
   }
   #sequence = 0;
   #started = false;
@@ -102,6 +108,7 @@ export class NativeProgressStream {
   finish(outcome: NativeGatewayOutcome, gateway: Pick<NativeResponsesGateway, "commit">): void {
     if (this.#ended || this.signal.signal.aborted) return;
     this.#diagnostics = outcome.delivery.diagnosticContext ?? this.#diagnostics;
+    if (outcome.delivery.finishDiagnostics) this.#finishDiagnostics = outcome.delivery.finishDiagnostics;
     const reasoning = { type: "reasoning", id: this.#itemId,
       summary: this.#summaries.map(text => ({ type: "summary_text", text })) };
     this.#event("response.output_item.done", { output_index: 0, item: reasoning });
@@ -121,7 +128,10 @@ export class NativeProgressStream {
 
   fail(error: unknown): void {
     if (this.#ended || this.signal.signal.aborted) return;
-    const failure = nativeFailure(error);
+    const supplied = error !== null && (typeof error === "object" || typeof error === "function")
+      ? (error as { [SUPPLIED_FAILURE_DIAGNOSTICS]?: SuppliedFailureDiagnostics })[SUPPLIED_FAILURE_DIAGNOSTICS] : undefined;
+    if (supplied) { this.#diagnostics = supplied.context; this.#finishDiagnostics = supplied.finish; }
+    const failure = nativeFailure(supplied ? new Error("Supplied Web response failed") : error);
     if (failure.recoveryReason) emitDiagnosticEvent("chatgpt_tela_work", "native_context_recovery_streamed", {
       reason_class: failure.recoveryReason, transport_phase: "sse_after_progress",
     });
@@ -131,9 +141,16 @@ export class NativeProgressStream {
     this.#wake?.();
   }
 
-  response(): Response {
+  response(requestSignal?: AbortSignal): Response {
+    if (requestSignal) this.#requestSignal = requestSignal;
     const encoder = new TextEncoder();
     return new Response(new ReadableStream<Uint8Array>({
+      start: () => {
+        if (!requestSignal) return;
+        this.#requestAbort = () => { this.#recordDelivery("request_aborted"); this.signal.abort(requestSignal.reason); };
+        if (requestSignal.aborted) this.#requestAbort();
+        else requestSignal.addEventListener("abort", this.#requestAbort, { once: true });
+      },
       pull: async controller => {
         while (!this.#frames.length && !this.#ended && !this.signal.signal.aborted) {
           // The Native client times out while waiting for a parsed SSE event; comments alone
@@ -154,7 +171,7 @@ export class NativeProgressStream {
           } finally { if (timer) clearTimeout(timer); }
           this.#wake = undefined;
         }
-        if (this.signal.signal.aborted) return;
+        if (this.signal.signal.aborted) { this.#recordDelivery("request_aborted"); return; }
         const frame = this.#frames.shift();
         if (frame) {
           controller.enqueue(encoder.encode(frame.text));

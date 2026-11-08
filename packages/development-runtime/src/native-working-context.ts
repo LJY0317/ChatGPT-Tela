@@ -298,8 +298,17 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     .filter(item => item.type === "revision" && !suffixIds.has(item.revisionId))
     .reduce((sum, item) => sum + tokens(item.content), 0);
   const prospectiveSeed = summaryTokens + pendingSuffixTokens + (selected ? currentInstructionsTokens : 0);
+  // Setup instructions, environment metadata and model configuration are part of
+  // the request's authority/configuration envelope, not completed work history.
+  // A fresh request with no assistant/tool activity should be sent intact when it
+  // fits; its size relative to the rolling suffix target alone is not a reason to
+  // spend a summary call. A previously published checkpoint remains reusable.
+  const hasWorkHistory = projection.revisions.slice(0, anchorIndex + 1).some(item =>
+    item.revision.kind === "assistant" || item.revision.kind === "tool-call"
+      || (item.revision.kind === "tool-result"
+        && item.revision.id !== projection.currentGoalObservationId));
   substage("working_checkpoint_maintenance_preflight");
-  const shouldAdvance = anchorIndex >= 0 && (
+  const shouldAdvance = anchorIndex >= 0 && hasWorkHistory && (
     (selected !== undefined && (sealedTokens > input.policy.suffixTargetTokens
       || sealedTokens + summaryTokens >= input.policy.checkpointSourceTokens - input.policy.suffixTargetTokens))
     || (!selected && (sealedTokens > input.policy.suffixTargetTokens || prospectiveSeed > input.policy.firstMessageTargetTokens))

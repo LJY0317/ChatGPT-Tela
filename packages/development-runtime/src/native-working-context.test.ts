@@ -157,6 +157,51 @@ function registered(turnId: string, threadId = "task") {
   });
 }
 
+test("first Web request with setup-only context skips summary preparation and preserves the seed", async () => {
+  const directory = root();
+  try {
+    const instructions = "Initial permission and environment setup: " + "P".repeat(60_000);
+    const developer = "Workspace details: " + "E".repeat(5_657);
+    const configuration = { type: "configuration_update", reasoning: { effort: "high" } };
+    const input = [
+      { role: "developer", content: developer },
+      configuration,
+      { role: "user", content: "Use this environment to answer the current request." },
+    ];
+    const projection = projectNativeRequestContext("task", { instructions, input });
+    expect(projection.revisions.some(item => ["assistant", "tool-call", "tool-result"]
+      .includes(item.revision.kind))).toBe(false);
+    const policy = webWorkingContextPolicy("high");
+    const projectedTokens = projection.revisions.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
+    expect(projectedTokens).toBeGreaterThan(policy.suffixTargetTokens);
+    expect(projectedTokens).toBeLessThan(policy.firstMessageTargetTokens);
+    expect(projectedTokens + policy.outputReserveTokens).toBeLessThan(policy.hard.contextWindowTokenLimit);
+
+    let calls = 0;
+    const plan = await createNativeRequestDevelopmentWebTurnPlanner({
+      checkpointCache: new FileContextCheckpointCache({ directory: join(directory, "cache") }),
+      visiblePrefix: {
+        accountNamespace: "first-request-fixture",
+        journal: new FileNativeVisiblePrefixStageJournal({
+          directory: join(directory, "ledger"), initializationPath: join(directory, "init"),
+        }),
+        async read(): Promise<never> { throw Error("the current request is already readable"); },
+      },
+      checkpointProducer: async request => {
+        calls++;
+        return { nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId,
+          content: "Unnecessary setup-only checkpoint" };
+      },
+    })(registered("first-request"), { model, reasoning: { effort: "high" }, instructions, input });
+    expect(calls).toBe(0);
+    expect(plan.physicalContext.mode).toBe("full");
+    expect(plan.physicalContext.segments.some(segment => segment.type === "checkpoint")).toBe(false);
+    expect(plan.physicalContext.segments.map(segment => segment.content)).toEqual(
+      projection.revisions.map(item => item.content));
+    plan.settle?.({ status: "failed" });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("checkpoint lookup reports the failed publication-read substage without replacing the exception", async () => {
   const directory = root();
   const failure = new Error("private checkpoint publication failure");

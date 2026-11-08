@@ -12,6 +12,7 @@ import { LaunchdUpgradeRunner } from "../../../tests/support/launchd-upgrade-run
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { runApplicationUpdate } from "./application-update";
 import { verifyInstalledPackage } from "./runtime";
+import { writeProductConfig } from "@chatgpt-tela/product-config";
 
 // Synthetic launchd tests need a synthetic uid where the host has no POSIX uid.
 const needsFixtureUid = typeof process.getuid !== "function";
@@ -100,6 +101,41 @@ test("Sparkle replacement restores only prior running services and promotes exte
     const calls = [...f.runner.calls];
     await runApplicationUpdate("finish", f.input);
     expect(f.runner.calls).toEqual(calls); // Startup reconciliation never sends another model/tool/service action.
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Sparkle update and source restoration preserve installed app-owned profile routes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-app-owned-config-"));
+  try {
+    const f = await fixture(root);
+    const launcherCli = join(root, "plura-desktop");
+    writeFileSync(launcherCli, "fixture");
+    const configPath = join(f.paths.configRoot, "product-v1.json");
+    const config = {
+      version: 1 as const,
+      multiProfile: { launcherCli },
+      publicMcpAbi: "stable" as const,
+      exposure: { kind: "existing-https" as const, publicUrl: "https://example.invalid/mcp", localPort: 18743,
+        authentication: "none" as const, allowUnauthenticatedPublicEndpoint: true as const },
+      appOwnedResponses: [
+        { slot: 1, port: 18744, capability: "a".repeat(48) },
+        { slot: 2, port: 18745, capability: "b".repeat(48) },
+      ],
+    };
+    writeProductConfig(config, configPath);
+    const originalConfig = readFileSync(configPath);
+
+    await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" });
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: false, prepared: true });
+    expect(await runApplicationUpdate("cancel", f.input)).toMatchObject({ ready: true, restored: true });
+    expect(readFileSync(configPath)).toEqual(originalConfig);
+
+    await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" });
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: false, prepared: true });
+    writeFileSync(packagedProductManifestPath(f.sourceRoot), JSON.stringify({ ...f.manifest, productVersion: "2.0.0" }));
+    writeFileSync(join(f.sourceRoot, "Contents/Resources/build.txt"), "2");
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true, restored: true, productVersion: "2.0.0" });
+    expect(readFileSync(configPath)).toEqual(originalConfig);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
