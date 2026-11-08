@@ -1,5 +1,6 @@
 import { diagnosticFingerprint } from "./diagnostic-events";
 import { readDiagnosticSources } from "./diagnostic-store";
+import { inspectMcpSessionCalls } from "./diagnostic-tool-evidence";
 import { dirname, join } from "node:path";
 
 const incidentRoots = (paths: readonly string[]) => [...new Set(paths.map(path => join(dirname(path), "diagnostics")))];
@@ -689,6 +690,20 @@ export function inspectNativeThreadHistoricalEvidence(input: {
       canReplayAcceptedRequest: false as const,
       proofLevel: "historical-thread-scoped-events-only" as const,
     } : null,
+    // MCP session fingerprints are joined to their own parent/child HTTP request
+    // evidence. They are intentionally not attributed to this Native turn.
+    mcpCalls: Object.freeze(inspectMcpSessionCalls(allEvents).slice(-MAX_TIMELINE)),
+    deliveryBoundary: Object.freeze({
+      browserFinalObserved: events.some(event => event.stage === "web_turn_final_observed" || event.stage === "web_turn_completed"),
+      nativeFinalItemObserved: events.some(event => event.stage === "native_public_item_observed"
+        && event.kind === "agent_message" && event.phase === "final_answer"),
+      nativeFinalCommitted: events.some(event => event.stage === "native_outcome_committed" && event.outcome === "final"),
+      nativeResponseDrained: events.some(event => event.stage === "native_response_body_closed"
+        && event.outcome === "final" && event.reason_class === "drained"),
+      nativeResponseCancelled: events.some(event => event.stage === "native_response_body_closed"
+        && event.outcome === "cancelled"),
+      proof: "turn_scoped_local_events_only" as const,
+    }),
     ownershipFailureEvidence,
     // Progress updates can push a completed Goal call out of the recent tail.
     // Report actual per-turn returns, without inferring the current Goal state.

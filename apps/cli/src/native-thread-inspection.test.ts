@@ -334,6 +334,45 @@ describe("one read-only conversation inspection by exact Native ID", () => {
       expect(result.toolDeliveryEvidence!.coverage.modelReceiptObserved).toBe(false);
     } finally { rmSync(dir,{recursive:true,force:true}); }
   });
+  test("historical inspection joins Chat HTTP completion to transport closure and Native response cancellation", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tela-chat-http-evidence-"));
+    const path = join(dir, "events.jsonl"), ts = new Date(NOW).toISOString();
+    const scope = diagnosticFingerprint("mcp-session"), connection = diagnosticFingerprint("mcp-connection");
+    const rpc = diagnosticFingerprint("mcp-rpc"), parent = diagnosticFingerprint("parent-request");
+    const child = diagnosticFingerprint("child-request");
+    writeFileSync(path, [
+      { ts, event: "chatgpt_tela_mcp", stage: "mcp_rpc_received", scope_fingerprint: scope,
+        connection_fingerprint: connection, rpc_fingerprint: rpc, request_fingerprint: parent,
+        method_class: "tools_call", kind: "chat_call" },
+      { ts, event: "chatgpt_tela_mcp", stage: "tool_started", scope_fingerprint: scope, rpc_fingerprint: rpc },
+      { ts, event: "chatgpt_tela_chat", stage: "capability_call_start", scope_fingerprint: scope,
+        request_fingerprint: child, parent_fingerprint: parent, capability_input_fingerprint: diagnosticFingerprint("input") },
+      { ts, event: "chatgpt_tela_chat", stage: "capability_call_complete", scope_fingerprint: scope,
+        request_fingerprint: child, parent_fingerprint: parent, result_kind: "object", result_bytes: 32,
+        result_present: true, result_empty: false, result_is_error: false },
+      { ts, event: "chatgpt_tela_http", stage: "http_transport_closed", scope_fingerprint: scope,
+        request_fingerprint: child, parent_fingerprint: parent, reason_class: "remote_cancel_or_disconnect",
+        close_source: "response_closed", status: 200, socket_write_count: 1, socket_write_bytes: 64 },
+      { ts, event: "chatgpt_tela_mcp", stage: "mcp_rpc_emitted", connection_fingerprint: connection,
+        rpc_fingerprint: rpc, delivery: "transport_send_returned", error_result: false },
+      { ts, event: "chatgpt_tela_mcp", stage: "tool_settled", scope_fingerprint: scope,
+        rpc_fingerprint: rpc, outcome: "completed" },
+      { ts, event: "chatgpt_tela_work", stage: "native_outcome_committed", scope_fingerprint: diagnosticFingerprint(THREAD),
+        turn_fingerprint: diagnosticFingerprint(TURN), outcome: "final" },
+      { ts, event: "chatgpt_tela_work", stage: "native_response_body_closed", scope_fingerprint: diagnosticFingerprint(THREAD),
+        turn_fingerprint: diagnosticFingerprint(TURN), outcome: "cancelled", reason_class: "request_aborted" },
+    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    try {
+      const result = inspectNativeThreadHistoricalEvidence({ threadId: THREAD, turnId: TURN, diagnosticPaths: [path], nowMs: NOW });
+      expect(result.mcpCalls).toMatchObject([{ callback: "settled", transport: "send_returned", chatHttp: {
+        correlation: "unique_parent_request", capabilityCall: { state: "completed", result: { kind: "object", bytes: 32 } },
+        httpResponse: { state: "closed_before_finish", status: 200, reasonClass: "remote_cancel_or_disconnect" },
+      }, modelReceipt: "not_observed", nativeTurnAttribution: "not_proven" }]);
+      expect(result.deliveryBoundary).toMatchObject({ nativeFinalCommitted: true, nativeResponseDrained: false,
+        nativeResponseCancelled: true, proof: "turn_scoped_local_events_only" });
+      expect(JSON.stringify(result)).not.toMatch(/parent-request|child-request/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   test("offline evidence correlates one UUID after owner loss without claiming a live approval", () => {
     const dir = mkdtempSync(join(tmpdir(), "tela-thread-evidence-"));
     const path = join(dir, "events.jsonl");
