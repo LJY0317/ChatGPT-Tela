@@ -15,7 +15,7 @@ import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { MultiProfileControlClient, type MultiProfileControlRunner } from "@chatgpt-tela/setup";
 import { connectCodexTurnBridge } from "@chatgpt-tela/mcp";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
-import { appOwnedDesktopCatalogPath } from "./app-owned-desktop-catalog";
+import { appOwnedDesktopCatalogPath, publishAppOwnedDesktopCatalog } from "./app-owned-desktop-catalog";
 import { readDefaultDesktopNativeCatalog, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
 import { startProfileBridgePreviewServer } from "../../../apps/profile-runtime/src/bridge-preview-server";
@@ -202,7 +202,7 @@ import { ConnectorProbeState } from "./connector-probe-state";
 import type { ElectronDevelopmentRuntime } from "./electron";
 import type { ChatGptWebPreparationOptions } from "./profile-control";
 
-for (const outcome of ["complete", "account-mismatch", "cleanup-failed"] as const) {
+for (const outcome of ["complete", "account-mismatch", "account-changed-during-discovery", "cleanup-failed"] as const) {
   test(`single product preparation journal: ${outcome}`, async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-preparation-journal-"));
     try {
@@ -218,6 +218,7 @@ for (const outcome of ["complete", "account-mismatch", "cleanup-failed"] as cons
             accountFingerprint: outcome === "account-mismatch" ? "b".repeat(64) : "a".repeat(64),
             accountStructure: "personal", containerFingerprint: "container",
           } });
+          if (outcome === "account-changed-during-discovery") bindChatGptTelaAccount(config.browserProfile, "b".repeat(64));
           options.onFamilies?.([family]); options.onConnectorStarting?.();
           expect(marker.pending()).toBe(true);
           if (outcome === "cleanup-failed") throw new Error("cleanup failed");
@@ -228,11 +229,12 @@ for (const outcome of ["complete", "account-mismatch", "cleanup-failed"] as cons
       const operation = prepareProductWebDiscovery({ runtime, browserProfile: config.browserProfile,
         connectorName: "Fixture", signal: new AbortController().signal, stage: stage => stages.push(stage) });
       if (outcome === "complete") {
-        expect((await operation).families).toEqual([family]); expect(marker.pending()).toBe(false);
+        expect((await operation)).toMatchObject({ families: [family], accountFingerprint: "a".repeat(64) });
+        expect(marker.pending()).toBe(false);
         expect(stages.at(-1)).toBe("fresh_readiness_proof_complete");
       } else {
         await expect(operation).rejects.toThrow();
-        expect(marker.pending()).toBe(outcome === "cleanup-failed");
+        expect(marker.pending()).toBe(outcome === "cleanup-failed" || outcome === "account-changed-during-discovery");
         expect(stages).not.toContain("fresh_readiness_proof_complete");
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -862,6 +864,51 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
   } finally {
     await client?.close();
     await owned?.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("app-owned catalog retires prior Web rows before a failed account-bound discovery", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-app-owned-catalog-discovery-failure-"));
+  let responses: Awaited<ReturnType<typeof startLocalResponsesServer>> | undefined;
+  try {
+    const paths = resolveProductPaths({ platform: process.platform, home: root, environment: {} });
+    const manifest = createOwnershipManifest("fixture", new Date(), "11111111-2222-4333-8444-555555555555");
+    writeOwnershipManifest(paths.installManifest, manifest);
+    const oldFamily = { key: chatGptWebFamilyKey("Previous account model"), label: "Previous account model",
+      availableEfforts: ["medium"] as const };
+    await publishAppOwnedDesktopCatalog({ paths, installId: manifest.installId,
+      nativeCatalog: { object: "list", models: [{ slug: "native-old", visibility: "list",
+        supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] },
+      webFamilies: [oldFamily], assertCurrentAccount: () => {} });
+    const config = loadProductProfileRuntimeConfig(common(root));
+    mkdirSync(config.browserProfile.userDataDir, { recursive: true });
+    bindChatGptTelaAccount(config.browserProfile, "a".repeat(64));
+    const ingressServer = await startLocalResponsesServer({ requestRouter: async () => new Response(null, { status: 404 }) });
+    const ingress = { port: ingressServer.port, capability: "f".repeat(48) };
+    await ingressServer.stop();
+    const nativeCatalog = { object: "list", models: [{ slug: "native-current", visibility: "list",
+      supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] };
+    const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
+      responses = await startLocalResponsesServer(options.responses);
+      return {
+        responses,
+        suppliedToolBridge: {} as any,
+        shutdownReadiness: () => "ready" as const,
+        prepareShutdown: async () => {},
+        async prepareChatGptWebSession() { throw new Error("synthetic Web discovery failure"); },
+        async discoverChatGptWebModelFamilies() { throw new Error("should not retry discovery"); },
+        async stop() { await responses?.stop(); responses = undefined; },
+      } as unknown as import("./electron").ElectronDevelopmentRuntime;
+    }) as typeof import("./electron").startElectronDevelopmentRuntime;
+    await expect(startAppOwnedProductResponsesRuntime({
+      config, ingress, electronStarter: starter,
+      catalogPreparation: { paths, installId: manifest.installId, async readNativeCatalog() { return nativeCatalog; } },
+    })).rejects.toThrow("synthetic Web discovery failure");
+    const published = JSON.parse(readFileSync(appOwnedDesktopCatalogPath(paths), "utf8"));
+    expect(published.models.map((model: { slug: string }) => model.slug)).toEqual(["native-current"]);
+  } finally {
+    await responses?.stop();
     rmSync(root, { recursive: true, force: true });
   }
 });

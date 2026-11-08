@@ -228,12 +228,18 @@ export async function startAppOwnedProductResponsesRuntime(input: {
         ? preparation.readNativeCatalog()
         : readDefaultDesktopNativeCatalog({ installation: installation!, ...(input.signal ? { signal: input.signal } : {}) }))
       : undefined;
+    // Retire any Web rows from a previous account before attempting discovery.
+    // If login, quota or model discovery fails, the install-owned registration
+    // artifact remains usable with Native models only.
+    if (preparation && nativeCatalog !== undefined) {
+      await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId,
+        nativeCatalog, webFamilies: [], assertCurrentAccount: () => {} });
+    }
     const webDiscovery = await prepareProductWebDiscovery({
       runtime, browserProfile: config.browserProfile, connectorName: identity.connectorName,
       signal: input.signal ?? new AbortController().signal, stage: () => {},
     });
-    const binding = readChatGptTelaAccountBinding(config.browserProfile);
-    if (!binding) throw Error("App-owned Web readiness did not establish a verified account binding");
+    const binding = assertChatGptTelaAccountBinding(config.browserProfile, webDiscovery.accountFingerprint);
     const resultStore = new FileNativeVisiblePrefixStageJournal({
       directory: resolve(config.browserProfile.userDataDir, "native-visible-prefix-executions", binding.accountFingerprint),
       initializationPath: `${config.browserProfile.accountBindingPath}.native-prefix-${binding.accountFingerprint}`,
@@ -476,6 +482,7 @@ export async function prepareProductWebDiscovery(input: {
   stage: (stage: string, fields?: Readonly<Record<string, string | number | boolean>>) => void;
 }) {
   input.signal.throwIfAborted();
+  let observedAccountFingerprint: string | undefined;
   const connectorProbeState = new ConnectorProbeState({
     directory: input.browserProfile.userDataDir,
     connectorName: input.connectorName,
@@ -494,6 +501,7 @@ export async function prepareProductWebDiscovery(input: {
     signal: input.signal,
     onProfile(observed) {
       input.signal.throwIfAborted();
+      observedAccountFingerprint = observed.account.accountFingerprint;
       assertChatGptTelaAccountBinding(input.browserProfile, observed.account.accountFingerprint);
       input.stage("profile_proof_complete", {
         account_structure: observed.account.accountStructure,
@@ -517,9 +525,11 @@ export async function prepareProductWebDiscovery(input: {
     },
   });
   input.signal.throwIfAborted();
+  if (!observedAccountFingerprint) throw new Error("Web readiness did not prove an account identity");
+  assertChatGptTelaAccountBinding(input.browserProfile, observedAccountFingerprint);
   input.stage("fresh_readiness_proof_complete");
   connectorProbeState.clear();
-  return { families: proof.families };
+  return { families: proof.families, accountFingerprint: observedAccountFingerprint };
 }
 
 export async function startProductProfileRuntime(
