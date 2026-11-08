@@ -9,6 +9,7 @@ import {
 import { readServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
 import { prepareProfileOwnership } from "../../cli/src/profile-ownership";
+import { MultiProfileNativeTargetAdapter, type CodexNativeTargetAdapter } from "../../../packages/codex-service/src/native-target";
 import { runPackagedServiceLauncher, verifyInstalledPackage, type ResolvedPackagedMenuBarLaunch } from "./runtime";
 
 export interface PackagedBootstrapOptions {
@@ -17,6 +18,8 @@ export interface PackagedBootstrapOptions {
   readonly pathOptions?: ProductPathOptions;
   readonly launchSetup?: (launch: ResolvedPackagedMenuBarLaunch) => Promise<number>;
   readonly configurationInput?: string;
+  /** Inject the existing public target adapter for isolated configure acceptance. */
+  readonly multiProfileTargetAdapter?: Pick<CodexNativeTargetAdapter, "resolve">;
 }
 
 const CONFIGURATION_LIMIT = 64 * 1024;
@@ -62,10 +65,19 @@ export async function runPackagedBootstrapCommand(args: readonly string[], optio
   }
   if (command === "configure") {
     const enableAppOwned = args.includes("--enable-app-owned-desktop");
-    const commandArgs = args.filter(argument => argument !== "--enable-app-owned-desktop");
+    const slotIndex = args.indexOf("--slot");
+    const selectedSlot = slotIndex < 0 ? 1 : Number(args[slotIndex + 1]);
+    if (slotIndex >= 0 && (!enableAppOwned || !Number.isSafeInteger(selectedSlot) || selectedSlot < 1 || selectedSlot > 99)) {
+      throw new Error("configure --slot requires --enable-app-owned-desktop and an integer profile slot from 1 to 99");
+    }
+    const commandArgs = args.filter((argument, index) => argument !== "--enable-app-owned-desktop"
+      && (slotIndex < 0 || (index !== slotIndex && index !== slotIndex + 1)));
     const fromStdin = commandArgs[1] === "--stdin" && (commandArgs.length === 2 || (commandArgs.length === 3 && commandArgs[2] === "--if-missing"));
     const fromFile = commandArgs.length === 3 && commandArgs[1] === "--file";
-    if (!fromStdin && !fromFile) throw new Error("usage: configure --file <product-config.json> | --stdin [--if-missing] [--enable-app-owned-desktop]");
+    if (!fromStdin && !fromFile || args.filter(argument => argument === "--enable-app-owned-desktop").length > 1
+      || args.filter(argument => argument === "--slot").length > 1 || slotIndex === args.length - 1) {
+      throw new Error("usage: configure --file <product-config.json> | --stdin [--if-missing] [--enable-app-owned-desktop [--slot <profile>]]");
+    }
     let text: string;
     if (fromStdin) {
       if (options.configurationInput === undefined) throw new Error("configuration input is missing");
@@ -83,6 +95,15 @@ export async function runPackagedBootstrapCommand(args: readonly string[], optio
     const existingConfig = configurationExists(configPath) ? readProductConfig(configPath) : undefined;
     const existingAppOwnedResponses = config.appOwnedResponses === undefined
       ? existingConfig?.appOwnedResponses : undefined;
+    const effectiveMultiProfile = config.multiProfile ?? existingConfig?.multiProfile;
+    if (enableAppOwned && selectedSlot > 1) {
+      if (!effectiveMultiProfile) throw new Error("additional app-owned profile requires the optional Multi-Profile adapter");
+      const adapter = options.multiProfileTargetAdapter ?? new MultiProfileNativeTargetAdapter(effectiveMultiProfile);
+      const found = await adapter.resolve(selectedSlot);
+      if (found.target.slot !== selectedSlot || found.target.adapterKind !== "multi-profile" || !found.target.managed) {
+        throw new Error(`profile slot ${selectedSlot} is not a detected managed Multi-Profile target`);
+      }
+    }
     const prepared = await prepareOwnedDirectory({ manifestPath: paths.installManifest,
       installId: ownership.installId, productVersion: ownership.productVersion,
       resource: { kind: "directory", id: "product-config", owner: "product", path: paths.configRoot, dataClass: "config" } });
@@ -103,8 +124,8 @@ export async function runPackagedBootstrapCommand(args: readonly string[], optio
     for (const directory of directories) await prepareOwnedDirectory({ manifestPath: paths.installManifest,
       installId: ownership.installId, productVersion: ownership.productVersion, resource: { kind: "directory", ...directory } });
     const configuredResponses = config.appOwnedResponses ?? existingAppOwnedResponses;
-    const appOwnedResponses = enableAppOwned && !configuredResponses?.some(route => route.slot === 1)
-      ? [...(configuredResponses ?? []), { slot: 1,
+    const appOwnedResponses = enableAppOwned && !configuredResponses?.some(route => route.slot === selectedSlot)
+      ? [...(configuredResponses ?? []), { slot: selectedSlot,
         port: (() => {
           const used = new Set([config.exposure.localPort, ...(configuredResponses ?? []).map(route => route.port)]);
           let candidate = 18744;
@@ -116,7 +137,7 @@ export async function runPackagedBootstrapCommand(args: readonly string[], optio
       ? config : { ...config, multiProfile: existingConfig.multiProfile };
     writeProductConfig(appOwnedResponses ? { ...preserved, appOwnedResponses } : preserved, configPath);
     return { configured: true, publicMcpAbi: config.publicMcpAbi, exposure: config.exposure.kind,
-      appOwnedDesktop: Boolean(appOwnedResponses?.some(route => route.slot === 1)) };
+      appOwnedDesktop: Boolean(appOwnedResponses?.some(route => route.slot === selectedSlot)) };
   }
   if (command !== "setup" || !(args.length === 1 || (args.length === 3 && args[1] === "--slot"))) {
     throw new Error("usage: setup [--slot <profile>]");

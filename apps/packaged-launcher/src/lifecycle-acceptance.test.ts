@@ -18,6 +18,7 @@ import { runPackagedDesktopProviderCommand } from "./desktop-provider";
 import { resolveChatGptTelaBrowserProfile } from "@chatgpt-tela/development-runtime/browser-profile";
 import { publishAppOwnedDesktopCatalog } from "@chatgpt-tela/development-runtime/app-owned-desktop-catalog";
 import { prepareInstalledProfileOwnership } from "../../cli/src/profile-ownership";
+import { MultiProfileNativeTargetAdapter } from "../../../packages/codex-service/src/native-target";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 
 const removeFixture = registerTemporaryFixtureCleanup();
@@ -262,6 +263,38 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     await runPackagedBootstrapCommand(["configure", "--file", configFile, "--enable-app-owned-desktop"], bootstrap);
     expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).appOwnedResponses)
       .toMatchObject([{ slot: 1, port: 18744 }]);
+    // A selected managed target uses the existing adapter contract and the same
+    // private route generator; it never borrows the default slot's capability.
+    const managed = new MultiProfileNativeTargetAdapter({ launcherCli: optionalAdapter.launcherCli, client: {
+      targets: async () => [{ id: "synthetic-managed", displayName: "Synthetic managed", role: "managed",
+        managed: true, profileIndex: 2, state: "stopped", sessionState: "available",
+        sharedAppServerSupported: true, responsesRouteSupported: true }],
+      targetSession: async targetId => ({ targetId, state: "available" }),
+      quitTarget: async targetId => ({ targetId, state: "available" }),
+    } });
+    const twoProfileInput = { ...(JSON.parse(configurationInput) as object), multiProfile: optionalAdapter };
+    writeFileSync(configFile, JSON.stringify(twoProfileInput));
+    const selected = ["configure", "--file", configFile, "--enable-app-owned-desktop", "--slot", "2"];
+    const beforeMissing = readFileSync(join(paths.configRoot, "product-v1.json"), "utf8");
+    const missing = new MultiProfileNativeTargetAdapter({ launcherCli: optionalAdapter.launcherCli, client: {
+      targets: async () => [],
+      targetSession: async targetId => ({ targetId, state: "available" }),
+      quitTarget: async targetId => ({ targetId, state: "available" }),
+    } });
+    await expect(runPackagedBootstrapCommand(selected, { ...bootstrap, multiProfileTargetAdapter: missing }))
+      .rejects.toThrow("does not expose exactly one target");
+    expect(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).toBe(beforeMissing);
+    await runPackagedBootstrapCommand(selected, { ...bootstrap, multiProfileTargetAdapter: managed });
+    const selectedRoutes = JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).appOwnedResponses;
+    expect(selectedRoutes).toHaveLength(2);
+    expect(selectedRoutes[0]).toMatchObject({ slot: 1, port: 18744 });
+    expect(selectedRoutes[1]).toMatchObject({ slot: 2, port: 18745 });
+    expect(selectedRoutes[0].capability).not.toBe(selectedRoutes[1].capability);
+    expect(selectedRoutes[1].capability).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    await runPackagedBootstrapCommand(selected, { ...bootstrap, multiProfileTargetAdapter: managed });
+    expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).appOwnedResponses).toEqual(selectedRoutes);
+    await expect(runPackagedBootstrapCommand(["configure", "--file", configFile, "--slot", "2"], bootstrap))
+      .rejects.toThrow("requires --enable-app-owned-desktop");
     writeFileSync(configFile, JSON.stringify({ ...(JSON.parse(configurationInput) as object), appOwnedResponses }));
     await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
     writeFileSync(join(paths.logsRoot, "fixture.log"), "synthetic diagnostic\n");

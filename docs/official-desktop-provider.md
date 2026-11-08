@@ -80,13 +80,14 @@ does not bundle the optional Native engine. Keep the existing `openai` provider
 and Native model until the app-owned profile reports Ready and catalog
 registration reports `installed` or `already-owned`. Then explicitly select
 `model_provider = "chatgpt_tela_local"` and a model in the prepared catalog.
-The optional multi-profile adapter requires a detected, managed Plura target
-and a separate explicit `appOwnedResponses` entry with a unique slot, port and
-capability. Managed targets use authenticated `/v1/` requests and a dedicated
+The optional multi-profile adapter requires a detected, managed Plura target.
+Select it explicitly with `configure --file <product-config.json> --enable-app-owned-desktop --slot 2`
+(or `--stdin`); the launcher validates the public target and allocates a separate
+private port and capability. Managed targets use authenticated `/v1/` requests and a dedicated
 model-list overlay; the independent default Desktop retains its capability-path
 `/v1/` URL. Each profile's account binding, tool bridge, route and Web model
-choices remain separate. The packaged `--enable-app-owned-desktop` option
-provisions only slot 1; it does not migrate an existing Native-first slot 2.
+choices remain separate. Without `--slot`, `--enable-app-owned-desktop` provisions
+only slot 1. Other profiles are never automatically migrated.
 An installed `multiProfile` value with no `appOwnedResponses` entries keeps
 the Native-first configuration and is incompatible with replacing an existing
 Native-engine-dependent install with this engine-free candidate unchanged.
@@ -158,9 +159,9 @@ For a supervised transition after release acceptance:
    synthetic build-7 label as a release number.
 3. Before reconnecting Work, run the **newly installed** launcher's
    `configure --file <reviewed-product-config.json> --enable-app-owned-desktop`.
-   Preserve `multiProfile`; the flag provisions slot 1 only. Add a distinct
-   slot-2 `appOwnedResponses` entry with its own port and private capability
-   **only** for a detected managed Plura target. If the second target cannot
+   Preserve `multiProfile`; this prepares slot 1 only. For a detected managed
+   Plura target, separately run the same command with `--slot 2`. The launcher
+   prepares a distinct private port and capability. If the second target cannot
    be proven, leave it disconnected and defer its conversion; do not silently
    replace it with an unmanaged Native engine or reuse slot-1 credentials.
 4. Run `services start`, reconnect slot 1 and require account-bound Web discovery

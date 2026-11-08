@@ -25,8 +25,8 @@ import { runMaintenanceCommand, openMaintenanceWindow, cleanupMaintenanceWindow 
 const USAGE = `ChatGPT Tela packaged runtime
 
 Usage:
-  chatgpt-tela configure --file <product-config.json> [--enable-app-owned-desktop]
-  chatgpt-tela configure --stdin [--if-missing] [--enable-app-owned-desktop]
+  chatgpt-tela configure --file <product-config.json> [--enable-app-owned-desktop [--slot <profile>]]
+  chatgpt-tela configure --stdin [--if-missing] [--enable-app-owned-desktop [--slot <profile>]]
   chatgpt-tela setup [--slot <profile>]
   chatgpt-tela desktop-provider <register|restore> <--dry-run|--apply>
   chatgpt-tela ingress status --public [--public-dns-url <DNS-JSON-URL>]
