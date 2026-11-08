@@ -14,7 +14,7 @@ import {
 } from "./native-context-continuity";
 import { boundedWebCheckpointSource } from "./web-checkpoint-source";
 import { CheckpointPreparationBudget, CheckpointPreparationBudgetExceeded } from "./checkpoint-preparation-budget";
-import { produceNativePrefixCheckpoint } from "./native-visible-prefix-checkpoint";
+import { parseNativePrefixCheckpointEnvelope, produceNativePrefixCheckpoint } from "./native-visible-prefix-checkpoint";
 import { nativeRequestPrefixSnapshot, nativeCompactionPhysicalContext, selectNativeWorkingCheckpoint } from "./native-working-context";
 import { webWorkingContextPolicy } from "./web-working-context-policy";
 import type { ContextCheckpointCache } from "./context-cache";
@@ -282,7 +282,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               // The account-owned stage journal is the same compressor used by
               // ordinary request prefixes. No truncation or second retry ledger.
               const source = nativeRequestPrefixSnapshot(claim.threadId, claim.turnId, physicalContext);
-              const checkpoint = record(JSON.parse(await produceNativePrefixCheckpoint({
+              const checkpoint = parseNativePrefixCheckpointEnvelope(await produceNativePrefixCheckpoint({
                 source, accountNamespace: owner.accountNamespace, journal: owner.journal,
                 producer, effort: browserModel.effort, browserModel, preparationBudget,
                 confirmSource: async () => {
@@ -293,8 +293,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
                 ...(watch ? { signal: watch.signal, preparation: {
                   signal: watch.signal, onProgress: (_summary: string) => {},
                 } } : {}),
-              })));
-              if (typeof checkpoint?.summary !== "string") throw new CompactionFailure("summary_validation", "invalid_summary");
+              }));
               summary = checkpoint.summary;
             } else {
               capturePrivateDiagnosticValue("web_context", { purpose: "native_compaction_source", physicalContext: bounded });

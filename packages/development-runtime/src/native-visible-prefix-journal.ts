@@ -7,6 +7,7 @@ import type {
   NativeVisiblePrefixStageIdentity, NativeVisiblePrefixStageJournal, NativeVisiblePrefixStageReceipt,
   PublishedNativeWorkingCheckpoint,
 } from "./native-visible-prefix-checkpoint";
+import { parseNativePrefixCheckpointEnvelope } from "./native-visible-prefix-checkpoint";
 
 const MAX_BYTES = 16 * 1024 * 1024;
 // Reserve the worst JSON-escaped 32 KiB summary for EVERY pending claim.
@@ -386,13 +387,12 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     await this.#transaction(async state => {
       // The caller's summary must be the output of the exact completed owned stage.
       // A pending/closed/foreign stage can never promote source coverage.
-      const parsed = JSON.parse(input.content) as Record<string, unknown>;
+      const parsed = parseNativePrefixCheckpointEnvelope(input.content);
       const completed = state.entries.find(item => item.key === input.stageKey
         && item.status === "completed" && item.summary === parsed.summary);
       if (!completed || parsed.completedStageKey !== input.stageKey
         || parsed.sourceDigest !== input.sourceRootDigest
-        || completed.sourceRootDigest !== input.sourceRootDigest
-        || parsed.type !== "tela_native_request_prefix_checkpoint_v1") {
+        || completed.sourceRootDigest !== input.sourceRootDigest) {
         throw Error("Web checkpoint publication has no matching completed summary");
       }
       const checkpoints = (state.checkpoints ?? []).filter(item =>

@@ -3,7 +3,8 @@ import { startChatService } from "./index";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setPrivateDiagnosticCapture, readDiagnosticTail } from "@chatgpt-tela/core";
+import { setPrivateDiagnosticCapture, readDiagnosticTail, observeDiagnosticEvents, withDiagnosticContext } from "@chatgpt-tela/core";
+import { ChatServiceClient, ServiceHttpError } from "@chatgpt-tela/service-protocol/client";
 import { createChatToolRuntime } from "./tools";
 
 
@@ -300,6 +301,99 @@ test("empty and populated Chat capability results survive sanitized durable read
     expect(rows[1]).toMatchObject({ result_present: true, result_empty: false, result_kind: "object", result_is_error: true });
     expect(readDiagnosticTail(path).events.filter(row => row.stage === "capability_call_complete")).toMatchObject(rows);
     expect(JSON.stringify(rows)).not.toContain("PRIVATE_RESULT");
+  } finally {
+    await service.close();
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    rmSync(f.base, { recursive: true, force: true });
+  }
+});
+
+test("concurrent patch HTTP calls have distinct execution evidence, with failures and diagnostics isolated", async () => {
+  const f = shutdownFixture();
+  const log = join(f.base, "correlation.jsonl");
+  const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = log;
+  const workspace = f.tools.workspaces.open(f.root);
+  const service = await startChatService({ bearerToken: f.token, tools: f.tools });
+  // Throwing diagnostic observers must never alter the patch or HTTP outcome.
+  const stop = observeDiagnosticEvents(() => { throw Error("PRIVATE_OBSERVER_FAILURE"); });
+  const call = (patch: string) => fetch(new URL("v1/call", service.endpoint), {
+    method: "POST",
+    headers: { authorization: `Bearer ${f.token}`, "content-type": "application/json" },
+    body: JSON.stringify({ capability: "apply_patch", arguments: { workspace_id: workspace.id, patch } }),
+  });
+  const first = "*** Begin Patch\n*** Add File: first.txt\n+PRIVATE_FIRST_BODY\n*** End Patch";
+  const second = "*** Begin Patch\n*** Add File: second.txt\n+PRIVATE_SECOND_BODY\n*** End Patch";
+  const invalid = "*** Begin Patch\n*** Update File: missing.txt\n@@\n-nope\n+PRIVATE_ERROR_BODY\n*** End Patch";
+  try {
+    const [one, two, failed, repeated] = await Promise.all([call(first), call(second), call(invalid), call(invalid)]);
+    expect([one.status, two.status, failed.status, repeated.status]).toEqual([200, 200, 409, 409]);
+    expect((await one.json() as { result: { files: unknown[] } }).result.files).toHaveLength(1);
+    expect((await two.json() as { result: { files: unknown[] } }).result.files).toHaveLength(1);
+    expect((await failed.json() as { error: { type: string } }).error.type).toBe("tela_chat_capability_error");
+    expect((await repeated.json() as { error: { type: string } }).error.type).toBe("tela_chat_capability_error");
+    expect(readFileSync(join(f.root, "first.txt"), "utf8")).toBe("PRIVATE_FIRST_BODY\n");
+    expect(readFileSync(join(f.root, "second.txt"), "utf8")).toBe("PRIVATE_SECOND_BODY\n");
+    const rows = readDiagnosticTail(log).events.filter(row => row.stage.startsWith("capability_call_")
+      && row.capability === "apply_patch");
+    expect(rows).toHaveLength(8);
+    const starts = rows.filter(row => row.stage === "capability_call_start");
+    expect(new Set(starts.map(row => row.request_fingerprint)).size).toBe(4);
+    expect(new Set(starts.map(row => row.capability_input_fingerprint)).size).toBe(3);
+    for (const start of starts) {
+      const matches = rows.filter(row => row.request_fingerprint === start.request_fingerprint);
+      expect(matches).toHaveLength(2);
+      expect(matches[1]?.request_fingerprint).toBe(start.request_fingerprint);
+      expect(matches[1]?.capability_input_fingerprint).toBe(start.capability_input_fingerprint);
+      expect(matches[1]?.workspace_fingerprint).toBe(start.workspace_fingerprint);
+    }
+    expect(rows.filter(row => row.stage === "capability_call_complete")).toHaveLength(2);
+    expect(rows.filter(row => row.stage === "capability_call_failed")).toHaveLength(2);
+    expect(JSON.stringify(rows)).not.toMatch(/PRIVATE_|first\\.txt|second\\.txt|missing\\.txt/);
+  } finally {
+    stop?.();
+    await service.close();
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    rmSync(f.base, { recursive: true, force: true });
+  }
+});
+
+test("existing Chat client parent links one HTTP patch result and one failure without claiming approval", async () => {
+  const f = shutdownFixture();
+  const log = join(f.base, "client-correlation.jsonl");
+  const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = log;
+  const workspace = f.tools.workspaces.open(f.root);
+  const service = await startChatService({ bearerToken: f.token, tools: f.tools });
+  const client = new ChatServiceClient({ version: 1, service: "chat", instanceId: service.instanceId,
+    installId: "fixture", pid: process.pid, endpoint: service.endpoint.href, bearerToken: f.token,
+    startedAt: new Date().toISOString() });
+  const parent = "d".repeat(24);
+  try {
+    const argumentsFor = (patch: string) => ({ workspace_id: workspace.id, patch });
+    const good = "*** Begin Patch\n*** Add File: client.txt\n+PRIVATE_CLIENT_BODY\n*** End Patch";
+    const bad = "*** Begin Patch\n*** Update File: absent.txt\n@@\n-missing\n+PRIVATE_FAILED_BODY\n*** End Patch";
+    const result = await withDiagnosticContext({ request_fingerprint: parent },
+      () => client.call("apply_patch", argumentsFor(good))) as { files: readonly unknown[] };
+    expect(result.files).toHaveLength(1);
+    await expect(withDiagnosticContext({ request_fingerprint: parent },
+      () => client.call("apply_patch", argumentsFor(bad)))).rejects.toBeInstanceOf(ServiceHttpError);
+    expect(readFileSync(join(f.root, "client.txt"), "utf8")).toBe("PRIVATE_CLIENT_BODY\n");
+    const rows = readDiagnosticTail(log).events;
+    const calls = rows.filter(row => row.event === "chatgpt_tela_chat" && row.stage.startsWith("capability_call_")
+      && row.capability === "apply_patch");
+    expect(calls).toHaveLength(4);
+    expect(new Set(calls.map(row => row.request_fingerprint)).size).toBe(2);
+    for (const call of calls) {
+      expect(call.parent_fingerprint).toBe(parent);
+      expect(rows.some(row => row.event === "chatgpt_tela_http" && row.stage === "http_response_finished"
+        && row.request_fingerprint === call.request_fingerprint && row.parent_fingerprint === parent)).toBe(true);
+    }
+    expect(calls.map(row => row.stage)).toContain("capability_call_complete");
+    expect(calls.map(row => row.stage)).toContain("capability_call_failed");
+    expect(JSON.stringify(rows)).not.toContain("PRIVATE_CLIENT_BODY");
   } finally {
     await service.close();
     if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;

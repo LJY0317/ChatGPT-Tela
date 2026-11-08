@@ -123,12 +123,25 @@ The app-owned route must remain opt-in until those are separately verified.
 
 For an existing installation with `multiProfile` configured and no active
 `appOwnedResponses`, retain the installed Native-first binary and its settings
-until an operator has explicitly accepted the transition. The first executable,
-non-mutating step is to retain a recovery copy of the installed package and run
-the candidate's `upgrade --dry-run --payload <candidate.app>`. Inspect the
-reported installation ownership, `shutdownBlockers`, recovery source, and
-service preservation before considering any `--apply`. A successful dry run
-does not make the new Native-engine-free package compatible with the old routes.
+until an operator has explicitly accepted the transition. Preserve a recovery
+copy of the installed package, then use the **packaged launcher**, which routes
+`upgrade` through `runPackagedLifecycleCommand` (not the bootstrap command):
+
+```text
+<candidate.app>/Contents/MacOS/chatgpt-tela upgrade --dry-run --payload <candidate.app>
+```
+
+This read-only plan is supported by the packaged CLI and isolated lifecycle
+acceptance tests. Inspect the reported installation ownership,
+`shutdownBlockers`, recovery source and service preservation before considering
+any `--apply`. The live installed configuration has **not** been dry-run or
+upgraded in this candidate audit. A successful plan alone does not make the
+new Native-engine-free package compatible with the old routes. The macOS
+menu-bar's Sparkle update follows the separate `application-update`
+`wait/prepare/finish/cancel` ownership handshake; neither procedure should be
+silently substituted for the other. The candidate's synthetic version and
+build number are local test identifiers, not an approved monotonic release
+sequence or a valid public Sparkle feed.
 
 For an authorized transition, first complete or cancel active Work and managed
 profile tasks, disconnect the affected profiles through their existing controls,

@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { capturePrivateDiagnosticValue, diagnosticFingerprint, diagnosticDurationMs, diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { startWebHttpServer, type WebHttpServer } from "@chatgpt-tela/http-host";
 import type { ServiceStatus } from "@chatgpt-tela/service-protocol";
@@ -213,7 +213,17 @@ export async function startChatService(input: {
           const diagnosticCapability = input.tools.capabilities.includes(record.capability as TelaChatCapability)
             ? record.capability : "unknown";
           const args = record.arguments as { workspace_id?: unknown; operation_id?: unknown } | null;
+          // The HTTP host already assigns a unique request_fingerprint and
+          // forwards the MCP parent. This digest only compares normalized inputs;
+          // it is never execution authority, approval proof or a retry key.
+          let inputFingerprint: string | undefined;
+          try {
+            inputFingerprint = createHash("sha256")
+              .update(JSON.stringify({ capability: record.capability, arguments: record.arguments ?? {} }))
+              .digest("hex").slice(0, 24);
+          } catch { /* Diagnostics never change the underlying call outcome. */ }
           const correlation = {
+            ...(inputFingerprint ? { capability_input_fingerprint: inputFingerprint } : {}),
             ...(typeof args?.workspace_id === "string" && args.workspace_id.length <= 512
               ? { workspace_fingerprint: diagnosticFingerprint(args.workspace_id) } : {}),
             ...(typeof args?.operation_id === "string" && args.operation_id.length <= 64

@@ -8,6 +8,7 @@ import type { NativeRequestPrefixSnapshot } from "./native-visible-prefix-checkp
 import { chatGptCheckpointInputTokens, chatGptWebCheckpointSourceTokenLimit } from "@chatgpt-tela/chatgpt";
 import {
  produceNativePrefixCheckpoint, NativePrefixCheckpointInterrupted,
+ parseNativePrefixCheckpointEnvelope,
  type NativeVisiblePrefixStageIdentity, type NativeVisiblePrefixStageReceipt,
  type NativeVisiblePrefixStageJournal, type NativePrefixCheckpointInput,
 } from "./native-visible-prefix-checkpoint";
@@ -49,6 +50,20 @@ function fixture(text='visible prior answer') {
  return {source,input,journal,calls,confirmations:()=>confirmations};
 }
 function payload(request:any){return JSON.parse(request.physicalContext.segments[0].content);}
+
+test('checkpoint envelope parser preserves the summary and rejects malformed protocol metadata',async()=>{
+ const f=fixture();
+ const content=await produceNativePrefixCheckpoint(f.input);
+ const parsed=parseNativePrefixCheckpointEnvelope(content);
+ expect(parsed.summary).toBe('Bounded source-specific derived summary.');
+ expect(parsed.completedStageKey).toMatch(/^native-visible-stage-v2-[a-f0-9]{64}$/);
+ for(const value of [
+  '{}',
+  JSON.stringify({...parsed,completedStageKey:'foreign'}),
+  JSON.stringify({...parsed,sourceDigest:'invalid'}),
+  JSON.stringify({...parsed,summary:''}),
+ ]) expect(()=>parseNativePrefixCheckpointEnvelope(value)).toThrow('Invalid Native prefix checkpoint envelope');
+});
 
 test('admitted preparation reports source role sizes without bodies or extra model work',async()=>{
  const f=fixture();

@@ -91,6 +91,43 @@ export interface NativePrefixCheckpointInput {
 }
 interface Summary { readonly summary: string; readonly stageKey: string }
 
+export interface NativePrefixCheckpointEnvelope {
+  readonly type: "tela_native_request_prefix_checkpoint_v1";
+  readonly sourceDigest: string;
+  readonly completedStageKey: string;
+  readonly sourceItemCount: number;
+  readonly sourceBytes: number;
+  readonly coverage: string;
+  readonly evidence: string;
+  readonly unavailableEvidenceCount: number;
+  readonly semantics: string;
+  readonly summary: string;
+}
+
+/** Parse the one durable checkpoint wire format shared by publication and compaction. */
+export function parseNativePrefixCheckpointEnvelope(content: string): NativePrefixCheckpointEnvelope {
+  const value: unknown = JSON.parse(content);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid Native prefix checkpoint envelope");
+  }
+  const envelope = value as Record<string, unknown>;
+  if (envelope.type !== "tela_native_request_prefix_checkpoint_v1"
+    || typeof envelope.sourceDigest !== "string" || !/^[a-f0-9]{64}$/.test(envelope.sourceDigest)
+    || typeof envelope.completedStageKey !== "string"
+    || !/^native-visible-stage-v2-[a-f0-9]{64}$/.test(envelope.completedStageKey)
+    || (envelope.sourceItemCount !== undefined && (!Number.isSafeInteger(envelope.sourceItemCount) || (envelope.sourceItemCount as number) < 0))
+    || (envelope.sourceBytes !== undefined && (!Number.isSafeInteger(envelope.sourceBytes) || (envelope.sourceBytes as number) < 0))
+    || (envelope.coverage !== undefined && typeof envelope.coverage !== "string")
+    || (envelope.evidence !== undefined && typeof envelope.evidence !== "string")
+    || (envelope.unavailableEvidenceCount !== undefined && (!Number.isSafeInteger(envelope.unavailableEvidenceCount) || (envelope.unavailableEvidenceCount as number) < 0))
+    || (envelope.semantics !== undefined && typeof envelope.semantics !== "string")
+    || typeof envelope.summary !== "string"
+    || !envelope.summary.trim() || Buffer.byteLength(envelope.summary, "utf8") > MAX_SUMMARY_BYTES) {
+    throw new Error("Invalid Native prefix checkpoint envelope");
+  }
+  return envelope as unknown as NativePrefixCheckpointEnvelope;
+}
+
 function context(content: string, revision: string): WebPhysicalContext {
   return Object.freeze({ mode: "full", headRevisionId: revision, activeRequestRevisionId: revision,
     logicalTokens: tokens(content), transferTokens: tokens(content),

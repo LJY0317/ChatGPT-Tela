@@ -49,7 +49,7 @@ import {
   type NativeContinuitySources, type NativeRetainedHistory, type NativeContinuityDecision,
 } from "./native-context-continuity";
 import { boundedWebCheckpointSource } from "./web-checkpoint-source";
-import { produceNativePrefixCheckpoint } from "./native-visible-prefix-checkpoint";
+import { parseNativePrefixCheckpointEnvelope, produceNativePrefixCheckpoint } from "./native-visible-prefix-checkpoint";
 import {
   nativeRequestPrefixSnapshot, selectNativeWorkingCheckpoint,
   workingCheckpointAnchor, withExactCurrentInstructions, nativeWorkingCheckpointScope,
@@ -1374,7 +1374,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           });
           produced = { nativeTaskId: threadId, sourceRevisionId: anchor.revision.id, content: summary };
           if (browserModel) {
-            const value = JSON.parse(summary) as { completedStageKey: string };
+            const value = parseNativePrefixCheckpointEnvelope(summary);
             publication = {
               scopeFingerprint: nativeWorkingCheckpointScope(stageOwner.accountNamespace, threadId, browserModel),
               revisionId: anchor.revision.id, sourceRootDigest: source.digest,

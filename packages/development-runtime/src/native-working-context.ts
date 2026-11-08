@@ -13,6 +13,7 @@ import type {
 import {
   nativePrefixStageContext, produceNativePrefixCheckpoint, type NativeRequestPrefixSnapshot,
   type NativeVisiblePrefixStageJournal, type PublishedNativeWorkingCheckpoint,
+  parseNativePrefixCheckpointEnvelope,
 } from "./native-visible-prefix-checkpoint";
 import type { WebWorkingContextPolicy } from "./web-working-context-policy";
 
@@ -412,12 +413,12 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
     // A provider-generated summary cannot silently expand the rolling working set.
     throw new NativeHistoryBootstrapRequired("source_budget");
   }
-  const parsed = JSON.parse(content) as Record<string, unknown>;
+  const parsed = parseNativePrefixCheckpointEnvelope(content);
   const published = {
     scopeFingerprint: scope!, revisionId: anchor!.revision.id,
     prefixDigest: [...prefixDigests].find(([, index]) => index === anchorIndex)![0],
     reuseScopeFingerprint: reuseScope!,
-    sourceRootDigest: source.digest, stageKey: parsed.completedStageKey as string,
+    sourceRootDigest: source.digest, stageKey: parsed.completedStageKey,
     content, estimatedTokens: tokens(content),
   };
   // The stage journal already contains a completed summary. Atomically publish its
