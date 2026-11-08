@@ -3,6 +3,14 @@
   "candidateBranch": "agent/app-owned-assembly-acceptance-20261107",
   "baseline": "ecdf887b",
   "scope": "Isolated app-owned integration candidate; no consumer installation or provider selection change",
+  "nov08SourceIntegration": {
+    "basis": "2dc335af (clean before C integration)",
+    "selectedProfileConfigure": "a4c2123e: --enable-app-owned-desktop --slot N validates an explicitly selected managed Plura target and generates a distinct private route; no automatic migration",
+    "engineFreeSparkleFixture": "2dc335af: isolated source rollback and setting-preservation fixture; existing build-7 package does not include it",
+    "providerControl": "a83d127e..801405d8 final net controller + focused fixture; intermediate b687912a alone is not the accepted gate; a219564d limits named-profile ambiguity to Tela selection",
+    "selectionBoundary": "config.toml is a conservative maintenance gate, not evidence of an already-running Desktop's provider or session override",
+    "distribution": "SOURCE ONLY; build-7 c4c7b38f (ad-hoc, 378M, synthetic feed) predates a4c2123e, 2dc335af and provider control integration; rebuild, re-sign, keychain and install not performed"
+  },
   "included": {
     "desktopCatalogAndProviderRegistration": "1827459d",
     "catalogUninstallCleanup": "6da82bdf",
@@ -27,6 +35,7 @@
     "reconciledIntoCandidate": ["27863aba", "e6506d4d", "7ea5dc82"]
   },
   "verification": {
+    "nov08ProviderControl": "focused app-owned-profile fixture: 5 pass, 1 intentionally skipped, 92 assertions; tsc --noEmit passed; local available Bun 1.4.0, not requested 1.4.4; synthetic only, no live Desktop/account acceptance",
     "typecheck": "passed after A/B/D integration and acceptance fixture change",
     "priorCandidateTests": "b09fe4a7: 113 related tests plus 26 corrected-boundary tests passed",
     "changedBoundaryTests": "selected packaged launcher, service shutdown, app-owned producer, browser diagnostics and Codex profile tests passed; lifecycle 2 passed after the ownership-error expectation was reconciled",
@@ -41,5 +50,5 @@
     "integratedConfiguration": "lifecycle isolated explicit optional adapter preservation passed"
   },
   "releaseReadiness": "isolated macOS arm64 candidate built and verified before installation; no actual Desktop/account acceptance, consumer install, Developer ID signing, notarization or public feed",
-  "remaining": ["Current installed Native-first configuration must retain 83323f73 until explicit app-owned selection and verified account/Desktop acceptance are authorized.", "Optional slot 2 requires a detected managed Plura target, its independent configured appOwnedResponses entry and explicit provider selection; packaged enable flag provisions only slot 1.", "Apple-trusted distribution requires Developer ID signing, notarization and a real update feed; other platform packaging and consumer install/upgrade/uninstall acceptance remain separate."]
+  "remaining": ["Current installed Native-first configuration must retain 83323f73 until explicit app-owned selection and verified account/Desktop acceptance are authorized.", "Optional slot 2 requires a detected managed Plura target and explicit --enable-app-owned-desktop --slot 2; packaged configure now provisions its independent private route, without automatically selecting the provider or migrating Native settings.", "Pure-provider opt-in is distinct from a complete Native replacement: original history and exact Desktop turn activity/cancellation are not accepted; real account/Desktop selection remains untested.", "Four-writer final source reconciliation and one later package/signature verification belong to the root owner, not this source-only integration.", "Apple-trusted distribution requires Developer ID signing, notarization and a real update feed; other platform packaging and consumer install/upgrade/uninstall acceptance remain separate."]
 }

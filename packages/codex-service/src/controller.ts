@@ -4,7 +4,10 @@ import { ProfileConnectionError, ProfileStartIntentConflictError, type ProfileCo
 import { parseCodexTerminalSessionContract, type CodexTerminalSessionContract } from "@chatgpt-tela/service-protocol";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Readable } from "node:stream";
+import { resolveDefaultDesktopInstallation, TELA_APP_OWNED_PROVIDER_ID } from "@chatgpt-tela/default-desktop-target";
 import {
   connectCodexTurnBridge,
   type RemoteTurnBridge,
@@ -56,6 +59,42 @@ export interface CodexServiceConfig {
     readonly port: number;
     readonly capability: string;
   }[];
+}
+
+export type AppOwnedProviderSelection = "selected" | "unselected" | "unknown";
+
+/** Only the user-level default is authoritative; a named profile may be active independently. */
+export function appOwnedProviderSelectionFromConfig(content: string | undefined): AppOwnedProviderSelection {
+  if (content === undefined) return "unselected";
+  try {
+    const config = Bun.TOML.parse(content) as Record<string, unknown>;
+    if (config.model_provider === TELA_APP_OWNED_PROVIDER_ID) return "selected";
+    if (config.model_provider !== undefined && typeof config.model_provider !== "string") return "unknown";
+    const profiles = config.profiles;
+    if (profiles === undefined) return "unselected";
+    if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) return "unknown";
+    // The official Desktop's active named profile is not exposed by the
+    // process adapter. Only a named profile that selects Tela makes this
+    // effective provider unknown; unrelated named profiles remain independent.
+    for (const profile of Object.values(profiles)) {
+      if (!profile || typeof profile !== "object" || Array.isArray(profile)) return "unknown";
+      const provider = (profile as Record<string, unknown>).model_provider;
+      if (provider === TELA_APP_OWNED_PROVIDER_ID) return "unknown";
+      if (provider !== undefined && typeof provider !== "string") return "unknown";
+    }
+    return "unselected";
+  } catch {
+    return "unknown";
+  }
+}
+
+function readAppOwnedProviderSelection(environment?: Readonly<Record<string, string | undefined>>): AppOwnedProviderSelection {
+  try {
+    const installation = resolveDefaultDesktopInstallation(environment ? { environment } : {});
+    return appOwnedProviderSelectionFromConfig(readFileSync(join(installation.codexHome, "config.toml"), "utf8"));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "unselected" : "unknown";
+  }
 }
 
 export interface CodexProfileStatus {
@@ -358,6 +397,8 @@ export async function startCodexService(input: {
   /** Re-read user-controlled profile preferences at each profile start without restarting the Codex service. */
   readonly profileRuntimeEnvironment?: (slot: number) => Readonly<Record<string, string | undefined>>;
   readonly nativeTargetAdapter?: CodexNativeTargetAdapter;
+  /** Testable read of the existing official provider selection; production reads config.toml. */
+  readonly appOwnedProviderSelection?: () => AppOwnedProviderSelection;
   readonly onProfileConnectionChanged?: (targetId: string, enabled: boolean) => void;
   readonly webDelegationCapacity?: (slot: number) => { readonly total: { readonly used: number }; readonly uncertain: number }
     | Promise<{ readonly total: { readonly used: number }; readonly uncertain: number }>;
@@ -373,6 +414,7 @@ export async function startCodexService(input: {
       multiProfile: new MultiProfileNativeTargetAdapter({ launcherCli: input.config.multiProfile.launcherCli }),
     } : {}),
   });
+  const providerSelection = input.appOwnedProviderSelection ?? (() => readAppOwnedProviderSelection(input.environment));
   const routedBridge = new RoutedCodexTurnBridge();
   const owned = new Map<number, OwnedProfile>();
   const appOwnedIngress = (slot: number) => input.config.appOwnedResponses?.find(profile => profile.slot === slot);
@@ -414,6 +456,14 @@ export async function startCodexService(input: {
     return targets.resolve(slot, input.signal);
   };
 
+  const appOwnedDesktopBlocksShutdown = async (
+    profile: OwnedProfile, signal?: AbortSignal, observedSession?: CodexNativeTargetSession,
+  ): Promise<boolean> => {
+    if (profile.cleanupAcknowledged || profile.mode !== "app-owned" || profile.target.adapterKind !== "default-desktop") return false;
+    const session = observedSession ?? await targets.session(profile.target.id, signal);
+    return session.state !== "available" && providerSelection() !== "unselected";
+  };
+
   const interruptNativeTurns = async (slot: number, session: CodexNativeTargetSession): Promise<void> => {
     emitDiagnosticEvent("chatgpt_tela_codex", "profile_native_work_settlement", { slot, endpoint_available: !!session.endpoint });
     if (!session.endpoint) return;
@@ -435,10 +485,14 @@ export async function startCodexService(input: {
     };
     if ((!duringStop && (profile.stopping || stoppingProfiles.has(profile.slot) || starting.has(profile.slot)))
       || profile.child.exitCode !== null || profile.child.signalCode !== null) return blocked("profile_transition");
-    // Readiness belongs to this owned runtime, not a replacement Desktop.
-    // stopOwned/runtime cleanup separately prove ownership before quitting an app.
-    // The built-in Desktop adapter reports process identity, not the routed
-    // app-server. Use the same owned endpoint as terminalSession for all targets.
+    // An independent Desktop process is harmless while the Tela provider is
+    // unselected. A selected/ambiguous provider may still own a Native turn
+    // between Responses requests, which the app-owned route cannot observe.
+    try {
+      if (await appOwnedDesktopBlocksShutdown(profile, signal)) return blocked("native_activity_unobservable");
+    } catch {
+      return blocked("desktop_activity_unobservable");
+    }
     if (profile.mode === "managed") {
     const session = await targets.session(profile.target.id, signal);
     try {
@@ -485,7 +539,12 @@ export async function startCodexService(input: {
     profile.stopping = (async () => {
       // Startup cancellation must not cancel normal cleanup of already-owned resources.
       const session: CodexNativeTargetSession = profile.mode === "app-owned"
-        ? { targetId: profile.target.id, state: "independent" } : await targets.session(profile.target.id);
+        && profile.target.adapterKind !== "default-desktop"
+        ? { targetId: profile.target.id, state: "independent" }
+        : await targets.session(profile.target.id);
+      if (await appOwnedDesktopBlocksShutdown(profile, undefined, session)) {
+        throw new Error("Official Desktop may still be using the selected Tela provider; finish its Native work before stopping the provider");
+      }
       const ownsTargetRoute = profile.mode === "managed" && ownsNativeTargetSession(profile.target, session, profile);
       if (ownsTargetRoute && profile.target.adapterKind === "multi-profile") {
         phase = "native_work_settlement";
@@ -613,7 +672,18 @@ export async function startCodexService(input: {
         if (starting.size > 0 || stopping || stoppingProfiles.size > 0) throw new CodexShutdownNotStartedError();
         for (const profile of owned.values()) {
           if (stopping || profile.stopping) throw new CodexShutdownNotStartedError();
-          if (profile.mode === "app-owned") continue;
+          if (profile.mode === "app-owned") {
+            slot = profile.slot; phase = "native_activity";
+            if (await appOwnedDesktopBlocksShutdown(profile, observation)) throw new CodexShutdownNotStartedError();
+            phase = "web_preparation";
+            const response = await fetch(new URL("v1/web-state?wait=1", profile.bridgePreviewUrl), {
+              headers: { authorization: `Bearer ${profile.uiToken}` }, timeout: false,
+              ...(observation ? { signal: observation } : {}),
+            });
+            if (!response.ok || owned.get(profile.slot) !== profile) throw new CodexShutdownNotStartedError();
+            await response.body?.cancel();
+            continue;
+          }
           slot = profile.slot; phase = "native_ownership";
           const session = await targets.session(profile.target.id, observation);
           phase = "native_completion";

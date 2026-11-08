@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
-import { startCodexService } from "./controller";
+import { appOwnedProviderSelectionFromConfig, startCodexService } from "./controller";
 import { startCodexServiceHttpServer } from "./http-server";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "../../product-lifecycle/src/index";
 import { appOwnedDesktopCatalogPath, readPreparedAppOwnedDesktopCatalog } from "../../development-runtime/src/app-owned-desktop-catalog";
@@ -25,7 +25,7 @@ test("app-owned parent restarts an idle provider on its fixed Responses route wi
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-parent-"));
   const state = join(root, "state.json");
   const receipts = join(root, "receipts.txt");
-  writeFileSync(state, JSON.stringify({ busy: false }));
+  writeFileSync(state, JSON.stringify({ busy: false, desktopRunning: false }));
   writeFileSync(receipts, "");
   const portOwner = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 404 }) });
   const ingress = { slot: 1, port: portOwner.port!, capability: "g".repeat(48) };
@@ -53,14 +53,19 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
   const built = await Bun.build({ entrypoints: [child], target: "bun", outdir: root, naming: "child.mjs" });
   expect(built.success).toBe(true);
   let nativeCalls = 0, delegationCalls = 0;
+  let providerSelection: "selected" | "unselected" | "unknown" = "unselected";
   const forbidden = async (): Promise<never> => { nativeCalls++; throw Error("Official Desktop is not owned"); };
   const adapter: CodexNativeTargetAdapter = {
-    kind: "default-desktop", profiles: forbidden, resolve: forbidden, session: forbidden, quit: forbidden,
+    kind: "default-desktop", profiles: forbidden, resolve: forbidden,
+    async session(targetId) { if (targetId !== "default") throw Error("foreign target");
+      return { targetId, state: JSON.parse(readFileSync(state, "utf8")).desktopRunning ? "restart-required" : "available" }; },
+    quit: forbidden,
     profileRuntimeEnvironment: () => ({ FIXTURE_STATE: state, FIXTURE_RECEIPTS: receipts,
       FIXTURE_RESPONSES: `http://127.0.0.1:${ingress.port}/${ingress.capability}/v1/` }),
   };
   const service = await startCodexService({ config: { appOwnedResponses: [ingress] },
     nativeTargetAdapter: adapter, profileRuntimeCommand: [process.execPath, join(root, "child.mjs")],
+    appOwnedProviderSelection: () => providerSelection,
     webDelegationCapacity: async () => { delegationCalls++; return { total: { used: 1 }, uncertain: 1 }; } });
   const routed = service.tools as RoutedCodexTurnBridge;
   const http = await startCodexServiceHttpServer({ service });
@@ -91,6 +96,25 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     await service.waitForShutdownReadiness();
     await update.prepare("codex");
     await update.wait("codex");
+    // A running Desktop that is using its independent Native provider does not
+    // depend on Tela and must not block Tela provider maintenance.
+    writeFileSync(state, JSON.stringify({ busy: false, desktopRunning: true }));
+    expect(await service.shutdownReadiness()).toBe("ready");
+    await update.prepare("codex");
+    await update.wait("codex");
+    await service.waitForShutdownReadiness();
+    expect(await service.stopProfile(1)).toMatchObject({ controlState: "stopped" });
+    expect(readFileSync(receipts, "utf8")).toBe("1");
+    await service.startProfile(1);
+    providerSelection = "selected";
+    expect(await service.shutdownReadiness()).toBe("blocked");
+    await expect(update.prepare("codex")).rejects.toThrow();
+    await expect(update.wait("codex")).rejects.toThrow();
+    await expect(service.waitForShutdownReadiness()).rejects.toThrow();
+    await expect(service.stopProfile(1)).rejects.toThrow("may still be using the selected Tela provider");
+    providerSelection = "unselected";
+    writeFileSync(state, JSON.stringify({ busy: false, desktopRunning: false }));
+    expect(await service.shutdownReadiness()).toBe("ready");
     writeFileSync(state, JSON.stringify({ busy: true }));
     expect(await service.shutdownReadiness()).toBe("blocked");
     await expect(update.prepare("codex")).rejects.toThrow();
@@ -102,7 +126,7 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     expect(await client.profiles()).toContainEqual(expect.objectContaining({
       slot: 1, controlState: "stopped", targetSessionState: "available",
     }));
-    expect(readFileSync(receipts, "utf8")).toBe("1");
+    expect(readFileSync(receipts, "utf8")).toBe("11");
     expect(routed.routeCount).toBe(0);
     const restarted = await service.startProfile(1);
     expect(restarted).toMatchObject({ slot: 1, controlState: "running", webModelsReady: true,
@@ -113,18 +137,28 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     expect(await service.shutdownReadiness()).toBe("ready");
     expect(await service.stopProfile(1)).toMatchObject({ controlState: "stopped" });
     expect(routed.routeCount).toBe(0);
-    expect(readFileSync(receipts, "utf8")).toBe("11");
+    expect(readFileSync(receipts, "utf8")).toBe("111");
     writeFileSync(state, JSON.stringify({ busy: false, badExit: true }));
     await service.startProfile(1);
     await expect(service.stopProfile(1)).rejects.toThrow("did not exit successfully");
     expect(service.activeProfileCount).toBe(1);
-    expect(readFileSync(receipts, "utf8")).toBe("111");
+    expect(readFileSync(receipts, "utf8")).toBe("1111");
     await expect(service.stopProfile(1)).rejects.toThrow("did not exit successfully");
-    expect(readFileSync(receipts, "utf8")).toBe("111");
+    expect(readFileSync(receipts, "utf8")).toBe("1111");
     expect(service.activeProfileCount).toBe(1);
     expect(nativeCalls).toBe(0);
     expect(delegationCalls).toBe(0);
   } finally { await http.close(); await service.close().catch(() => {}); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("provider selection parser distinguishes independent, selected and ambiguous profile state", () => {
+  expect(appOwnedProviderSelectionFromConfig('model_provider = "openai"\n')).toBe("unselected");
+  expect(appOwnedProviderSelectionFromConfig('model_provider = "chatgpt_tela_local"\n')).toBe("selected");
+  expect(appOwnedProviderSelectionFromConfig('[profiles.work]\nmodel_provider = "chatgpt_tela_local"\n')).toBe("unknown");
+  expect(appOwnedProviderSelectionFromConfig('[profiles.work]\nmodel_provider = "openai"\n')).toBe("unselected");
+  expect(appOwnedProviderSelectionFromConfig('profiles = []\n')).toBe("unknown");
+  expect(appOwnedProviderSelectionFromConfig('model_provider = [\n')).toBe("unknown");
+  expect(appOwnedProviderSelectionFromConfig(undefined)).toBe("unselected");
 });
 
 test("app-owned primary keeps managed optional profiles in the inventory", async () => {
@@ -267,12 +301,15 @@ await preview.close();lifecycle.dispose();
   let nativeCalls = 0, managedDelegations = 0;
   const forbidden = async (): Promise<never> => { nativeCalls++; throw Error("Official Desktop is not owned"); };
   const adapter: CodexNativeTargetAdapter = {
-    kind: "default-desktop", profiles: forbidden, resolve: forbidden, session: forbidden, quit: forbidden,
+    kind: "default-desktop", profiles: forbidden, resolve: forbidden,
+    async session(targetId) { return { targetId, state: "available" }; },
+    quit: forbidden,
     profileRuntimeEnvironment: () => ({}),
   };
   const service = await startCodexService({
     config: { appOwnedResponses: [ingress] },
     nativeTargetAdapter: adapter,
+    appOwnedProviderSelection: () => "unselected",
     profileRuntimeCommand: [process.execPath, join(root, "assembly-child.mjs")],
     environment: {
       CHATGPT_TELA_PROFILE_ROOT: join(root, "profiles"),

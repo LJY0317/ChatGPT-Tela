@@ -135,9 +135,10 @@ Thus the routed command is not a usable macOS preview or apply path. The
 isolated whole-payload lifecycle upgrade tests use a Linux fixture. For an
 existing app-bundle installation, Sparkle owns app replacement and relaunch;
 Tela's separate `application-update wait/prepare/finish/cancel` handshake only
-settles owned services and update metadata. A previous split-payload install
-requires its **old owner's keep-data removal** followed by a new app install,
-as described in [upgrade recovery](upgrade-recovery.md#macos-updates-through-sparkle).
+settles owned services and update metadata. A separately verified legacy
+split-payload install requires its own owning lifecycle; the recorded current
+installation is an app bundle and **does not require** a keep-data uninstall.
+See [upgrade recovery](upgrade-recovery.md#macos-updates-through-sparkle).
 Neither route has been exercised against the live installed baseline. Build 7
 has a synthetic version, ad-hoc signature and test feed, so it is not an
 approved public Sparkle update or an accepted production installer.
@@ -150,11 +151,11 @@ For a supervised transition after release acceptance:
    official Codex config. Check the old installation format and the owning
    lifecycle's **read-only** removal/installation previews. Do not apply an
    update if the recoverable source or task settlement is uncertain.
-2. Use only the lifecycle appropriate to the verified source format. For an old
-   split-payload installation, stage its independent owned uninstaller and use
-   keep-data `uninstall --apply`, then the new signed bundle's `install --apply`
-   after reviewing its `install --dry-run`. For an existing app bundle, use a
-   valid signed Sparkle feed/update and its standard maintenance handshake.
+2. Use only the lifecycle appropriate to the verified source format. The
+   recorded installation is an app bundle: use a valid signed Sparkle
+   feed/update and its standard maintenance handshake. Only a separately
+   proven legacy split-payload installation would require its own keep-data
+   owner-controlled removal, followed by a new signed install and dry-run.
    Do not invoke macOS `upgrade`, restore an old legacy updater or treat the
    synthetic build-7 label as a release number.
 3. Before reconnecting Work, run the **newly installed** launcher's
@@ -183,7 +184,13 @@ use the preserved source with the **owning** restore/removal/install lifecycle;
 `application-update cancel` is valid only while the unchanged signed source
 remains. Preserve uncertain transition journals and work state for settlement.
 No live dry-run, apply, account change or Desktop restart was performed in this
-handoff. The local candidate's source/package receipt is
+handoff. Current source gates provider maintenance when a running official
+Desktop may have selected Tela, but does not block an unrelated provider merely
+because Desktop is running. User-level config alone cannot prove an
+already-running session's selection or its overrides; provider-only installation
+is distinct from complete Native replacement. The earlier build-7 package does
+not contain this guard, explicit multi-slot configure or later source changes.
+Its source/package receipt is
 `build/nov08-transition-handoff/final-candidate-manifest.json` in this checkout.
 
 An additional isolated official engine run used this repository's exact

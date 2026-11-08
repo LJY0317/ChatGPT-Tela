@@ -55,23 +55,21 @@ catalog in an empty isolated home. The existing managed launch already
 combines that catalog with dynamic Web family discovery and writes a temporary
 `model_catalog_json` before starting the engine
 (`readDefaultDesktopNativeCatalog` and `startDefaultDesktopTargetRuntime`).
-The app-owned production starter in
-`packages/development-runtime/src/product-profile.ts` currently exposes
-only its Responses URL; it has no installation-owned catalog preparation or
-official-engine launch configuration contract. Integrating the existing
-prelaunch catalog preparation into the app-owned Desktop owner is still
-required. The isolated official 0.167 fixture now also reads the full Native
+The installed app-owned profile runtime now prepares an installation-owned
+Native+Web catalog after current account-bound discovery, and the packaged
+provider registration editor can explicitly install its owned top-level
+`model_catalog_json` reference without selecting a provider. This production
+source path does not prove a live Desktop reload or account acceptance.
+The isolated official 0.167 fixture also reads the full Native
 catalog from `codex debug models` in an empty home, merges discovered Web
 families using `augmentNativeCodexModelCatalog`, and starts the official
 app-server using the resulting catalog; Web and Native model selection and
 the original Native tool roundtrip succeed. These are existing assembly
-functions, but the production installation/launch connection remains absent.
-Its input must be the verified Native discovery and current
-account-bound Web families, and its output must be an owned catalog path
-provided to the official engine before the first model list. On restart, the
-owner must rebuild the projection from current discovery; Native entries must
-survive a later Web discovery failure. This requires coordination with the
-provider configuration and product runtime owners. The isolated fixture
+functions, and the production producer/registration path is implemented.
+Its input is the verified Native discovery and current account-bound Web
+families, and its output is an owned catalog path referenced by the official
+engine at startup. A running Desktop is not proved to reload it; Native entries
+must survive a later Web discovery failure. The isolated fixture
 proves that a restart with a generated catalog makes both model choices
 visible and that a later provider `/models` failure does not remove the
 already-admitted Native model. It does not prove live official Desktop picker
@@ -139,11 +137,33 @@ WebSocket-to-HTTP negotiation; no separate authentication server is introduced.
 Request metadata supplies correlation only. Duplicate observers join the same
 operation, completed results can be collected again, and superseded operations
 cannot be replayed within the existing seven-day idle retention period. A lost
-HTTP observer does not cancel or restart Web execution. Exact Goal control,
-omitted-history retrieval, Native Stop and update-time activity admission still
-need supported owner contracts. An empty Native registry is not evidence of an
-idle Desktop. Do not claim these capabilities, discard opaque history or switch
-the installed launcher before the remaining lifecycle boundaries are accepted.
+HTTP observer does not cancel or restart Web execution. The supplied app-owned
+gateway can relay **only** the exact host-advertised `get_goal` / `update_goal`
+functions over its authenticated bridge and return their supplied results;
+synthetic Goal roundtrip is not account-backed acceptance or general Native
+tool authority. Its request metadata grants neither original Native history
+readback nor exact Native Stop: `read_context_history` needs the original
+owner-bound turn/history source, and HTTP disconnect does not interrupt an
+accepted Web operation. Do not infer these contracts from request IDs.
+
+The app-owned shutdown controller verifies the child Web activity separately
+from official Desktop Native activity. Its default Desktop adapter observes
+process presence, **not** active Native turns. When the Desktop is running,
+shutdown/stop/update stays blocked if user-level `config.toml` selects the
+Tela provider at the root or might select it through a named profile, or if
+configuration is unreadable/ambiguous. A valid configuration using unrelated
+providers does not block maintenance merely because Desktop is running.
+This selection check does not establish session overrides or the provider
+chosen by an already-running Desktop; it is a conservative maintenance gate,
+not proof of Native idleness. An absent config is treated as unselected.
+
+**GO for a separately opted-in pure-provider installation candidate** means
+the app-owned Responses route can be configured and registered without
+replacing the default Native provider or depending on optional Plura.
+**NO-GO for full Native replacement** remains: original Native history,
+exact Desktop turn activity/cancellation and installed Desktop/account
+acceptance are unproven. Synthetic Web/Goal and official-engine fixtures
+do not authorize a live install, provider switch or source migration.
 
 ## Accepted, owned operation
 
