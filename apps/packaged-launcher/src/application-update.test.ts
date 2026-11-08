@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   applyPackagedInstallFromPayload, macApplicationUpdatePath, packagedProductManifestPath,
-  PackagedServiceShutdownNotStartedError, planPackagedInstallFromPayload, readMacApplicationUpdate,
+  nativeEngineFileSha256, nativeEngineHelperName, PackagedServiceShutdownNotStartedError,
+  planPackagedInstallFromPayload, readMacApplicationUpdate,
   readOwnershipManifest, prepareOwnedDirectory, type TelaServiceId,
 } from "@chatgpt-tela/product-lifecycle";
 import { LaunchdUpgradeRunner } from "../../../tests/support/launchd-upgrade-runner";
@@ -19,13 +20,23 @@ const needsFixtureUid = typeof process.getuid !== "function";
 beforeAll(() => { if (needsFixtureUid) Object.defineProperty(process, "getuid", { value: () => 501, configurable: true }); });
 afterAll(() => { if (needsFixtureUid) Reflect.deleteProperty(process, "getuid"); });
 
-async function fixture(root: string, application = true) {
+async function fixture(root: string, application = true, nativeEngine = false) {
   const path = (value: string) => application ? value : value.replace(/^Contents\//, "");
   const source = join(root, "source.app"), home = join(root, "home");
+  const nativePath = path("Contents/Helpers/native-engine/codex");
+  if (nativeEngine) {
+    mkdirSync(dirname(join(source, nativePath)), { recursive: true });
+    writeFileSync(join(source, nativePath), "fixture native executable", { mode: 0o755 });
+    writeFileSync(join(dirname(join(source, nativePath)), nativeEngineHelperName("darwin")), "fixture native helper", { mode: 0o755 });
+  }
   const manifest = { version: 1, product: "chatgpt-tela", productVersion: "1.0.0",
     launcher: { executable: path("Contents/MacOS/chatgpt-tela") }, menuBar: { executable: path("Contents/MacOS/chatgpt-tela-menu-bar") },
     profileRuntime: { executable: path("Contents/Frameworks/Electron.app/Contents/MacOS/Electron"), entrypoint: path("Contents/Resources/runtime.js") },
-    services: Object.fromEntries(["gateway", "chat", "codex"].map(id => [id, { executable: path(`Contents/Helpers/${id}`), arguments: [] }])) };
+    services: Object.fromEntries(["gateway", "chat", "codex"].map(id => [id, { executable: path(`Contents/Helpers/${id}`), arguments: [] }])),
+    ...(nativeEngine ? { nativeEngine: { executable: nativePath, version: "0.159.0",
+      sha256: nativeEngineFileSha256(join(source, nativePath)), platform: "darwin" as const, architecture: process.arch,
+      upstreamCommit: "a".repeat(40), patchSha256: "b".repeat(64), capabilities: ["model-local-compaction-v1"] } } : {}),
+  };
   const files = [manifest.launcher.executable, manifest.menuBar.executable, manifest.profileRuntime.executable,
     manifest.profileRuntime.entrypoint, ...Object.values(manifest.services).map(service => service.executable)];
   for (const file of files) { mkdirSync(dirname(join(source, file)), { recursive: true }); writeFileSync(join(source, file), "fixture", { mode: 0o755 }); }
@@ -104,10 +115,10 @@ test("Sparkle replacement restores only prior running services and promotes exte
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("Sparkle update and source restoration preserve installed app-owned profile routes", async () => {
+test("Sparkle source rollback and engine-free replacement preserve app-owned profile routes", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-app-owned-config-"));
   try {
-    const f = await fixture(root);
+    const f = await fixture(root, true, true);
     const launcherCli = join(root, "plura-desktop");
     writeFileSync(launcherCli, "fixture");
     const configPath = join(f.paths.configRoot, "product-v1.json");
@@ -124,18 +135,35 @@ test("Sparkle update and source restoration preserve installed app-owned profile
     };
     writeProductConfig(config, configPath);
     const originalConfig = readFileSync(configPath);
+    const originalInstallId = readOwnershipManifest(f.paths.installManifest)!.installId;
 
     await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" });
     expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: false, prepared: true });
     expect(await runApplicationUpdate("cancel", f.input)).toMatchObject({ ready: true, restored: true });
     expect(readFileSync(configPath)).toEqual(originalConfig);
+    expect(existsSync(join(f.sourceRoot, f.manifest.nativeEngine!.executable))).toBe(true);
+    expect(readOwnershipManifest(f.paths.installManifest)?.productVersion).toBe("1.0.0");
+    expect(readOwnershipManifest(f.paths.installManifest)?.installId).toBe(originalInstallId);
+    expect(f.runner.jobs.get("com.openai.chatgpt-tela.chat")?.running).toBe(true);
+    expect(f.runner.jobs.get("com.openai.chatgpt-tela.gateway")?.running).toBe(true);
 
     await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" });
     expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: false, prepared: true });
-    writeFileSync(packagedProductManifestPath(f.sourceRoot), JSON.stringify({ ...f.manifest, productVersion: "2.0.0" }));
+    const { nativeEngine: _nativeEngine, ...engineFreeManifest } = f.manifest;
+    writeFileSync(packagedProductManifestPath(f.sourceRoot), JSON.stringify({ ...engineFreeManifest, productVersion: "2.0.0" }));
+    rmSync(join(f.sourceRoot, "Contents/Helpers/native-engine"), { recursive: true });
     writeFileSync(join(f.sourceRoot, "Contents/Resources/build.txt"), "2");
     expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true, restored: true, productVersion: "2.0.0" });
     expect(readFileSync(configPath)).toEqual(originalConfig);
+    expect(readOwnershipManifest(f.paths.installManifest)?.productVersion).toBe("2.0.0");
+    expect(readOwnershipManifest(f.paths.installManifest)?.installId).toBe(originalInstallId);
+    expect(JSON.parse(readFileSync(packagedProductManifestPath(f.sourceRoot), "utf8")).nativeEngine).toBeUndefined();
+    expect(verifyInstalledPackage({ payloadRoot: f.sourceRoot, pathOptions: f.input.options }).receipt.productVersion).toBe("2.0.0");
+    expect(existsSync(join(f.sourceRoot, "Contents/Helpers/native-engine"))).toBe(false);
+    expect(f.runner.jobs.get("com.openai.chatgpt-tela.chat")?.running).toBe(true);
+    expect(f.runner.jobs.get("com.openai.chatgpt-tela.gateway")?.running).toBe(true);
+    expect(f.runner.jobs.get("com.openai.chatgpt-tela.codex")?.running).toBe(false);
+    expect(existsSync(macApplicationUpdatePath(f.paths))).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
