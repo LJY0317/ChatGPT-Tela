@@ -158,8 +158,8 @@ export function parseProductConfig(value: unknown): ProductConfig {
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("app-owned Responses entry is invalid");
       const entry = value as Record<string, unknown>;
       exactFields(entry, ["slot", "port", "capability"], "app-owned Responses entry");
-      if (entry.slot !== 1) {
-        throw new Error("app-owned Responses currently supports only the independent default Desktop slot 1");
+      if (!Number.isSafeInteger(entry.slot) || (entry.slot as number) < 1 || (entry.slot as number) > 99) {
+        throw new Error("app-owned Responses slot must be an integer from 1 to 99");
       }
       const responsePort = port(entry.port, "app-owned Responses port");
       if (slots.has(entry.slot as number) || ports.has(responsePort)) {
@@ -172,6 +172,9 @@ export function parseProductConfig(value: unknown): ProductConfig {
       ports.add(responsePort);
       return Object.freeze({ slot: entry.slot as number, port: responsePort, capability: entry.capability });
     }));
+    if (appOwnedResponses.some(profile => profile.slot > 1) && !multiProfile) {
+      throw new Error("additional app-owned Responses profiles require the optional Multi-Profile adapter");
+    }
   }
   return Object.freeze({
     version: 1,

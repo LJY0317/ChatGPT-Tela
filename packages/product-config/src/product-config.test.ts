@@ -86,6 +86,29 @@ describe("product-native config", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  test("additional app-owned routes require the optional adapter and retain distinct slots and ports", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-product-config-app-owned-profiles-"));
+    const launcher = join(root, "plura");
+    writeFileSync(launcher, "fixture");
+    const base = {
+      version: 1,
+      publicMcpAbi: "stable",
+      exposure: { kind: "existing-https", publicUrl: "https://example.invalid/mcp", localPort: 18743,
+        authentication: "none", allowUnauthenticatedPublicEndpoint: true },
+    } as const;
+    const routes = [
+      { slot: 1, port: 18744, capability: "a".repeat(48) },
+      { slot: 2, port: 18745, capability: "b".repeat(48) },
+    ];
+    try {
+      expect(() => parseProductConfig({ ...base, appOwnedResponses: routes })).toThrow("optional Multi-Profile adapter");
+      expect(parseProductConfig({ ...base, multiProfile: { launcherCli: launcher }, appOwnedResponses: routes })
+        .appOwnedResponses).toEqual(routes);
+      expect(() => parseProductConfig({ ...base, multiProfile: { launcherCli: launcher },
+        appOwnedResponses: [routes[0]!, { ...routes[1]!, slot: 99 }] })).not.toThrow();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("config file itself must be a regular non-symlink file", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-product-config-file-"));
     const path = join(root, "product-v1.json");

@@ -59,6 +59,7 @@ test("app-owned configuration refuses public MCP port reuse, duplicate slots, an
   const entry = { slot: 1, port: 18744, capability: "a".repeat(48) };
   expect(() => parseProductConfig({ ...base, appOwnedResponses: [{ ...entry, port: 18743 }] })).toThrow("distinct");
   expect(() => parseProductConfig({ ...base, appOwnedResponses: [entry, entry] })).toThrow("distinct");
-  expect(() => parseProductConfig({ ...base, appOwnedResponses: [{ ...entry, slot: 2 }] })).toThrow("slot 1");
+  expect(() => parseProductConfig({ ...base, appOwnedResponses: [{ ...entry, slot: 2 }] }))
+    .toThrow("optional Multi-Profile adapter");
   expect(() => parseProductConfig({ ...base, appOwnedResponses: [{ ...entry, capability: "short" }] })).toThrow("secret");
 });

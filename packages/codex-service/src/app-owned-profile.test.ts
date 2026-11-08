@@ -18,6 +18,7 @@ import { bindChatGptTelaAccount } from "../../development-runtime/src/browser-pr
 import { createSuppliedRequestGateway } from "../../development-runtime/src/supplied-request-gateway";
 import { startLocalResponsesServer } from "../../local-server/src/server";
 import { encodeNativeResponsesOutcome, nativeResponsesSsePlan } from "@chatgpt-tela/responses";
+import type { CodexNativeTarget, CodexNativeTargetSession } from "./native-target";
 
 test("app-owned parent restarts an idle provider on its fixed Responses route without owning the Desktop", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-parent-"));
@@ -677,3 +678,64 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
     rmSync(root, { recursive: true, force: true });
   }
 }, 90_000);
+test("app-owned managed profiles are discovered, started and stopped independently by the parent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-app-owned-multi-parent-"));
+  const state = [1, 2].map(slot => join(root, `state-${slot}.json`));
+  state.forEach(path => writeFileSync(path, JSON.stringify({ busy: false })));
+  const ports = [1, 2].map(() => Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 404 }) }));
+  const ingress = ports.map((server, index) => ({ slot: index + 1, port: server.port!, capability: String(index + 1).repeat(48) }));
+  await Promise.all(ports.map(server => server.stop()));
+  const child = join(root, "child.ts");
+  writeFileSync(child, `
+import {createProfileSupervisorLifecycle} from ${JSON.stringify(resolve(import.meta.dir, "../../../apps/profile-runtime/src/supervision.ts"))};
+import {startProfileBridgePreviewServer} from ${JSON.stringify(resolve(import.meta.dir, "../../../apps/profile-runtime/src/bridge-preview-server.ts"))};
+import {startCodexBridgeMcpHttpServer} from ${JSON.stringify(resolve(import.meta.dir, "../../mcp/src/http-server.ts"))};
+import {readFileSync} from 'node:fs';
+const slot=Number(process.env.CHATGPT_TELA_PRODUCT_PROFILE_SLOT),lifecycle=await createProfileSupervisorLifecycle();
+const mcp=await startCodexBridgeMcpHttpServer({bridge:{inventory(){return []},async invoke(){throw Error('unused')}},authentication:{kind:'bearer',token:process.env.CHATGPT_TELA_PRODUCT_INTERNAL_MCP_TOKEN}});
+const busy=()=>JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).busy;
+const preview=await startProfileBridgePreviewServer({slot,bearerToken:process.env.CHATGPT_TELA_PRODUCT_UI_TOKEN,
+ async observe(){return{activeSurfaceCount:0}},shutdownReadiness(){return busy()?'blocked':'ready'},
+ async shutdownProfile(){if(busy())throw Error('active supplied work');return{responsesRouteFingerprint:String(slot).repeat(64)}}});
+await lifecycle.publishReady({stage:'app-owned-profile-ready',runtimeProcessId:process.pid,slot,
+ routeId:process.env.CHATGPT_TELA_PRODUCT_ROUTE_ID,targetId:process.env.CHATGPT_TELA_PRODUCT_TARGET_ID,nativeTargetKind:process.env.CHATGPT_TELA_PRODUCT_NATIVE_TARGET_KIND,
+ nativeReady:false,webState:'ready',profileId:'fixture-'+slot,internalMcpUrl:mcp.endpointUrl.href,
+ bridgePreviewUrl:preview.endpoint.href,responsesUrl:process.env.FIXTURE_RESPONSES,responsesRouteFingerprint:String(slot).repeat(64)});
+await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecycle.dispose();
+`);
+  const built = await Bun.build({ entrypoints: [child], target: "bun", outdir: root, naming: "child.mjs" });
+  expect(built.success).toBe(true);
+  const targets: CodexNativeTarget[] = [
+    { slot: 1, adapterKind: "default-desktop", id: "default", displayName: "ChatGPT", state: "stopped", managed: false },
+    { slot: 2, adapterKind: "multi-profile", id: "managed-2", displayName: "Managed 2", state: "stopped", managed: true },
+  ];
+  const targetSessions = new Map(targets.map(target => [target.id, { targetId: target.id, state: "available" } as CodexNativeTargetSession]));
+  const adapter: CodexNativeTargetAdapter = {
+    kind: "composite",
+    async profiles() { return targets.map(target => ({ target, session: targetSessions.get(target.id)! })); },
+    async resolve(slot) { const target = targets.find(item => item.slot === slot); if (!target) throw Error("missing target"); return { target, session: targetSessions.get(target.id)! }; },
+    async session(targetId) { return targetSessions.get(targetId)!; },
+    async quit() { throw Error("app-owned provider must never quit its managed target"); },
+    profileRuntimeEnvironment(target) { return { CHATGPT_TELA_PRODUCT_NATIVE_TARGET_KIND: target.adapterKind,
+      CHATGPT_TELA_PRODUCT_TARGET_ID: target.id, ...(target.slot === 2 ? { CHATGPT_TELA_PRODUCT_LAUNCHER_CLI: "/fixture/plura" } : {}),
+      FIXTURE_STATE: state[target.slot - 1]!,
+      FIXTURE_RESPONSES: `http://127.0.0.1:${ingress[target.slot - 1]!.port}/${ingress[target.slot - 1]!.capability}/v1/` }; },
+  };
+  const service = await startCodexService({ config: { multiProfile: { launcherCli: "/fixture/plura" }, appOwnedResponses: ingress },
+    nativeTargetAdapter: adapter, profileRuntimeCommand: [process.execPath, join(root, "child.mjs")] });
+  try {
+    expect((await service.profiles()).map(profile => profile.slot)).toEqual([1, 2]);
+    const [first, second] = await Promise.all([service.startProfile(1), service.startProfile(2)]);
+    expect(first).toMatchObject({ slot: 1, targetId: "default", controlState: "running", webModelsReady: true });
+    expect(second).toMatchObject({ slot: 2, targetId: "managed-2", controlState: "running", webModelsReady: true });
+    expect(first.responsesRouteFingerprint).not.toBe(second.responsesRouteFingerprint);
+    expect(service.activeProfileCount).toBe(2);
+    expect((await service.profiles()).map(profile => [profile.slot, profile.controlState])).toEqual([[1, "running"], [2, "running"]]);
+    expect(await service.shutdownReadiness()).toBe("ready");
+    expect(await service.stopProfile(2)).toMatchObject({ slot: 2, targetId: "managed-2", controlState: "stopped" });
+    expect(service.activeProfileCount).toBe(1);
+    expect((await service.profiles()).map(profile => [profile.slot, profile.controlState])).toEqual([[1, "running"], [2, "stopped"]]);
+    expect(await service.stopProfile(1)).toMatchObject({ slot: 1, targetId: "default", controlState: "stopped" });
+    expect(service.activeProfileCount).toBe(0);
+  } finally { await service.close(); rmSync(root, { recursive: true, force: true }); }
+});

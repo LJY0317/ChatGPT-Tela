@@ -26,7 +26,7 @@ interface OwnedSurface {
   readonly key: string;
   readonly controller: BrowserSurfaceController;
   readonly detachLabel?: () => void;
-  closing?: Promise<void>;
+  closing?: Promise<void> | undefined;
 }
 
 function surfaceKey(taskId: string, epochId: string): string {

@@ -194,10 +194,9 @@ function childReady(value: unknown, expected: {
     || item.nativeTargetKind !== expected.nativeTargetKind
     || item.nativeReady !== !appOwned
     || !["preparing", "ready", "login-required", "failed", "closed"].includes(item.webState as string)) {
-    throw new Error("profile child readiness identity does not match the requested profile");
+    throw new Error(`profile child readiness identity does not match the requested profile (slot=${String(item.slot)}, target=${String(item.targetId)}, kind=${String(item.nativeTargetKind)}, stage=${String(item.stage)})`);
   }
-  if (appOwned && (expected.nativeTargetKind !== "default-desktop"
-    || item.targetProcessId !== undefined || item.terminalEndpoint !== undefined
+  if (appOwned && (item.targetProcessId !== undefined || item.terminalEndpoint !== undefined
     || item.webState !== "ready")) {
     throw new Error("app-owned profile cannot claim a managed Native session");
   }
@@ -375,10 +374,18 @@ export async function startCodexService(input: {
   const routedBridge = new RoutedCodexTurnBridge();
   const owned = new Map<number, OwnedProfile>();
   const appOwnedIngress = (slot: number) => input.config.appOwnedResponses?.find(profile => profile.slot === slot);
-  const appOwnedTarget: CodexNativeTarget = { slot: 1, adapterKind: "default-desktop",
-    id: "default", displayName: "ChatGPT", state: "independent", managed: false };
-  const appOwnedStatus = (profile?: OwnedProfile) => statusFor(appOwnedTarget, profile?.slot ?? 1,
-    { targetId: appOwnedTarget.id, state: profile ? "independent" : "available" }, profile);
+  const appOwnedStatus = (target: CodexNativeTarget, profile?: OwnedProfile) => statusFor(target, target.slot,
+    { targetId: target.id, state: profile ? "independent" : "available" }, profile);
+  const appOwnedTargetFor = async (slot: number) => {
+    if (slot === 1) return { target: { slot: 1, adapterKind: "default-desktop" as const,
+      id: "default", displayName: "ChatGPT", state: "independent", managed: false },
+      session: { targetId: "default", state: "independent" } as CodexNativeTargetSession };
+    const found = await targetAndSession(slot);
+    if (found.target.adapterKind !== "multi-profile" || !found.target.managed) {
+      throw new Error(`app-owned profile slot ${slot} is not an independently managed Multi-Profile target`);
+    }
+    return found;
+  };
   const starting = new Map<number, {
     readonly settled: Promise<void>;
     readonly expectedDesktopProcessId: number | undefined;
@@ -564,7 +571,7 @@ export async function startCodexService(input: {
     return profile;
   }
   async function profileStatus(profile: OwnedProfile): Promise<CodexProfileStatus> {
-    if (profile.mode === "app-owned") return appOwnedStatus(profile);
+    if (profile.mode === "app-owned") return appOwnedStatus(profile.target, profile);
     const session = await targets.session(profile.target.id, input.signal);
     return statusFor(profile.target, profile.slot, session, owned.get(profile.slot));
   }
@@ -644,13 +651,15 @@ export async function startCodexService(input: {
       const nativeProfiles = input.config.multiProfile || !appOwnedIngress(1)
         ? await targets.profiles(input.signal) : [];
       const inventory = new Map(nativeProfiles.map(profile => [profile.target.slot, profile]));
-      for (const ingress of input.config.appOwnedResponses ?? []) inventory.set(ingress.slot, {
-        target: appOwnedTarget, session: { targetId: appOwnedTarget.id, state: "independent" },
-      });
+      for (const ingress of input.config.appOwnedResponses ?? []) {
+        if (ingress.slot === 1) inventory.set(1, { target: { slot: 1, adapterKind: "default-desktop",
+          id: "default", displayName: "ChatGPT", state: "independent", managed: false },
+          session: { targetId: "default", state: "independent" } });
+      }
       const profiles = await Promise.all([...inventory.values()].map(async ({ target, session }) => {
         const profile = owned.get(target.slot);
         if (appOwnedIngress(target.slot)) return Object.freeze({
-          ...appOwnedStatus(profile?.mode === "app-owned" ? profile : undefined),
+          ...appOwnedStatus(target, profile?.mode === "app-owned" ? profile : undefined),
           connectionInProgress: starting.has(target.slot),
         });
         if (profile && !profile.stopping && ownsNativeTargetSession(target, session, profile)) {
@@ -710,8 +719,8 @@ export async function startCodexService(input: {
       const existing = owned.get(slot);
       const existingRunning = existing && existing.child.exitCode === null && existing.child.signalCode === null;
       if (ingress && existingRunning && existing?.mode === "app-owned" && !existing.cleanupAcknowledged) {
-        input.onProfileConnectionChanged?.(appOwnedTarget.id, true);
-        return appOwnedStatus(existing);
+        input.onProfileConnectionChanged?.(existing.target.id, true);
+        return appOwnedStatus(existing.target, existing);
       }
       // A stopped launch with no live owned child performs its fresh state check below, immediately
       // before preparation. Early discovery is needed only to protect a possible live-owner transition
@@ -744,9 +753,7 @@ export async function startCodexService(input: {
         await existing.bridge.close().catch(() => {});
         owned.delete(slot);
       }
-      const { target, session: initialSession } = ingress
-        ? { target: appOwnedTarget, session: { targetId: appOwnedTarget.id, state: "independent" } as CodexNativeTargetSession }
-        : await targetAndSession(slot);
+      const { target, session: initialSession } = ingress ? await appOwnedTargetFor(slot) : await targetAndSession(slot);
       let session = initialSession;
       if (options?.expectedDesktopProcessId !== undefined && session.desktopProcessId !== options.expectedDesktopProcessId) {
         throw new Error("ChatGPT has changed since you chose to reopen it; the current app was kept open");
@@ -876,7 +883,7 @@ export async function startCodexService(input: {
             }
           })();
         });
-        const status = ingress ? appOwnedStatus(profile)
+        const status = ingress ? appOwnedStatus(target, profile)
           : statusFor(target, slot, await targets.session(target.id, input.signal), profile);
         progress("ready");
         input.onProfileConnectionChanged?.(target.id, true);
@@ -905,8 +912,9 @@ export async function startCodexService(input: {
       const profile = owned.get(slot);
       if (profile) await stopOwned(profile, true);
       if (appOwnedIngress(slot)) {
-        input.onProfileConnectionChanged?.(appOwnedTarget.id, false);
-        return appOwnedStatus();
+        const { target } = await appOwnedTargetFor(slot);
+        input.onProfileConnectionChanged?.(target.id, false);
+        return appOwnedStatus(target);
       }
       const { target, session } = await targetAndSession(slot);
       if (!profile && session.state === "ready") {
