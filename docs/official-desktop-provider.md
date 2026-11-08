@@ -122,10 +122,15 @@ The app-owned route must remain opt-in until those are separately verified.
 
 ## Two Native-first profiles: consumer transition handoff
 
-The recorded installed baseline `83323f73` still has two Native-first profiles
-and no `appOwnedResponses`. The engine-free build-7 candidate cannot replace it
-with the old routes unchanged. Keep the installed package and both profiles in
-place until an operator accepts a reviewed, recoverable configuration change.
+The recorded installed baseline `83323f73` still has two Native-first profiles,
+an embedded Native engine and no `appOwnedResponses`. Neither the historical
+build-7 candidate nor the new **engine-free integration candidate** can replace
+those routes unchanged. The new build-8 candidate was assembled once from
+`026d5100`, ad-hoc signed and verified locally, with no embedded Native engine;
+its private receipt is `build/nov08-engine-free-package/candidate-manifest.json`.
+This is **not** an approved update or an installed package. Keep the installed
+source and both profiles in place until an operator accepts an explicit,
+recoverable per-slot configuration change.
 
 The **public packaged launcher routes** `upgrade --dry-run` and `upgrade --apply`
 through `runPackagedLifecycleCommand`, but on **macOS both are rejected** by
@@ -158,18 +163,25 @@ For a supervised transition after release acceptance:
    owner-controlled removal, followed by a new signed install and dry-run.
    Do not invoke macOS `upgrade`, restore an old legacy updater or treat the
    synthetic build-7 label as a release number.
-3. Before reconnecting Work, run the **newly installed** launcher's
+3. **Do not resume the existing empty-route Native-first services merely
+   because the engine-free application bytes were replaced.** Obtain the user's
+   separate per-profile conversion approval and reviewed settings during the
+   supervised transition. Before reconnecting Work or resuming those profiles,
+   run the **newly installed** launcher's
    `configure --file <reviewed-product-config.json> --enable-app-owned-desktop`.
    Preserve `multiProfile`; this prepares slot 1 only. For a detected managed
    Plura target, separately run the same command with `--slot 2`. The launcher
    prepares a distinct private port and capability. If the second target cannot
    be proven, leave it disconnected and defer its conversion; do not silently
    replace it with an unmanaged Native engine or reuse slot-1 credentials.
-4. Run `services start`, reconnect slot 1 and require account-bound Web discovery
+4. Only after explicit route configuration, run `services start`, reconnect
+   the approved slot 1 and require account-bound Web discovery
    and its Native+Web model catalog to reach **Ready**. Review
    `desktop-provider register --dry-run` and explicitly apply registration
    only after the reported catalog and ownership are accepted. Independently
-   verify the managed target and route before reconnecting slot 2.
+   verify the managed target and route and obtain that profile's separate
+   account acceptance before reconnecting slot 2. A missing or unapproved
+   route remains disconnected; there is no automatic Native-first fallback.
 5. Registration does not select a model. The user must choose
    `model_provider = "chatgpt_tela_local"` and a catalog-listed model in their
    user-level official Codex config, then normally restart the official Desktop
@@ -190,8 +202,11 @@ because Desktop is running. User-level config alone cannot prove an
 already-running session's selection or its overrides; provider-only installation
 is distinct from complete Native replacement. The earlier build-7 package does
 not contain this guard, explicit multi-slot configure or later source changes.
-Its source/package receipt is
-`build/nov08-transition-handoff/final-candidate-manifest.json` in this checkout.
+Its historical source/package receipt is
+`build/nov08-transition-handoff/final-candidate-manifest.json`; the new build-8
+private receipt records the final source fingerprint and ad-hoc local checks.
+Developer ID signing, notarization, a real signed Sparkle feed and user-approved
+installed Desktop/account acceptance remain separate steps.
 
 An additional isolated official engine run used this repository's exact
 registered provider stanza, a fake `HOME`/`CODEX_HOME` with only a synthetic
