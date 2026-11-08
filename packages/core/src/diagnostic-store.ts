@@ -10,6 +10,23 @@ export const DIAGNOSTIC_LIMITS = Object.freeze({ tailBytes: 4 * 1024 * 1024, sca
   logFileBytes: LOG_FILE_BYTES, logBytes: LOG_TOTAL_BYTES, logAgeMs: 30 * 86400000,
   incidentBytes: 16 * 1024 * 1024, incidentAgeMs: 30 * 86400000,
   privateBytes: 64 * 1024 * 1024, privateFileBytes: 8 * 1024 * 1024, privateAgeMs: 7 * 86400000 });
+// Incident writes are event-driven. Coalesce directory-wide retention/index
+// maintenance across a burst instead of rescanning the whole store per write.
+const pendingIncidentMaintenance = new Set<string>();
+let incidentMaintenanceScheduled = false;
+function scheduleIncidentMaintenance(root: string): void {
+  pendingIncidentMaintenance.add(root);
+  if (incidentMaintenanceScheduled) return;
+  incidentMaintenanceScheduled = true;
+  setImmediate(() => {
+    incidentMaintenanceScheduled = false;
+    const roots = [...pendingIncidentMaintenance];
+    pendingIncidentMaintenance.clear();
+    for (const target of roots) {
+      try { listDiagnosticIncidents(target); } catch { /* Retention/index maintenance is diagnostic-only. */ }
+    }
+  });
+}
 /** Active logs plus owned historical segments, without a file-count retention limit. */
 export function diagnosticLogPaths(path: string): string[] {
   const name = basename(path), root = dirname(path);
@@ -69,7 +86,7 @@ const SAFE_WEB_CONTEXT_PLANNER_SUBSTAGES = new Set<string>(WEB_CONTEXT_PLANNER_S
 export function isWebContextPlannerSubstage(value: unknown): value is WebContextPlannerSubstage {
   return typeof value === "string" && SAFE_WEB_CONTEXT_PLANNER_SUBSTAGES.has(value);
 }
-const STRINGS = new Set(["cancellation_source", "observation_failure", "failure_class", "failure_stage", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "mode", "kind", "result_kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "route_class", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "request_role", "browser_response", "next_action", "probe_kind", "auth_state", "entry_class", "removal_cause", "expiry_class", "domain_class", "storage_state", "observation_source", "accepted_observation_source"]);
+const STRINGS = new Set(["cancellation_source", "observation_failure", "failure_class", "failure_stage", "service", "capability", "turn_phase", "assistant_phase", "context_mode", "approval_mode", "outcome", "network_kind", "method_class", "resource_class", "reason_class", "first_reason_class", "delivery", "trigger", "state", "phase", "boundary", "mode", "kind", "result_kind", "target_kind", "provider_kind", "platform", "policy", "route_kind", "route_class", "action", "status", "environment", "native_signin", "web_signin", "comparison", "payload_state", "anchor_state", "remote_outcome", "request_ownership", "request_role", "browser_response", "next_action", "probe_kind", "auth_state", "entry_class", "removal_cause", "expiry_class", "domain_class", "storage_state", "observation_source", "accepted_observation_source"]);
 const PROJECTION_ENUMS: Readonly<Record<string, readonly string[]>> = {
   chat_action_class: ["read", "read_many", "other", "unknown"],
   observation_state: ["probable", "ambiguous"],
@@ -535,8 +552,7 @@ export function writeDiagnosticIncident(root: string, data: ReturnType<typeof an
   while (Buffer.byteLength(JSON.stringify(record)) > 120 * 1024 && record.timeline.length) record.timeline.shift();
   if (Buffer.byteLength(JSON.stringify(record)) > 128 * 1024) throw new Error("incident exceeds budget");
   atomic(path, record);
-  // One retention/index pass per write, rather than pruning and scanning the same bucket twice.
-  listDiagnosticIncidents(root);
+  scheduleIncidentMaintenance(root);
   return ref;
 }
 export function readDiagnosticIncident(root: string, ref: string): unknown {

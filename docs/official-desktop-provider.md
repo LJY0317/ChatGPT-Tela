@@ -76,6 +76,16 @@ does not bundle the optional Native engine. Keep the existing `openai` provider
 and Native model until the app-owned profile reports Ready and catalog
 registration reports `installed` or `already-owned`. Then explicitly select
 `model_provider = "chatgpt_tela_local"` and a model in the prepared catalog.
+The optional multi-profile adapter requires a detected, managed Plura target
+and a separate explicit `appOwnedResponses` entry with a unique slot, port and
+capability. Managed targets use authenticated `/v1/` requests and a dedicated
+model-list overlay; the independent default Desktop retains its capability-path
+`/v1/` URL. Each profile's account binding, tool bridge, route and Web model
+choices remain separate. The packaged `--enable-app-owned-desktop` option
+provisions only slot 1; it does not migrate an existing Native-first slot 2.
+An installed `multiProfile` value with no `appOwnedResponses` entries keeps
+the Native-first configuration and is incompatible with replacing an existing
+Native-engine-dependent install with this engine-free candidate unchanged.
 The installed Desktop's compatibility with this selection still requires
 separate acceptance; neither the packaged launcher nor registration selects it.
 Tela's existing uninstall path now restores the exact install-marked provider

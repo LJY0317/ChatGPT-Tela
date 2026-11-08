@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { BROWSER_DOCUMENT_LIFETIME, type BrowserHost, type BrowserSurfaceLease, type BrowserSurfaceCapability } from "@chatgpt-tela/browser-host";
 import { chatGptWebFamilyKey, chatGptWebModelId, type WebConversationProvider, type WebTurnRequest } from "@chatgpt-tela/chatgpt";
 import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
+import { listDiagnosticIncidents, readDiagnosticIncident } from "@chatgpt-tela/core";
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { handleNativeResponsesHttp } from "@chatgpt-tela/responses";
 import { createProfileTurnBridge, createSuppliedRequestGateway } from "./supplied-request-gateway";
@@ -14,6 +15,36 @@ import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-jou
 
 const model = chatGptWebModelId(chatGptWebFamilyKey("Supplied request fixture"));
 const firstInput = [{ type: "message", role: "user", content: "Inspect A." }];
+test("supplied HTTP body drain retains provider delivery evidence without inventing a Native final", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-supplied-diagnostics-"));
+  const file = join(root, "events.jsonl");
+  const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  const f = fixture();
+  const server = await startLocalResponsesServer({ gateway: f.gateway });
+  try {
+    const response = await fetch(new URL("responses", server.baseUrl), { method: "POST",
+      headers: { authorization: `Bearer ${server.runtimeToken}`, "content-type": "application/json" },
+      body: JSON.stringify(request()) });
+    expect(response.status).toBe(200);
+    await response.text();
+    const incidents = listDiagnosticIncidents(join(root, "diagnostics"));
+    expect(incidents).toHaveLength(1);
+    const incident = readDiagnosticIncident(join(root, "diagnostics"), incidents[0]!.ref) as { timeline: { stage: string }[] };
+    const stages = incident.timeline.map(row => row.stage);
+    expect(stages).toEqual(expect.arrayContaining([
+      "provider_input_response_completed", "provider_input_response_ready",
+      "provider_input_response_committed", "native_response_body_closed",
+    ]));
+    expect(stages).not.toContain("native_outcome_committed");
+  } finally {
+    await server.stop();
+    await f.gateway.close();
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 function request(turn = "turn-1", input: unknown[] = firstInput) {
   return { model, stream: true, reasoning: { effort: "medium" }, input,
     client_metadata: { "x-codex-turn-metadata": { request_kind: "turn", thread_id: "thread-1", turn_id: turn } },

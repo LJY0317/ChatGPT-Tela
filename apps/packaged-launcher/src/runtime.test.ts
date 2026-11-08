@@ -215,6 +215,7 @@ describe("packaged service launcher", () => {
       expect(() => resolvePackagedServiceLaunch({ service: "gateway", payloadRoot: paths.binaryRoot, pathOptions })).toThrow("config is missing");
       writeProductConfig({
         version: 1,
+        multiProfile: { launcherCli: join(root, "optional-plura-cli") },
         publicMcpAbi: "stable",
         exposure: {
           kind: "existing-https",
@@ -260,6 +261,8 @@ describe("packaged service launcher", () => {
       expect(codex.environment.CHATGPT_TELA_PRODUCT_PROFILE_RUNTIME_ENTRYPOINT)
         .toBe(join(installedRoot, "runtime", "profile-runtime.cjs"));
       expect(codex.environment.CHATGPT_TELA_PRODUCT_PUBLIC_MCP_ABI).toBe("stable");
+      expect(codex.environment.CHATGPT_TELA_CODEX_MULTI_PROFILE_LAUNCHER_CLI)
+        .toBe(join(root, "optional-plura-cli"));
       mkdirSync(paths.serviceState("chat"), { recursive: true });
       writeFileSync(join(paths.serviceState("chat"), "process-operations-v1.json"), JSON.stringify({ version: 2, operations: [] }));
       expect(() => resolvePackagedServiceLaunch({ service: "chat", payloadRoot: paths.binaryRoot, pathOptions })).toThrow("cannot read");

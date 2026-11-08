@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "candidateBranch": "agent/app-owned-assembly-acceptance-20261107",
-  "baseline": "ccff9643",
+  "baseline": "ecdf887b",
   "scope": "Isolated app-owned integration candidate; no consumer installation or provider selection change",
   "included": {
     "desktopCatalogAndProviderRegistration": "1827459d",
@@ -16,7 +16,10 @@
     "electronBrowserIncidentProof": "99b573d0",
     "deviceLocalRegistrationIsolation": "6a6c4254 (same patch as ae9deac8)",
     "goalFailureAndCycleProjection": "ccff9643 (same patch as 6e9df064; complements 7982861e)",
-    "privateGoalFailureReceipt": "7982861e"
+    "privateGoalFailureReceipt": "7982861e",
+    "optionalManagedProfiles": "4c2e7241 plus inherited parent/config 66fefdcd; selected readiness, overlay and account-scoped model changes from 65666cf1",
+    "officialFailureProjection": "selected 1935f7be and faa98664 response delivery and retention changes",
+    "preservedMultiProfileSetup": "selected 63d4c4cf explicit config preservation"
   },
   "deduplicated": {
     "identicalPatchAlreadyIncluded": ["f8e4c49a", "9319b68e", "b5ecbdb0", "e083c0df", "9ee9141d", "d68c2f38", "bacc9578", "c127f3dd"],
@@ -29,15 +32,14 @@
     "changedBoundaryTests": "selected packaged launcher, service shutdown, app-owned producer, browser diagnostics and Codex profile tests passed; lifecycle 2 passed after the ownership-error expectation was reconciled",
     "officialEngineAcceptance": "passed on isolated codex-cli 0.167.0-alpha.3.2: startup producer publishes install-owned Native/Web catalog, shared official provider editor registers without selecting, explicit fixture selection loads both models, Web and original Native tool roundtrip complete, selection returns to prior choice, editor restores exact prior settings; synthetic first-party auth only",
     "packagingEntry": "macOS arm64 package:smoke and physical-fs passed using the pinned Electron 44.4.5 distribution and Swift Sparkle 2.10.1; real ad-hoc signed .app assembled and codesign --verify --strict --deep passed; packaged launcher --help ran; file helper protocols 2 and 1 passed; compiled lifecycle fixture passed source-restored/upgrade/removal without real service or profile actions. The formerly unsigned compiled fixture reproduced SIGKILL (shell 137), while signing that same artifact ad-hoc made the fixture pass. Typecheck and the 21 selected uninstall/browser incident tests passed.",
-    "localMacCandidate": "ignored build/ChatGPT Tela Baseline Candidate.app; rebuilt at ccff9643, version 0.0.0-candidate, 378 MB, includes launcher, Gateway/Chat/Codex service modes, Electron/profile setup, menu, maintenance, Sparkle and workspace-files helper; local loopback update feed placeholder, ad-hoc signature only, optional native engine not embedded",
+    "localMacCandidate": "ignored build/ChatGPT Tela Integrated Consumer Candidate.app; macOS arm64, version 0.0.0-integrated-candidate, build 3, ad-hoc codesign verified, launcher --help exit 0, Electron/profile runtime/owned services bundled; no Native engine embedded, placeholder local update feed",
     "baselineVerification": "device-local explicit registration test passed (20 assertions); diagnostic focused tests 27 passed (110 assertions); typecheck exit 0; package build exit 0; codesign --verify --strict --deep exit 0; packaged launcher --help exit 0",
-    "installedCompatibility": "single-profile slot 1 only with explicit app-owned opt-in; current installed configuration has two Native-first profiles and appOwnedSlots empty, so replacing it unchanged is not supported",
-    "productionInstallation": "not performed; not authorized"
+    "installedCompatibility": "current installed multiProfile configured but appOwnedResponses empty: Native-first slot 1 and optional slot 2 cannot be replaced unchanged by engine-free candidate; explicit slot-1 app-owned opt-in and separate optional managed-target route required",
+    "productionInstallation": "not performed; not authorized",
+    "integratedProfiles": "real isolated parent-to-child HTTP 2/3 profile routes, cross-profile authentication, Native/Web model, overlay, account change, independent stop and restart passed; independent default Desktop and slot 1/2 fixture passed; no real Desktop or official Native RPC claimed",
+    "integratedDiagnostics": "official HTTP Work projection and supplied response body-drain incident passed; a supplied Web final is explicitly not counted as a Native final",
+    "integratedConfiguration": "lifecycle isolated explicit optional adapter preservation passed"
   },
-  "releaseReadiness": "local macOS arm64 installable package candidate assembled and verified pre-install; ad-hoc signature and placeholder update feed are not a trusted distribution release; no consumer activation or operating-system installation performed",
-  "remaining": [
-    "Apple-trusted distribution needs Developer ID signing, notarization and a real update feed; Windows/Linux release packaging and signed installation acceptance remain separate",
-    "Perform consumer install/upgrade/uninstall acceptance only with separate operational approval",
-    "Verify actual consumer account and Desktop interaction only under separate operational authorization"
-  ]
+  "releaseReadiness": "isolated macOS arm64 candidate built and verified before installation; no actual Desktop/account acceptance, consumer install, Developer ID signing, notarization or public feed",
+  "remaining": ["Current installed Native-first configuration must retain 83323f73 until explicit app-owned selection and verified account/Desktop acceptance are authorized.", "Optional slot 2 requires a detected managed Plura target, its independent configured appOwnedResponses entry and explicit provider selection; packaged enable flag provisions only slot 1.", "Apple-trusted distribution requires Developer ID signing, notarization and a real update feed; other platform packaging and consumer install/upgrade/uninstall acceptance remain separate."]
 }

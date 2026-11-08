@@ -4,7 +4,7 @@ import { DIAGNOSTIC_LIMITS, structuralDiagnosticEvent, writeDiagnosticIncident, 
 
 const fp = (x: unknown): x is string => typeof x === 'string' && /^[a-f0-9]{24}$/.test(x);
 const number = (x: unknown): x is number => Number.isSafeInteger(x) && Number(x) >= 0;
-const relevant = (stage: string) => /^(native_|web_turn_|web_context_|web_retained_context_|web_send_|web_tool_bridge_|web_public_progress_|web_model_picker_|public_progress_|mcp_rpc_|mcp_native_inventory_|mcp_chat_inventory_|web_preparation_failed|web_execution_exception|web_answer_received|renderer_surface_bound|context_attachment_|browser_message_prepared|context_checkpoint_|checkpoint_(transfer_|response_|json_|operation_)|http_transport_|inspection_(?:window_action|owner_disposed|ownership_revoked)|tool_started|tool_settled|tool_failed|tool_error|web_media_upload_started|mcp_native_result_projected|approval_turn_resolution)/.test(stage);
+const relevant = (stage: string) => /^(native_|web_turn_|web_context_|web_retained_context_|web_send_|web_tool_bridge_|web_public_progress_|web_model_picker_|public_progress_|mcp_rpc_|mcp_native_inventory_|mcp_chat_inventory_|web_preparation_failed|web_execution_exception|web_answer_received|provider_input_response_.*|native_outcome_committed|native_response_body_closed|renderer_surface_bound|context_attachment_|browser_message_prepared|context_checkpoint_|checkpoint_(transfer_|response_|json_|operation_)|http_transport_|inspection_(?:window_action|owner_disposed|ownership_revoked)|tool_started|tool_settled|tool_failed|tool_error|web_media_upload_started|mcp_native_result_projected|approval_turn_resolution)/.test(stage);
 
 /** A Native interrupted status proves the turn ended, but never who pressed Stop.
  * Transport closure proves even less. Later cleanup cannot replace the first
@@ -16,12 +16,13 @@ function diagnoseTermination(rows: readonly StructuralDiagnosticEvent[], finalCo
     || e.stage === 'native_turn_retired'
     || e.stage === 'native_execution_failed'
     || e.stage === 'web_execution_exception'
+    || e.stage === 'provider_input_response_failed'
     || e.stage === 'web_preparation_failed'
     || e.stage === 'http_transport_closed'
     || e.stage === 'http_transport_error');
   const watcher = observed.find(e => e.stage === 'native_watch_terminated' &&
     ['native_interrupted', 'native_failed', 'native_completed', 'observer_disconnected'].includes(String(e.reason_class)));
-  const failure = observed.find(e => e.stage === 'native_execution_failed' || e.stage === 'web_execution_exception' || e.stage === 'web_preparation_failed');
+  const failure = observed.find(e => e.stage === 'native_execution_failed' || e.stage === 'web_execution_exception' || e.stage === 'provider_input_response_failed' || e.stage === 'web_preparation_failed');
   const shutdown = observed.find(e => e.stage === 'native_response_observer_ended' && e.reason_class === 'gateway_shutdown'
     || e.stage === 'native_turn_retired' && e.reason_class === 'gateway_closed');
   const transportError = observed.find(e => e.stage === 'http_transport_error');
@@ -70,7 +71,7 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
   const unique = (stage: string) => new Set(at(stage).map(e=>e.operation_fingerprint).filter(fp)).size;
   const plans=at('web_turn_plan'), lastPlan=plans.at(-1), acceptance=at('web_turn_identity_accepted').at(-1);
   const final=rows.some(e=>e.stage==='native_outcome_committed'&&e.outcome==='final');
-  const terminalFailure=rows.find(e=>/^(web_turn_acceptance_timeout|web_execution_exception|native_execution_failed|web_preparation_failed)$/.test(e.stage));
+  const terminalFailure=rows.find(e=>/^(web_turn_acceptance_timeout|web_execution_exception|provider_input_response_failed|native_execution_failed|web_preparation_failed)$/.test(e.stage));
   const terminalIndex=terminalFailure?rows.indexOf(terminalFailure):rows.length;
   // Optional maintenance may refuse its budget while the retained task still succeeds.
   // A later admitted plan or explicit deferral separates that refusal from execution failure.
@@ -102,6 +103,9 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
   const taskComposer = {observed:taskSends.length,total:taskSends.reduce((n,e)=>n+(number(e.composer_wire_bytes)?e.composer_wire_bytes:0),0),
     complete:taskSends.length>0&&taskSends.every(e=>number(e.composer_wire_bytes))};
   const terminal = rows.filter(e=>e.stage==='native_outcome_committed'&&e.outcome==='final').at(-1)??retired;
+   const browserFinalObserved=at('web_turn_final_observed').length>0||at('web_turn_completed').length>0;
+   const nativeFinalItemObserved=at('native_public_item_observed').some(e=>e.kind==='agent_message'&&e.phase==='final_answer');
+   const nativeResponseDrained=at('native_response_body_closed').some(e=>e.outcome==='final'&&e.reason_class==='drained');
   const end=terminal??last;
   const duration=rows.length&&end?Math.max(0,Date.parse(end.ts)-Date.parse(rows[0]!.ts)):undefined;
   const elapsed=(from:string,to:string)=>{const a=at(from)[0],b=at(to)[0];return a&&b&&b.ts>=a.ts?Date.parse(b.ts)-Date.parse(a.ts):undefined;};
@@ -145,7 +149,7 @@ export function summarizeTurnDiagnostics(events: readonly StructuralDiagnosticEv
       termination:diagnoseTermination(rows,final,events.length>512),
       replayDenials:at('native_replay_rejected').length,
       certainty:typeof firstFailureReason==='string'&&!['unknown','unclassified'].includes(firstFailureReason)?'classified_boundary':'insufficient_evidence'},
-    contractVersion:1, state, localFinalCommitted:final,nativeFinalCommitted:final,browserFinalReceived:at('web_answer_received').length>0, durationMs:duration,completedAt:terminal?.ts,observationThrough:last?.ts,warnings,
+    contractVersion:1, state, localFinalCommitted:final,nativeFinalCommitted:final,browserFinalReceived:at('web_answer_received').length>0,browserFinalObserved,nativeFinalItemObserved,nativeResponseDrained,durationMs:duration,completedAt:terminal?.ts,observationThrough:last?.ts,warnings,
     timing:{preparationToPlanMs:elapsed('native_response_observer_started','web_turn_plan'),
       sendToAcceptanceMs:elapsed('web_send_activation_started','web_turn_identity_accepted'),
       acceptedToFirstToolMs:elapsed('web_turn_identity_accepted','native_tool_queued'),
@@ -201,7 +205,7 @@ export function startTurnDiagnosticSummary(scope: string, turn: string, request?
     const direct=fp(row.scope_fingerprint)&&fp(row.turn_fingerprint);
     if(direct?(row.scope_fingerprint!==scope||row.turn_fingerprint!==turn):!fp(row.request_fingerprint)||!requests.has(row.request_fingerprint))return;
     if(fp(row.request_fingerprint)&&requests.size<64)requests.add(row.request_fingerprint);
-    if (/^(web_turn_plan|web_turn_identity_(?:accepted|rejected)|web_turn_ownership_observed|web_turn_observation_(?:suspended|resumed)|web_retained_context_.*|web_context_settled|web_send_activation_started|web_execution_exception|web_answer_received|renderer_surface_bound|context_attachment_.*|native_cycle_proof_rejected|native_cycle_input_evidence|native_replay_rejected|native_steering_cycle_started|native_seed_authority_observed|checkpoint_transfer_planned|checkpoint_operation_observed|checkpoint_response_rejected|native_checkpoint_efficiency_settled|native_checkpoint_model_started|native_checkpoint_model_failed|context_checkpoint_provider_invoked|native_visible_prefix_stage_settled|native_working_checkpoint_(selected|advanced)|web_model_picker_(?:started|failed|owner_observed|timeout|action_failed|completed|observed|step|action)|inspection_(?:window_action|owner_disposed|ownership_revoked)|native_execution_failed|native_tool_request_rejected|web_preparation_failed)$/.test(row.stage)) {
+    if (/^(web_turn_plan|web_turn_identity_(?:accepted|rejected)|web_turn_ownership_observed|web_turn_observation_(?:suspended|resumed)|web_retained_context_.*|web_context_settled|web_send_activation_started|web_execution_exception|web_answer_received|provider_input_response_.*|native_outcome_committed|native_response_body_closed|renderer_surface_bound|context_attachment_.*|native_cycle_proof_rejected|native_cycle_input_evidence|native_replay_rejected|native_steering_cycle_started|native_seed_authority_observed|checkpoint_transfer_planned|checkpoint_operation_observed|checkpoint_response_rejected|native_checkpoint_efficiency_settled|native_checkpoint_model_started|native_checkpoint_model_failed|context_checkpoint_provider_invoked|native_visible_prefix_stage_settled|native_working_checkpoint_(selected|advanced)|web_model_picker_(?:started|failed|owner_observed|timeout|action_failed|completed|observed|step|action)|inspection_(?:window_action|owner_disposed|ownership_revoked)|native_execution_failed|native_tool_request_rejected|web_preparation_failed)$/.test(row.stage)) {
       const key=JSON.stringify([row.stage,row.request_fingerprint,row.operation_fingerprint,row.phase,row.surface_fingerprint,row.lease_fingerprint,
         row.action,row.document_generation,row.input_revision,row.observation_revision,row.observation_pending,row.reason_class,
          row.boundary,row.observation_state,row.observation_evidence_class,row.observation_evidence_count,row.receipt_present,row.parent_matches,
@@ -220,7 +224,8 @@ export function startTurnDiagnosticSummary(scope: string, turn: string, request?
       const s=summarizeTurnDiagnostics(rows);
       const fields = {
         contract_version:1,state:s.state,local_final_committed:s.localFinalCommitted,native_final_committed:s.nativeFinalCommitted,
-         browser_final_received:s.browserFinalReceived,summary_complete:!clipped,process_local_only:true,
+         browser_final_received:s.browserFinalReceived,browser_final_observed:s.browserFinalObserved,
+         native_final_item_observed:s.nativeFinalItemObserved,native_response_drained:s.nativeResponseDrained,summary_complete:!clipped,process_local_only:true,
         observed_event_count:rows.length,web_send_count:s.submission.activations,web_accept_count:s.submission.accepted,
         causal_receipt:s.submission.causal,observer_count:s.transport.responseObservers,observer_replacement_count:s.transport.observerReplacements,
         disconnect_count:s.transport.disconnects,tool_queued_count:s.tools.queued,tool_result_count:s.tools.results,tool_release_count:s.tools.released,

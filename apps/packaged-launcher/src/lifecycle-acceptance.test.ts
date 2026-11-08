@@ -173,6 +173,13 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     expect(await runPackagedBootstrapCommand(["bootstrap-status"], bootstrap)).toEqual({
       configuration: "configured", publicUrl: "https://example.test/mcp",
     });
+    const optionalAdapter = { launcherCli: join(root, "optional-plura-fixture") };
+    writeFileSync(configFile, JSON.stringify({ ...(JSON.parse(configurationInput) as object), multiProfile: optionalAdapter }));
+    await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
+    expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).multiProfile).toEqual(optionalAdapter);
+    writeFileSync(configFile, configurationInput);
+    await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
+    expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).multiProfile).toEqual(optionalAdapter);
     let productConfig = readFileSync(join(paths.configRoot, "product-v1.json"), "utf8");
     await expect(runPackagedBootstrapCommand(["configure", "--stdin", "--if-missing"], {
       ...bootstrap, configurationInput: configurationInput.replace("18743", "18744"),

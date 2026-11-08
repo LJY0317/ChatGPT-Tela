@@ -471,9 +471,12 @@ async function configure(
   if (publicMcpAbi !== "stable" && publicMcpAbi !== "unified-development") {
     throw new Error("--mcp-abi must be stable or unified-development");
   }
+  const existingConfig = hasEffectiveProductConfig(productPaths)
+    ? readEffectiveProductConfig(productPaths) : undefined;
   const config: ProductConfig = {
     version: 1,
-    ...(launcher ? { multiProfile: { launcherCli: launcher } } : {}),
+    ...(launcher ? { multiProfile: { launcherCli: launcher } }
+      : existingConfig?.multiProfile ? { multiProfile: existingConfig.multiProfile } : {}),
     publicMcpAbi,
     exposure: manageTailscale
       ? {

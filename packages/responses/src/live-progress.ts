@@ -15,7 +15,7 @@ export class NativeProgressStream {
     index: number; characters: number; context: ReturnType<typeof diagnosticContext>;
   }; completion?: "summary_part" | "reasoning_item" | "response" | "failure" }> = [];
   readonly #summaries: string[] = [];
-  readonly #diagnostics = diagnosticContext();
+   #diagnostics = diagnosticContext();
   #pulledFrames = 0;
   #pulledSummaries = 0;
   #diagnosticClosed = false;
@@ -101,6 +101,7 @@ export class NativeProgressStream {
 
   finish(outcome: NativeGatewayOutcome, gateway: Pick<NativeResponsesGateway, "commit">): void {
     if (this.#ended || this.signal.signal.aborted) return;
+    this.#diagnostics = outcome.delivery.diagnosticContext ?? this.#diagnostics;
     const reasoning = { type: "reasoning", id: this.#itemId,
       summary: this.#summaries.map(text => ({ type: "summary_text", text })) };
     this.#event("response.output_item.done", { output_index: 0, item: reasoning });
@@ -112,7 +113,7 @@ export class NativeProgressStream {
       ...(index === plan.commitAfterFrame ? { commit: () => gateway.commit(outcome) } : {}) }));
     emitDiagnosticEvent("chatgpt_tela_work", "public_progress_producer_ended", {
       summary_count: this.#summaries.length, progress_characters: this.#chars,
-      queued_frame_count: this.#frames.length,
+      queued_frame_count: this.#frames.length, response_source: outcome.delivery.responseSource ?? "native",
     });
     this.#ended = true;
     this.#wake?.();

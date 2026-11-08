@@ -8,7 +8,7 @@ import { parseCodexWorkInspectionContract } from "@chatgpt-tela/service-protocol
 import { startCodexServiceHttpServer } from "./http-server";
 import type { CodexService } from "./controller";
 import { createCodexWorkInspector } from "./work-inspection";
-import { diagnosticFingerprint } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, writeDiagnosticIncident } from "@chatgpt-tela/core";
 import { writeFileSync } from "node:fs";
 
 const threadId = "11111111-2222-7333-8444-555555555555";
@@ -185,6 +185,9 @@ describe("profile-owned read-only Work inspection", () => {
         turnStatus: "inProgress", nativeFinalCommitted: false,
         proof: "turn_scoped_local_events_only",
       });
+      expect(parseCodexWorkInspectionContract(result, 2, threadId).diagnostics.activeRequestBoundary).toMatchObject({
+        webExecutionFailure: null, responseCycleProof: null,
+      });
       const completed = [
         { ts: at, event: "chatgpt_tela_work", stage: "web_turn_final_observed",
           scope_fingerprint: scope, turn_fingerprint: current, operation_fingerprint: operation,
@@ -210,7 +213,77 @@ describe("profile-owned read-only Work inspection", () => {
         browserFinalObserved: true, nativeFinalCommitted: true, nativeResponseDrained: true,
       });
       expect(JSON.stringify(settled)).not.toContain("private assistant body");
+      expect(JSON.stringify(parseCodexWorkInspectionContract(settled, 2, threadId))).not.toContain("private assistant body");
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("stored cycle failure and rejected input proof survive the official HTTP client projection", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-failure-projection-"));
+    const f = harness();
+    const ts = new Date().toISOString();
+    const scope = diagnosticFingerprint(threadId), turn = diagnosticFingerprint(turnId);
+    const operation = diagnosticFingerprint("web-epoch-owned-operation");
+    const epoch = diagnosticFingerprint("epoch");
+    const lease = diagnosticFingerprint("lease");
+    const revision = diagnosticFingerprint("revision");
+    const activeRevision = diagnosticFingerprint("active-revision");
+    const failure = { ts, event: "chatgpt_tela_work", stage: "web_execution_exception", scope_fingerprint: scope,
+      turn_fingerprint: turn, operation_fingerprint: operation, reason_class: "observation_probable",
+      boundary: "event_wait", observation_state: "probable", observation_evidence_class: "composer_readback_unproven",
+      observation_evidence_count: 3, accepted: true, turn_phase: "accepted" };
+    const plan = { ts, event: "chatgpt_tela_work", stage: "web_turn_plan", scope_fingerprint: scope,
+      turn_fingerprint: turn, operation_fingerprint: operation, epoch_fingerprint: epoch,
+      lease_fingerprint: lease, head_revision_fingerprint: revision,
+      active_request_revision_fingerprint: activeRevision };
+    const rejection = { ts, event: "chatgpt_tela_work", stage: "native_cycle_proof_rejected",
+      scope_fingerprint: scope, turn_fingerprint: turn, reason_class: "new_input_missing",
+      prior_final_present: true, new_message_count: 0, exact_request_replay: false,
+      prior_final_fingerprint: diagnosticFingerprint("prior-final") };
+    const finalRows = [
+      { ts, event: "chatgpt_tela_work", stage: "web_turn_final_observed", scope_fingerprint: scope, turn_fingerprint: turn, operation_fingerprint: operation },
+      { ts, event: "chatgpt_tela_work", stage: "web_answer_received", scope_fingerprint: scope, turn_fingerprint: turn, operation_fingerprint: operation },
+      { ts, event: "chatgpt_tela_codex", stage: "native_public_item_observed", scope_fingerprint: scope, turn_fingerprint: turn, kind: "agent_message", phase: "final_answer" },
+      { ts, event: "chatgpt_tela_work", stage: "native_outcome_committed", scope_fingerprint: scope, turn_fingerprint: turn, outcome: "final" },
+      { ts, event: "chatgpt_tela_work", stage: "native_response_body_closed", scope_fingerprint: scope, turn_fingerprint: turn, outcome: "final", reason_class: "drained" },
+    ];
+    const incidentRoot = join(root, "logs", "diagnostics");
+    mkdirSync(join(root, "logs"), { recursive: true });
+    writeDiagnosticIncident(incidentRoot, { stage: "native_cycle_summary", observedAt: ts,
+      timeline: [plan, failure, rejection, ...finalRows] as any });
+    const serverInspect = createCodexWorkInspector({ service: f.service as any,
+      logsRoot: join(root, "logs"), connect: f.connect });
+    const token = "x".repeat(48);
+    const base = {
+      instanceId: "fixture", config: {}, tools: { async inventory() { return []; }, async invoke() { throw Error("unused"); } },
+      serviceStatus() { return { contractVersion: 1 as const, service: "codex" as const, instanceId: "fixture", state: "ready" as const }; },
+      profiles: f.service.profiles, terminalSession: f.service.terminalSession, bridgePreview: f.service.bridgePreview,
+      async startProfile() { throw Error("unused"); }, async waitWebPreparation() { throw Error("unused"); },
+      async reconnectWeb() { throw Error("unused"); }, async stopProfile() { throw Error("unused"); },
+      async modelSelectionCanary() { throw Error("unused"); }, async contextAttachmentCanary() { throw Error("unused"); },
+      async close() {}, activeProfileCount: 1,
+    } as unknown as CodexService;
+    const server = await startCodexServiceHttpServer({ service: base, bearerToken: token, inspectWork: serverInspect });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: "fixture", installId: "fixture",
+      pid: process.pid, endpoint: server.endpoint.href, bearerToken: token, startedAt: ts });
+    try {
+      const result = await client.inspectWork(2, threadId);
+      expect(result.diagnostics.activeRequestBoundary).toMatchObject({
+        webExecutionFailure: { stage: "web_execution_exception", reasonClass: "observation_probable",
+          boundary: "event_wait", observationState: "probable", observationReason: "composer_readback_unproven",
+          observationEvidenceCount: 3, accepted: true, operationFingerprint: operation,
+          epochFingerprint: epoch, leaseFingerprint: lease, headRevisionFingerprint: revision,
+          activeRequestRevisionFingerprint: activeRevision },
+        responseCycleProof: { reasonClass: "new_input_missing", priorFinalPresent: true,
+          newMessageCount: 0, exactRequestReplay: false, inputEvidence: [], inputEvidenceComplete: true,
+          matchedCount: 0, unmatchedCount: 0, priorFinalFingerprint: diagnosticFingerprint("prior-final") },
+        browserFinalObserved: true, webAnswerReceived: true, nativeFinalItemObserved: true,
+        nativeFinalCommitted: true, nativeResponseDrained: true,
+      });
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain("private");
+      expect(serialized).not.toContain("raw");
+      expect(serialized).not.toContain("composer_readback_unproven".replace("composer", "private"));
+    } finally { await server.close(); rmSync(root, { recursive: true, force: true }); }
   });
 
   test("official Native completion is exposed separately from a missing local delivery receipt", async () => {

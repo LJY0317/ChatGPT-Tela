@@ -1,4 +1,4 @@
-import { diagnosticFingerprint, parseBrowserRetentionObservation, pickerInspectionFields } from "@chatgpt-tela/core";
+import { diagnosticFingerprint, parseBrowserRetentionObservation, pickerInspectionFields, WEB_OBSERVATION_DIAGNOSTIC_REASONS } from "@chatgpt-tela/core";
 import { parseCodexApprovalWait } from "./approval-review";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -8,6 +8,35 @@ const STATUS = ["inProgress", "completed", "failed", "interrupted"] as const;
 const APPROVAL = ["pending", "none", "unavailable"] as const;
 const CAUSE = ["automation_unavailable", "dom_observation_failed", "bridge_preview_failed", "no_active_surface", "surface_not_selected"] as const;
 const CHECKPOINT_REASON = ["owner_unavailable", "storage_unavailable", "no_local_candidates", "projection_unavailable"] as const;
+const FINGERPRINT = /^[a-f0-9]{24}$/;
+const OBSERVATION_STATE = ["probable", "ambiguous"] as const;
+
+function parseFailureEvidence(value: unknown) {
+  if (value === null) return null;
+  const row = object(value);
+  if (time(row.at) === null || typeof row.stage !== "string" || !SAFE_STAGE.test(row.stage)
+    || (row.reasonClass !== null && (typeof row.reasonClass !== "string" || !SAFE_REASON.test(row.reasonClass)))
+    || (row.boundary !== null && (typeof row.boundary !== "string" || !SAFE_REASON.test(row.boundary)))
+    || (row.observationState !== null && !OBSERVATION_STATE.includes(row.observationState as typeof OBSERVATION_STATE[number]))
+    || (row.observationReason !== null && !WEB_OBSERVATION_DIAGNOSTIC_REASONS.includes(row.observationReason as typeof WEB_OBSERVATION_DIAGNOSTIC_REASONS[number]))
+    || (row.observationEvidenceCount !== null && (!Number.isSafeInteger(row.observationEvidenceCount) || (row.observationEvidenceCount as number) < 0))
+    || typeof row.accepted !== "boolean" || (row.turnPhase !== null && (typeof row.turnPhase !== "string" || !SAFE_REASON.test(row.turnPhase)))
+    || ["operationFingerprint", "epochFingerprint", "leaseFingerprint", "headRevisionFingerprint", "activeRequestRevisionFingerprint"].some(key => row[key] !== null && (typeof row[key] !== "string" || !FINGERPRINT.test(row[key] as string)))) throw Error("invalid Web execution failure evidence");
+  return Object.freeze({ at: time(row.at), stage: row.stage, reasonClass: row.reasonClass, boundary: row.boundary, observationState: row.observationState, observationReason: row.observationReason, observationEvidenceCount: row.observationEvidenceCount, accepted: row.accepted, turnPhase: row.turnPhase, operationFingerprint: row.operationFingerprint, epochFingerprint: row.epochFingerprint, leaseFingerprint: row.leaseFingerprint, headRevisionFingerprint: row.headRevisionFingerprint, activeRequestRevisionFingerprint: row.activeRequestRevisionFingerprint });
+}
+
+function parseResponseCycleProof(value: unknown) {
+  if (value === null) return null;
+  const row = object(value);
+  if ((row.reasonClass !== null && (typeof row.reasonClass !== "string" || !SAFE_REASON.test(row.reasonClass))) || (row.priorFinalPresent !== null && typeof row.priorFinalPresent !== "boolean")
+    || (row.newMessageCount !== null && (!Number.isSafeInteger(row.newMessageCount) || (row.newMessageCount as number) < 0 || (row.newMessageCount as number) > 64))
+    || (row.exactRequestReplay !== null && typeof row.exactRequestReplay !== "boolean")
+    || (row.priorFinalFingerprint !== null && (typeof row.priorFinalFingerprint !== "string" || !FINGERPRINT.test(row.priorFinalFingerprint)))
+    || !Array.isArray(row.inputEvidence) || row.inputEvidence.length > 64
+    || row.inputEvidence.some(item => { const entry = object(item); return (entry.index !== null && (!Number.isSafeInteger(entry.index) || (entry.index as number) < 0)) || (entry.sourceIndex !== null && (!Number.isSafeInteger(entry.sourceIndex) || (entry.sourceIndex as number) < 0)) || (entry.mode !== null && (typeof entry.mode !== "string" || !SAFE_REASON.test(entry.mode))) || (entry.precededByCompaction !== null && typeof entry.precededByCompaction !== "boolean") || (entry.bodyFingerprint !== null && (typeof entry.bodyFingerprint !== "string" || !FINGERPRINT.test(entry.bodyFingerprint))) || (entry.matched !== null && typeof entry.matched !== "boolean"); })
+    || typeof row.inputEvidenceComplete !== "boolean" || !Number.isSafeInteger(row.matchedCount) || (row.matchedCount as number) < 0 || !Number.isSafeInteger(row.unmatchedCount) || (row.unmatchedCount as number) < 0 || (row.replayRejectedReason !== null && (typeof row.replayRejectedReason !== "string" || !SAFE_REASON.test(row.replayRejectedReason))) || typeof row.supersededByNewCycle !== "boolean") throw Error("invalid Native response-cycle proof");
+  return Object.freeze({ ...row, inputEvidence: Object.freeze(row.inputEvidence.map(item => Object.freeze({ ...object(item) }))) });
+}
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("invalid work inspection contract");
@@ -111,7 +140,8 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
       || observedStages.some(stage => typeof stage !== "string" || !SAFE_STAGE.test(stage))
       || ["accepted", "browserFinalObserved", "webAnswerReceived", "nativeFinalItemObserved",
         "nativeFinalCommitted", "nativeResponseDrained"].some(key => typeof boundary[key] !== "boolean")
-      || boundary.proof !== "turn_scoped_local_events_only") {
+      || !Object.hasOwn(boundary, "webExecutionFailure") || !Object.hasOwn(boundary, "responseCycleProof")
+       || boundary.proof !== "turn_scoped_local_events_only") {
       throw Error("invalid Native-to-local response boundary evidence");
     }
   } else if (diag.activeRequestBoundary !== null) {
@@ -178,6 +208,8 @@ export function parseCodexWorkInspectionContract(value: unknown, expectedSlot: n
         nativeFinalItemObserved: boundary.nativeFinalItemObserved as boolean,
         nativeFinalCommitted: boundary.nativeFinalCommitted as boolean,
         nativeResponseDrained: boundary.nativeResponseDrained as boolean,
+        webExecutionFailure: parseFailureEvidence(boundary.webExecutionFailure),
+        responseCycleProof: parseResponseCycleProof(boundary.responseCycleProof),
         proof: "turn_scoped_local_events_only" as const,
       }) : null,
     }),

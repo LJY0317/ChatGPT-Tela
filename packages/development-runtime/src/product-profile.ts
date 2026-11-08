@@ -172,10 +172,16 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     }
     return completedResults;
   };
+  const webAccountCurrent = () => {
+    if (!completedResults) return false;
+    const binding = readChatGptTelaAccountBinding(config.browserProfile);
+    return binding?.accountFingerprint === completedResults.accountFingerprint;
+  };
   let runtime: ElectronDevelopmentRuntime | undefined;
   let startupFamilies: readonly import("@chatgpt-tela/chatgpt").ChatGptWebModelFamily[] | undefined;
   const router = createDefaultProfileCompositeProviderRouter({
     runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
+    webAccountCurrent,
     ...(input.nativeFetch ? { fetchUpstream: input.nativeFetch } : {}),
     discoverWebModelFamilies: signal => {
       if (startupFamilies) {
@@ -205,11 +211,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       ...(managed ? { modelListOverlay: {
         token: ingress.capability,
         handle: (request: Request) => handleModelListOverlayRequest({ request,
-          families: () => {
-            const binding = readChatGptTelaAccountBinding(config.browserProfile);
-            return binding && binding.accountFingerprint === completedResults?.accountFingerprint
-              ? router.cachedWebModelFamilies : [];
-          } }),
+          families: () => webAccountCurrent() ? router.cachedWebModelFamilies : [] }),
       } } : {}),
       requestRouter: request => router.route(request),
     },

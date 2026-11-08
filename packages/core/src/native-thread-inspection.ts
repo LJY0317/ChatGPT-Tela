@@ -417,6 +417,7 @@ export async function inspectNativeThread(input: {
     ? correlated.filter(event => event.turn_fingerprint === activeTurnFingerprint) : [];
   const boundaryStages = new Set([
     "native_response_observer_started", "web_turn_plan", "web_send_activation_started",
+    "web_execution_exception", "web_answer_received", "web_turn_final_observed", "web_turn_completed",
     "web_turn_identity_pending", "web_turn_identity_accepted", "web_public_progress_extraction",
     "native_public_item_observed", "native_outcome_committed", "native_response_body_closed", "native_turn_retired",
     "native_execution_failed", "native_steering_cycle_started", "native_cycle_proof_rejected",
@@ -460,7 +461,7 @@ export async function inspectNativeThread(input: {
       const event = requestEvents.filter(row => row.stage === "web_execution_exception").at(-1);
       if (!event) return null;
       const plan = activeEvents.filter(row => row.stage === "web_turn_plan" && row.operation_fingerprint === event.operation_fingerprint).at(-1);
-      return { at: event.ts, reasonClass: event.reason_class ?? null, boundary: event.boundary ?? null,
+      return { at: event.ts, stage: event.stage, reasonClass: event.reason_class ?? null, boundary: event.boundary ?? null,
         observationState: event.observation_state ?? null, observationReason: event.observation_evidence_class ?? null,
         observationEvidenceCount: event.observation_evidence_count ?? null, accepted: event.accepted ?? null,
         turnPhase: event.turn_phase ?? null, operationFingerprint: diagnosticFingerprintField(event.operation_fingerprint) ?? null,

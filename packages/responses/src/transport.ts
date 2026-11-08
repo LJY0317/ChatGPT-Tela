@@ -34,17 +34,20 @@ function observedBody(input: {
   readonly commitAfterChunk?: number;
   readonly commit?: () => void;
   readonly outcome: NativeGatewayOutcome["type"] | "failed";
+  readonly onClosed?: () => void;
 }): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   let index = 0;
   let committed = false;
   const diagnostics = diagnosticContext();
-  const closed = (reason: string) => withDiagnosticContext(diagnostics, () =>
-    emitDiagnosticEvent("chatgpt_tela_work", "native_response_body_closed", {
+  const closed = (reason: string) => {
+    withDiagnosticContext(diagnostics, () => emitDiagnosticEvent("chatgpt_tela_work", "native_response_body_closed", {
       reason_class: reason, outcome: input.outcome, outcome_committed: committed,
       pulled_frame_count: index, queued_frame_count: input.chunks.length - index,
       delivery: "http_body_consumer", ui_observed: false,
     }));
+    try { input.onClosed?.(); } catch { /* Diagnostics never change response delivery. */ }
+  };
 
   return new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -79,25 +82,28 @@ function responseForOutcome(input: {
     model: input.model,
     createdAt: input.createdAt,
   });
+  const responseContext = input.outcome.delivery.diagnosticContext ?? diagnosticContext();
   if (!input.stream) {
     const json = `${JSON.stringify(encoded.response)}\n`;
-    return new Response(observedBody({
+    return new Response(withDiagnosticContext(responseContext, () => observedBody({
       chunks: [json],
       commitAfterChunk: 0,
       commit: () => input.gateway.commit(input.outcome),
       outcome: input.outcome.type,
-    }), {
+      ...(input.outcome.delivery.finishDiagnostics ? { onClosed: input.outcome.delivery.finishDiagnostics } : {}),
+    })), {
       headers: { "content-type": "application/json" },
     });
   }
 
   const plan = nativeResponsesSsePlan(input.outcome, encoded);
-  return new Response(observedBody({
+  return new Response(withDiagnosticContext(responseContext, () => observedBody({
     chunks: plan.frames,
     commitAfterChunk: plan.commitAfterFrame,
     commit: () => input.gateway.commit(input.outcome),
     outcome: input.outcome.type,
-  }), {
+    ...(input.outcome.delivery.finishDiagnostics ? { onClosed: input.outcome.delivery.finishDiagnostics } : {}),
+  })), {
     headers: {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",

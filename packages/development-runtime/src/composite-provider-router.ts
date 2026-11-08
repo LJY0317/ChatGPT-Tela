@@ -82,6 +82,8 @@ export interface DefaultProfileCompositeProviderRouter {
 export function createDefaultProfileCompositeProviderRouter(input: {
   readonly runtimeHeaderName: string;
   readonly discoverWebModelFamilies: (signal?: AbortSignal) => Promise<readonly ChatGptWebModelFamily[]>;
+  /** Reuse the profile's validated account scope when publishing model choices. */
+  readonly webAccountCurrent?: () => boolean;
   readonly fetchUpstream?: NativeCodexFetch;
   readonly backendBaseUrl?: string;
   readonly catalogTtlMs?: number;
@@ -180,7 +182,7 @@ export function createDefaultProfileCompositeProviderRouter(input: {
       let catalog: unknown;
       try { catalog = await upstream.json(); }
       catch { throw new Error("Native Codex model catalog response was not valid JSON"); }
-      const families = currentFamilies(request.signal);
+      const families = input.webAccountCurrent?.() === false ? [] : currentFamilies(request.signal);
       const nativeCount = record(catalog)?.models;
       let augmented: unknown;
       try {

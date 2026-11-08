@@ -250,7 +250,7 @@ test('cycle closure archives sparse context evidence locally without private pro
   const incident=readDiagnosticIncident(join(root,'diagnostics'),incidents[0]!.ref) as {stage:string;timeline:StructuralDiagnosticEvent[]};
   expect(incident.stage).toBe('native_cycle_summary');
   expect(incident.timeline.map((row:any)=>row.stage)).toEqual(['web_retained_context_decision','web_turn_plan',
-   'context_checkpoint_provider_invoked','checkpoint_operation_observed','native_checkpoint_model_failed','native_cycle_summary']);
+   'context_checkpoint_provider_invoked','checkpoint_operation_observed','native_checkpoint_model_failed','native_outcome_committed','native_cycle_summary']);
   const restored=summarizeTurnDiagnostics(incident.timeline);
   expect(restored.cost.preparationModelCalls.total).toBe(1);
   expect(restored.cost.preparationModelDuration.total).toBe(34601);

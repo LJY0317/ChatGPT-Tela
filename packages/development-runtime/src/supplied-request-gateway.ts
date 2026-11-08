@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { encodeNativeToolInvocation, extractNativeToolResults, parseNativeTurnClaim, parseNativeTurnReplayIdentity } from "@chatgpt-tela/codex";
-import { NativeToolInventory, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
+import { NativeToolInventory, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, startTurnDiagnosticSummary, withDiagnosticContext, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
 import type { TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import { selectChatGptWebModel, type WebConversationProvider } from "@chatgpt-tela/chatgpt";
 import type { ResponsesGateway } from "@chatgpt-tela/responses";
@@ -42,6 +42,7 @@ interface Operation {
   finishedAt?: number;
   delivered: boolean;
   progress?: string;
+  diagnostics?: ReturnType<typeof startTurnDiagnosticSummary>;
 }
 
 function fingerprint(body: unknown): string {
@@ -201,6 +202,12 @@ export function createSuppliedRequestGateway(input: {
           turnId: identity.turnId, fingerprint: hash, capability, listeners, delivered: false,
           round: new ExactToolRound(), advertisedGoals, offer,
           outcome: Promise.resolve().then(async () => {
+            const correlation = { scope_fingerprint: diagnosticFingerprint(identity.threadId),
+              turn_fingerprint: diagnosticFingerprint(identity.turnId),
+              request_fingerprint: diagnosticFingerprint(hash) };
+            const diagnostics = withDiagnosticContext(correlation, () => startTurnDiagnosticSummary(
+              correlation.scope_fingerprint, correlation.turn_fingerprint, correlation.request_fingerprint));
+            owned.diagnostics = diagnostics;
             const signal = input.webTurnTimeoutMs === undefined ? controller.signal
               : AbortSignal.any([controller.signal, AbortSignal.timeout(input.webTurnTimeoutMs)]);
             let plan: DevelopmentWebTurnPlan | undefined;
@@ -223,6 +230,7 @@ export function createSuppliedRequestGateway(input: {
               const page = await epochs.acquire(plan.nativeTaskId, plan.webEpochId);
               acquired = true;
               const bound = bindWebEpochDocument(plan, page, signal);
+              withDiagnosticContext(correlation, () => emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_started", { native_authority: false }));
               const answer = await runBrowserTurnOnSurface({
                 surface: page.surface, provider: input.provider, nativeTaskId: plan.nativeTaskId,
                 nativeTurnId: identity.turnId, webEpochId: plan.webEpochId,
@@ -245,13 +253,13 @@ export function createSuppliedRequestGateway(input: {
                 status: "completed", answer, surfaceLeaseId: page.surface.leaseId,
                 ...(bound.document ? { documentGeneration: bound.document.generation } : {}),
               }));
-              emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_completed", {
-                scope_fingerprint: diagnosticFingerprint(identity.threadId),
-                turn_fingerprint: diagnosticFingerprint(identity.turnId), native_authority: false,
-                context_mode: plan.physicalContext.mode, retained_surface: page.reused,
-                logical_estimate: plan.physicalContext.logicalTokens, transfer_estimate: plan.physicalContext.transferTokens,
+              const responseContext = { ...correlation, operation_fingerprint: diagnosticFingerprint([identity.threadId, identity.turnId, plan.webEpochId].join("\n")) };
+              withDiagnosticContext(responseContext, () => emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_completed", {
+                native_authority: false,
+                context_mode: plan!.physicalContext.mode, retained_surface: page.reused,
+                logical_estimate: plan!.physicalContext.logicalTokens, transfer_estimate: plan!.physicalContext.transferTokens,
                 effort: route.effort,
-              });
+              }));
               if (resultIdentity) {
                 try {
                   if (typeof input.completedResults === "function"
@@ -269,15 +277,17 @@ export function createSuppliedRequestGateway(input: {
                   });
                 }
               }
-              return { type: "final", answer, delivery: { capability } } as const;
+              withDiagnosticContext(responseContext, () => emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_ready", { native_authority: false }));
+              return { type: "final", answer, delivery: { capability, diagnosticContext: responseContext,
+                responseSource: "supplied", finishDiagnostics: () => diagnostics?.finish() } } as const;
             } catch (error) {
               owned.failed = true;
-              emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_failed", {
-                scope_fingerprint: diagnosticFingerprint(identity.threadId),
-                turn_fingerprint: diagnosticFingerprint(identity.turnId), native_authority: false,
+              const failureContext = { ...correlation, ...(plan ? { operation_fingerprint: diagnosticFingerprint([identity.threadId, identity.turnId, plan.webEpochId].join("\n")) } : {}) };
+              withDiagnosticContext(failureContext, () => emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_failed", {
+                native_authority: false,
                 boundary: !plan ? "planning" : acquired ? "browser" : "acquisition",
                 ...diagnosticFailureFields(error),
-              });
+              }));
               if (!plan) capturePrivateDiagnosticValue("web_preparation_failure", {
                 phase: "provider_input", request: body,
                 error: error instanceof Error ? { name: error.name, message: error.message } : { name: "unknown" },
@@ -287,7 +297,7 @@ export function createSuppliedRequestGateway(input: {
               if (plan && acquired) await epochs.fail(plan.nativeTaskId, plan.webEpochId, true).catch(() => {});
               owned.round.fail(error instanceof Error ? error : new Error(String(error)));
               throw error;
-            } finally { owned.finishedAt = Date.now(); }
+            } finally { owned.finishedAt = Date.now(); if (owned.failed) diagnostics?.finish(); }
           }),
         };
         owned.webRun = owned.outcome;
@@ -319,6 +329,8 @@ export function createSuppliedRequestGateway(input: {
       for (const op of operations.values()) if (op.capability === outcome.delivery.capability) {
         if (outcome.type === "tool-call") op.round.markDelivered(outcome.delivery.callId);
         op.delivered = true;
+        if (outcome.delivery.responseSource === "supplied") withDiagnosticContext(outcome.delivery.diagnosticContext ?? {}, () =>
+          emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_committed", { native_authority: false, outcome: outcome.type }));
       }
     },
     async close() {

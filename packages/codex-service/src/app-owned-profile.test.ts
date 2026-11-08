@@ -719,7 +719,9 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
     profileRuntimeEnvironment(target) { return { CHATGPT_TELA_PRODUCT_NATIVE_TARGET_KIND: target.adapterKind,
       CHATGPT_TELA_PRODUCT_TARGET_ID: target.id, ...(target.slot === 2 ? { CHATGPT_TELA_PRODUCT_LAUNCHER_CLI: "/fixture/plura" } : {}),
       FIXTURE_STATE: state[target.slot - 1]!,
-      FIXTURE_RESPONSES: `http://127.0.0.1:${ingress[target.slot - 1]!.port}/${ingress[target.slot - 1]!.capability}/v1/` }; },
+      FIXTURE_RESPONSES: target.slot === 1
+        ? `http://127.0.0.1:${ingress[0]!.port}/${ingress[0]!.capability}/v1/`
+        : `http://127.0.0.1:${ingress[target.slot - 1]!.port}/v1/` }; },
   };
   const service = await startCodexService({ config: { multiProfile: { launcherCli: "/fixture/plura" }, appOwnedResponses: ingress },
     nativeTargetAdapter: adapter, profileRuntimeCommand: [process.execPath, join(root, "child.mjs")] });

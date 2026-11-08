@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { webObservationFailureReason, startTurnDiagnosticSummary, diagnosticContext, capturePrivateDiagnosticValue, nativeTextHash, diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
+import { webObservationFailureReason, startTurnDiagnosticSummary, diagnosticContext, capturePrivateDiagnosticValue, nativeTextHash, diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent, withDiagnosticContext, type DiagnosticContext } from "@chatgpt-tela/core";
 import {
   bindNativeTurnRequest,
   extractNativeToolResults,
@@ -22,6 +22,9 @@ export type NativeGatewayOutcome =
         readonly capability: string;
         readonly progressCursor?: number;
         readonly callId: string;
+        readonly diagnosticContext?: DiagnosticContext;
+        readonly responseSource?: "supplied";
+        readonly finishDiagnostics?: () => void;
       };
     }
   | {
@@ -30,6 +33,9 @@ export type NativeGatewayOutcome =
       readonly delivery: {
         readonly capability: string;
         readonly progressCursor?: number;
+        readonly diagnosticContext?: DiagnosticContext;
+        readonly responseSource?: "supplied";
+        readonly finishDiagnostics?: () => void;
       };
     };
 

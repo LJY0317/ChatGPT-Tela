@@ -209,7 +209,9 @@ function childReady(value: unknown, expected: {
     }
   }
   if (expected.appOwnedIngress
-    && responsesUrl.href !== `http://127.0.0.1:${expected.appOwnedIngress.port}/${expected.appOwnedIngress.capability}/v1/`) {
+    && responsesUrl.href !== (expected.nativeTargetKind === "default-desktop"
+      ? `http://127.0.0.1:${expected.appOwnedIngress.port}/${expected.appOwnedIngress.capability}/v1/`
+      : `http://127.0.0.1:${expected.appOwnedIngress.port}/v1/`)) {
     throw new Error("app-owned profile Responses route does not match installed ownership");
   }
   const fingerprint = string("responsesRouteFingerprint");
