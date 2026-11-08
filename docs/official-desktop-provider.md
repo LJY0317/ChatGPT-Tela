@@ -121,54 +121,69 @@ The app-owned route must remain opt-in until those are separately verified.
 
 ## Two Native-first profiles: consumer transition handoff
 
-For an existing installation with `multiProfile` configured and no active
-`appOwnedResponses`, retain the installed Native-first binary and its settings
-until an operator has explicitly accepted the transition. Preserve a recovery
-copy of the installed package, then use the **packaged launcher**, which routes
-`upgrade` through `runPackagedLifecycleCommand` (not the bootstrap command):
+The recorded installed baseline `83323f73` still has two Native-first profiles
+and no `appOwnedResponses`. The engine-free build-7 candidate cannot replace it
+with the old routes unchanged. Keep the installed package and both profiles in
+place until an operator accepts a reviewed, recoverable configuration change.
 
-```text
-<candidate.app>/Contents/MacOS/chatgpt-tela upgrade --dry-run --payload <candidate.app>
-```
+The **public packaged launcher routes** `upgrade --dry-run` and `upgrade --apply`
+through `runPackagedLifecycleCommand`, but on **macOS both are rejected** by
+`planPackagedUpgradeFromPayload` with `macOS updates use Sparkle; choose Check
+for Updates in Tela`, before reading source files or preparing an upgrade plan.
+Thus the routed command is not a usable macOS preview or apply path. The
+isolated whole-payload lifecycle upgrade tests use a Linux fixture. For an
+existing app-bundle installation, Sparkle owns app replacement and relaunch;
+Tela's separate `application-update wait/prepare/finish/cancel` handshake only
+settles owned services and update metadata. A previous split-payload install
+requires its **old owner's keep-data removal** followed by a new app install,
+as described in [upgrade recovery](upgrade-recovery.md#macos-updates-through-sparkle).
+Neither route has been exercised against the live installed baseline. Build 7
+has a synthetic version, ad-hoc signature and test feed, so it is not an
+approved public Sparkle update or an accepted production installer.
 
-This read-only plan is supported by the packaged CLI and isolated lifecycle
-acceptance tests. Inspect the reported installation ownership,
-`shutdownBlockers`, recovery source and service preservation before considering
-any `--apply`. The live installed configuration has **not** been dry-run or
-upgraded in this candidate audit. A successful plan alone does not make the
-new Native-engine-free package compatible with the old routes. The macOS
-menu-bar's Sparkle update follows the separate `application-update`
-`wait/prepare/finish/cancel` ownership handshake; neither procedure should be
-silently substituted for the other. The candidate's synthetic version and
-build number are local test identifiers, not an approved monotonic release
-sequence or a valid public Sparkle feed.
+For a supervised transition after release acceptance:
 
-For an authorized transition, first complete or cancel active Work and managed
-profile tasks, disconnect the affected profiles through their existing controls,
-and preserve the current user-level Codex config and Tela product config for
-review. Arrange the package upgrade and the explicitly prepared configuration
-as one supervised maintenance window: install/upgrade only with the product's
-existing verified lifecycle, then use the newly installed launcher to run
-`configure --file <reviewed-product-config.json> --enable-app-owned-desktop`
-before reconnecting Work. Keep `multiProfile` and add a separate slot-2
-`appOwnedResponses` entry only when the optional Plura target is actually
-detected; supply a different port and private capability for that slot. The
-flag provisions slot 1 only. No ambient `HOME`, `CODEX_HOME`, or `XDG` override
-is part of this procedure.
+1. Finish or explicitly cancel active Work/Native tasks; use the existing
+   controls to disconnect affected profiles. Preserve the installed signed
+   source, ownership/recovery receipts, Tela product config and user-level
+   official Codex config. Check the old installation format and the owning
+   lifecycle's **read-only** removal/installation previews. Do not apply an
+   update if the recoverable source or task settlement is uncertain.
+2. Use only the lifecycle appropriate to the verified source format. For an old
+   split-payload installation, stage its independent owned uninstaller and use
+   keep-data `uninstall --apply`, then the new signed bundle's `install --apply`
+   after reviewing its `install --dry-run`. For an existing app bundle, use a
+   valid signed Sparkle feed/update and its standard maintenance handshake.
+   Do not invoke macOS `upgrade`, restore an old legacy updater or treat the
+   synthetic build-7 label as a release number.
+3. Before reconnecting Work, run the **newly installed** launcher's
+   `configure --file <reviewed-product-config.json> --enable-app-owned-desktop`.
+   Preserve `multiProfile`; the flag provisions slot 1 only. Add a distinct
+   slot-2 `appOwnedResponses` entry with its own port and private capability
+   **only** for a detected managed Plura target. If the second target cannot
+   be proven, leave it disconnected and defer its conversion; do not silently
+   replace it with an unmanaged Native engine or reuse slot-1 credentials.
+4. Run `services start`, reconnect slot 1 and require account-bound Web discovery
+   and its Native+Web model catalog to reach **Ready**. Review
+   `desktop-provider register --dry-run` and explicitly apply registration
+   only after the reported catalog and ownership are accepted. Independently
+   verify the managed target and route before reconnecting slot 2.
+5. Registration does not select a model. The user must choose
+   `model_provider = "chatgpt_tela_local"` and a catalog-listed model in their
+   user-level official Codex config, then normally restart the official Desktop
+   under their own control and accept the real account/provider behavior.
+   Synthetic Responses success or Web Ready status does not establish that
+   Desktop acceptance.
 
-Start the owned services with `services start`, reconnect slot 1, and require
-its account-bound Web discovery and Native+Web model catalog to reach Ready.
-Only then run `desktop-provider register --dry-run`, review its exact current
-catalog/ownership decision, and explicitly authorize `register --apply`.
-Registration leaves `model_provider` and the model unchanged: select
-`chatgpt_tela_local` and a catalog-listed model in the user-level official
-Codex settings and normally restart the official Desktop under the user's
-control to make that selection effective. Reconnect slot 2 independently only
-after its managed target and route are proven. Do not equate a ready Web route
-with a Native RPC/terminalSession, nor infer account acceptance from a synthetic
-HTTP fixture. If admission, catalog or target verification fails, preserve the
-installed recovery source and use the existing explicit restore/cancellation
-path; never fall back silently to an unmanaged Native process.
+For recovery, switch the official Codex selection back to its previous
+`openai` provider/model first, then review and apply `desktop-provider restore`
+for the exact install-owned stanza. Disconnect affected app-owned profiles and
+use the preserved source with the **owning** restore/removal/install lifecycle;
+`application-update cancel` is valid only while the unchanged signed source
+remains. Preserve uncertain transition journals and work state for settlement.
+No live dry-run, apply, account change or Desktop restart was performed in this
+handoff. The local candidate's source/package receipt is
+`build/nov08-transition-handoff/final-candidate-manifest.json` in this checkout.
 
 An additional isolated official engine run used this repository's exact
 registered provider stanza, a fake `HOME`/`CODEX_HOME` with only a synthetic
