@@ -124,10 +124,12 @@ The app-owned route must remain opt-in until those are separately verified.
 
 The recorded installed baseline `83323f73` still has two Native-first profiles,
 an embedded Native engine and no `appOwnedResponses`. Neither the historical
-build-7 candidate nor the new **engine-free integration candidate** can replace
-those routes unchanged. The new build-8 candidate was assembled once from
-`026d5100`, ad-hoc signed and verified locally, with no embedded Native engine;
-its private receipt is `build/nov08-engine-free-package/candidate-manifest.json`.
+build-7/8 candidates nor the **final engine-free local candidate** can replace
+those routes unchanged. The final build-9 candidate was assembled once from
+`5e3b93bf`, ad-hoc signed and verified locally, with no embedded Native engine.
+Unlike build 8, it includes the existing protocol-v2 workspace-files helper for
+Chat file import/export, independently of ordinary workspace read/write.
+Its private receipt is `build/nov08-final-engine-free/candidate-manifest.json`.
 This is **not** an approved update or an installed package. Keep the installed
 source and both profiles in place until an operator accepts an explicit,
 recoverable per-slot configuration change.
@@ -203,8 +205,9 @@ already-running session's selection or its overrides; provider-only installation
 is distinct from complete Native replacement. The earlier build-7 package does
 not contain this guard, explicit multi-slot configure or later source changes.
 Its historical source/package receipt is
-`build/nov08-transition-handoff/final-candidate-manifest.json`; the new build-8
-private receipt records the final source fingerprint and ad-hoc local checks.
+`build/nov08-transition-handoff/final-candidate-manifest.json`; build 8 remains
+historical and lacked the file-transfer helper. The final build-9 receipt records
+the actual compiled source, helper and signature, fingerprint and local checks.
 Developer ID signing, notarization, a real signed Sparkle feed and user-approved
 installed Desktop/account acceptance remain separate steps.
 
