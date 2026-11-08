@@ -13,6 +13,9 @@ state.loaded([connected]); precondition(state.error == nil && state.profiles[0].
 precondition(connected.action == "stop")
 var appOwned = TelaWorkProfile(slot: 1, targetDisplayName: "ChatGPT", targetState: "running", targetSessionState: "independent", controlState: "running")
 precondition(appOwned.connected && appOwned.action == "stop" && !appOwned.canReconnectWeb)
+let offIndependent = TelaWorkProfile(slot: 2, targetDisplayName: "Managed 2", targetState: "running",
+  targetSessionState: "available", controlState: "stopped", targetId: "profile-2")
+precondition(offIndependent.action == "start")
 precondition(TelaWebConnectionPresentation(profile: appOwned, wantedTargets: []).status != "Ready")
 appOwned.webState = "ready"; appOwned.webModelsReady = true
 precondition(appOwned.connected && appOwned.action == "stop")
@@ -113,7 +116,7 @@ precondition(signedOutWeb.connected && signedOutWeb.needsWebSignIn && TelaWebPre
 precondition(signedOutWeb.connectionLabel == "Web sign-in required")
 precondition(!TelaProfilePresentation(profile: signedOutWeb, inventoryError: nil, localProgress: nil).busy)
 var readyWeb = preparingWeb; readyWeb.webState = "ready"; readyWeb.webModelsReady = true
-precondition(readyWeb.connectionLabel == "Connected" && TelaWebPresentation(profile: readyWeb).status == "Verified" && TelaWebPresentation(profile: readyWeb).buttonTitle == "Manage…")
+precondition(readyWeb.connectionLabel == "Connected" && TelaWebPresentation(profile: readyWeb).status == "Not verified" && TelaWebPresentation(profile: readyWeb).buttonTitle == "Verify…")
 var observedLogout = readyWeb; observedLogout.webSignIn = "signed-out"
 precondition(TelaWebPresentation(profile: observedLogout).status == "Sign-in required")
 precondition(TelaWebPresentation(profile: observedLogout).buttonTitle == "Sign in…")

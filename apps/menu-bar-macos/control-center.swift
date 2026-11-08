@@ -1895,9 +1895,15 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           profileFailure = "Couldn't bring ChatGPT to the front. Please try again."
           selectedPage = .work; show()
         }
-      } else if profile.targetState != "running", profile.controlState == "stopped" {
+      } else if profile.controlState == "running" && profile.targetSessionState == "independent" {
+        // Tela owns this Web route, while the official Desktop's launch and UI
+        // remain outside the service's process ownership.
         selectedPage = .work; show()
-        changeConnection(slot: slot, requireStopped: true)
+      } else if profile.controlState == "stopped" && profile.targetSessionState == "available" {
+        selectedPage = .work; show()
+        // A stopped managed Desktop requires a stopped-target receipt. An
+        // app-owned Web route has no Desktop lifecycle to acquire or quit.
+        changeConnection(slot: slot, requireStopped: profile.targetState == "stopped")
       } else {
         profileFailure = "ChatGPT is still opening or closing. Please try again in a moment."
         selectedPage = .work; show()
@@ -1961,8 +1967,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       alert.messageText = action == "restart" ? "Reopen \(profile.targetDisplayName) with Tela?" : "Turn off Web models in \(profile.targetDisplayName)?"
       alert.informativeText = action == "restart"
         ? "ChatGPT will close and reopen with Web models ready. Finish any ongoing work first. Your conversations will be kept."
-        : "This closes this ChatGPT app and interrupts any ongoing work. Your conversations will be kept. You can still open ChatGPT normally to use Native models."
-      alert.addButton(withTitle: action == "restart" ? "Reopen with Tela" : "Turn Off and Close")
+        : profile.targetSessionState == "independent"
+          ? "This disconnects Tela's Web models from this profile. The official ChatGPT Desktop stays open; finish active Web work first."
+          : "This closes this ChatGPT app and interrupts any ongoing work. Your conversations will be kept. You can still open ChatGPT normally to use Native models."
+      alert.addButton(withTitle: action == "restart" ? "Reopen with Tela"
+        : profile.targetSessionState == "independent" ? "Turn Off Web Models" : "Turn Off and Close")
       alert.addButton(withTitle: "Cancel")
       let decision = action == "restart" ? "web_reopen" : "web_disconnect"
       let decisionId = UUID().uuidString

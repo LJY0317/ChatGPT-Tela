@@ -62,7 +62,12 @@ struct TelaWorkProfile: Decodable, Equatable {
   var connected: Bool {
     controlState == "running" && (targetSessionState == "ready" || targetSessionState == "independent")
   }
-  var action: String { connected ? "stop" : (targetState == "running" || controlState == "restart-required" ? "restart" : "start") }
+  var action: String {
+    if connected { return "stop" }
+    // An app-owned route can be started while the official Desktop remains open.
+    if controlState == "stopped" && targetSessionState == "available" { return "start" }
+    return targetState == "running" || controlState == "restart-required" ? "restart" : "start"
+  }
   var connectionLabel: String {
     if connected && accountManagementActive == true { return "Finish account management" }
     if connected && webState == "preparing" { return "Connecting…" }
@@ -123,8 +128,6 @@ struct TelaWebPresentation {
     } else if profile.webSignIn == "signed-in" || account?.web.state == "signed-in" {
       result = ("Verified", profile.webState == "failed" ? .reconnect : .account,
         profile.webState == "failed" ? "Try again" : "Manage…")
-    } else if profile.webSignIn == nil && account?.web.state == nil && profile.webState == "ready" && profile.webModelsReady != false {
-      result = ("Verified", .account, "Manage…")
     } else {
       result = ("Not verified", .account, "Verify…")
     }

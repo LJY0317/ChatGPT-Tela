@@ -10,6 +10,7 @@ import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } 
 import { appOwnedDesktopCatalogPath, readPreparedAppOwnedDesktopCatalog } from "../../development-runtime/src/app-owned-desktop-catalog";
 import { editOfficialCodexProviderFile, TELA_APP_OWNED_PROVIDER_ID } from "@chatgpt-tela/default-desktop-target";
 import { writeServiceRuntimeDescriptor } from "../../service-protocol/src/index";
+import { CodexServiceClient } from "../../service-protocol/src/client";
 import { ownedServiceShutdown } from "../../../apps/packaged-launcher/src/service-shutdown";
 import type { CodexNativeTargetAdapter } from "./native-target";
 import { RoutedCodexTurnBridge } from "./routed-turn-bridge";
@@ -65,16 +66,23 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
   const http = await startCodexServiceHttpServer({ service });
   const paths = resolveProductPaths({ platform: "linux", home: root, environment: {} });
   mkdirSync(paths.serviceRuntime("codex"), { recursive: true });
-  writeServiceRuntimeDescriptor(join(paths.serviceRuntime("codex"), "descriptor.json"), {
+  const descriptor = {
     version: 1, service: "codex", instanceId: service.instanceId, installId: "fixture",
     pid: process.pid, endpoint: http.endpoint.href, bearerToken: http.bearerToken,
     startedAt: new Date().toISOString(),
-  });
+  } as const;
+  writeServiceRuntimeDescriptor(join(paths.serviceRuntime("codex"), "descriptor.json"), descriptor);
+  const client = new CodexServiceClient(descriptor);
   const update = ownedServiceShutdown("fixture", paths);
   try {
     const first = await service.startProfile(1);
     expect(first).toMatchObject({ controlState: "running", webModelsReady: true,
       responsesRouteFingerprint: "a".repeat(64) });
+    expect(await client.profiles()).toContainEqual(expect.objectContaining({
+      slot: 1, targetId: "default", controlState: "running", targetSessionState: "independent",
+      webState: "ready", webModelsReady: true, childProcessId: first.childProcessId,
+    }));
+    await expect(client.terminalSession(1)).rejects.toThrow("App-owned provider does not own a Native terminal");
     expect(routed.routeCount).toBe(1);
     expect(await service.profiles()).toContainEqual(expect.objectContaining({ slot: 1, controlState: "running" }));
     expect(await service.waitWebPreparation(1)).toMatchObject({ webState: "ready", webModelsReady: true });
@@ -91,6 +99,9 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     writeFileSync(state, JSON.stringify({ busy: false }));
     await update.prepare("codex");
     expect(await service.stopProfile(1)).toMatchObject({ controlState: "stopped" });
+    expect(await client.profiles()).toContainEqual(expect.objectContaining({
+      slot: 1, controlState: "stopped", targetSessionState: "available",
+    }));
     expect(readFileSync(receipts, "utf8")).toBe("1");
     expect(routed.routeCount).toBe(0);
     const restarted = await service.startProfile(1);
