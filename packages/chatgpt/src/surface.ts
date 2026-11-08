@@ -84,6 +84,8 @@ export interface ChatGptSurfaceSnapshot {
     readonly cardFingerprint?: string;
     readonly inputReceived?: boolean;
   };
+  /** Independently identified visible cards, in renderer order. */
+  readonly approvalCards?: readonly NonNullable<ChatGptSurfaceSnapshot["approval"]>[];
   /** Last prepared trusted input, independent of the card's continued presence. Not approval authority. */
   readonly approvalInputReceipt?: { readonly cardFingerprint: string; readonly revisionFingerprint: string };
   readonly url: string;
@@ -132,7 +134,7 @@ export interface ChatGptSurfaceDriver {
     mode: ChatGptApprovalAutomationMode,
     signal?: AbortSignal,
     delayMs?: number,
-    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
+    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string; readonly index?: number },
   ): Promise<{ readonly status: "none"; readonly reason: string }
     | { readonly status: "dispatched"; readonly reason: "allow" | "allow_once" | "allow_conversation";
         readonly cardFingerprint: string; readonly revisionFingerprint?: string }>;

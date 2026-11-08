@@ -202,6 +202,81 @@ test("first Web request with setup-only context skips summary preparation and pr
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("long completed work keeps one summary and a prepared follow-up reuses it without another call", async () => {
+  const directory = root();
+  try {
+    const instructions = "Keep the verified objective and current repository constraints.";
+    const originalTask = "Establish the implementation baseline.";
+    const toolOutput = "Verified repository state: " + "T".repeat(12_000);
+    const completedWork = "The previous implementation step is complete: " + "A".repeat(12_000);
+    const history = [
+      { role: "user", content: originalTask },
+      { type: "function_call", name: "exec_command", call_id: "fixture-call", arguments: "{}" },
+      { type: "function_call_output", call_id: "fixture-call", output: toolOutput },
+      { role: "assistant", content: completedWork },
+    ];
+    const current = "Continue from the verified implementation state.";
+    const directoryOptions = {
+      checkpointCache: new FileContextCheckpointCache({ directory: join(directory, "cache") }),
+      visiblePrefix: {
+        accountNamespace: "long-history-fixture",
+        journal: new FileNativeVisiblePrefixStageJournal({
+          directory: join(directory, "ledger"), initializationPath: join(directory, "init"),
+        }),
+        async read(): Promise<never> { throw Error("the canonical request already contains its history"); },
+      },
+    };
+    let calls = 0;
+    let summarySourceBytes = 0;
+    const planner = createNativeRequestDevelopmentWebTurnPlanner({
+      ...directoryOptions,
+      budgetTokens: 2_000,
+      checkpointProducer: async request => {
+        calls++;
+        summarySourceBytes += request.physicalContext.segments.reduce((sum, segment) =>
+          sum + Buffer.byteLength(segment.content, "utf8"), 0);
+        const snapshot = JSON.parse(request.physicalContext.segments[0]!.content);
+        const sourceText = snapshot.source.items.map((item: { content: string }) => item.content).join("\n");
+        expect(sourceText).toContain(instructions);
+        expect(sourceText).toContain(originalTask);
+        expect(sourceText).toContain(toolOutput);
+        expect(sourceText).toContain(completedWork);
+        expect(sourceText).not.toContain(current);
+        return { nativeTaskId: request.nativeTaskId, sourceRevisionId: request.sourceRevisionId,
+          content: "Verified completed work summary; inspect original evidence when needed." };
+      },
+    });
+    const first = await planner(registered("long-first"), {
+      model, reasoning: { effort: "high" }, instructions, input: [...history, { role: "user", content: current }],
+    });
+    const firstTransferBytes = first.physicalContext.segments.reduce((sum, segment) =>
+      sum + Buffer.byteLength(segment.content, "utf8"), 0);
+    expect(calls).toBe(1);
+    expect(summarySourceBytes).toBeGreaterThan(24_000);
+    expect(first.physicalContext.mode).toBe("checkpoint-delta");
+    expect(first.physicalContext.segments.some(segment => segment.type === "checkpoint")).toBe(true);
+    expect(first.physicalContext.segments.some(segment => segment.content === instructions)).toBe(true);
+    expect(first.physicalContext.segments.at(-1)?.content).toBe(current);
+    expect(firstTransferBytes).toBeLessThan(summarySourceBytes);
+    first.settle?.({ status: "failed" });
+
+    const followupText = "Use the prepared state for the next step.";
+    const followup = await planner(registered("long-followup"), {
+      model, reasoning: { effort: "high" }, instructions,
+      input: [...history, { role: "user", content: followupText }],
+    });
+    const followupTransferBytes = followup.physicalContext.segments.reduce((sum, segment) =>
+      sum + Buffer.byteLength(segment.content, "utf8"), 0);
+    expect(calls).toBe(1);
+    expect(followup.physicalContext.mode).toBe("checkpoint-delta");
+    expect(followup.physicalContext.segments.some(segment => segment.type === "checkpoint")).toBe(true);
+    expect(followup.physicalContext.segments.some(segment => segment.content === instructions)).toBe(true);
+    expect(followup.physicalContext.segments.at(-1)?.content).toBe(followupText);
+    expect(followupTransferBytes).toBeLessThan(summarySourceBytes);
+    followup.settle?.({ status: "failed" });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("checkpoint lookup reports the failed publication-read substage without replacing the exception", async () => {
   const directory = root();
   const failure = new Error("private checkpoint publication failure");

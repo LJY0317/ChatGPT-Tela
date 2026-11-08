@@ -47,7 +47,8 @@ import { isChatGptTemporaryChatUrl, isChatGptProvisionalConversationUrl } from "
 interface TrackedTurn extends TurnOwnership {
   readonly handle: WebTurnHandle;
   readonly surfaceLeaseId: string;
-  readonly preSubmitApprovalRevision?: string;
+  readonly preSubmitApprovalRevisions?: ReadonlySet<string>;
+  readonly preSubmitApprovalCardFingerprints?: ReadonlySet<string>;
   revision: string;
   readonly deliveryWaitTimeoutMs: number;
   readonly isToolExecutionPending?: () => boolean;
@@ -69,7 +70,7 @@ interface TrackedTurn extends TurnOwnership {
   approvalProgress?: string;
   approvalPendingCaptured?: boolean;
   responseRetryState?: "dispatched" | "observed";
-  approvalFailureCaptured?: string;
+  readonly approvalFailureCaptured: Map<string, { readonly revisionFingerprint: string; readonly reason: string }>;
   readonly approvalObservation: ChatGptApprovalObservation;
   observeAgain?: boolean;
   readonly operationAbort: AbortController;
@@ -707,12 +708,20 @@ function retainedBoundaryFields(assistant: ChatGptTurnObservation | undefined) {
   };
 }
 
-/** An unchanged single card already present before send belongs to an earlier request. */
+/** Existing cards retain their identity across control and text revisions. */
+function pendingApprovals(snapshot: ChatGptSurfaceSnapshot, tracked: TrackedTurn): readonly NonNullable<ChatGptSurfaceSnapshot["approval"]>[] {
+  const cards = snapshot.approvalCards ?? (snapshot.approval ? [snapshot.approval] : []);
+  return cards.filter(card => card.cardFingerprint
+    ? !tracked.preSubmitApprovalCardFingerprints?.has(card.cardFingerprint)
+    : !tracked.preSubmitApprovalRevisions?.has(card.revisionFingerprint));
+}
+
 function pendingApproval(snapshot: ChatGptSurfaceSnapshot, tracked: TrackedTurn): ChatGptSurfaceSnapshot["approval"] {
-  const card = snapshot.approval;
-  return card?.cardCount === 1 && typeof tracked.preSubmitApprovalRevision === "string"
-    && card.revisionFingerprint === tracked.preSubmitApprovalRevision
-    ? undefined : card;
+  const cards = pendingApprovals(snapshot, tracked);
+  // An attempted or obstructed card cannot starve an independent unattempted card.
+  return cards.find(card => card.cardFingerprint
+    && !tracked.approvalObservation.wasDispatched(card.cardFingerprint)
+    && tracked.approvalFailureCaptured.get(card.cardFingerprint)?.revisionFingerprint !== card.revisionFingerprint) ?? cards[0];
 }
 
 /** Pending decisions outrank presentation completion; failure always remains terminal. */
@@ -1798,8 +1807,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             baselineUserLineageKeys: preSubmitUserLineageKeys,
             revision: snapshot.revision,
             observeAgain: true,
-            ...(filled.approval?.cardCount === 1 && typeof filled.approval.revisionFingerprint === "string"
-              ? { preSubmitApprovalRevision: filled.approval.revisionFingerprint } : {}),
+            preSubmitApprovalRevisions: new Set((filled.approvalCards ?? (filled.approval ? [filled.approval] : []))
+              .map(card => card.revisionFingerprint)),
+            preSubmitApprovalCardFingerprints: new Set((filled.approvalCards ?? (filled.approval ? [filled.approval] : []))
+              .flatMap(card => card.cardFingerprint ? [card.cardFingerprint] : [])),
+            approvalFailureCaptured: new Map(),
             approvalObservation: new ChatGptApprovalObservation(),
             operationAbort: new AbortController(),
           });
@@ -2156,6 +2168,12 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
           ...turnObservationFields(snapshot, tracked),
           assistant_phase: assistant?.phase ?? "absent",
           approval_card_count: snapshot.approval?.cardCount ?? 0,
+          approval_preexisting_card_count: (snapshot.approvalCards ?? (snapshot.approval ? [snapshot.approval] : []))
+            .filter(card => card.cardFingerprint
+              ? tracked.preSubmitApprovalCardFingerprints?.has(card.cardFingerprint)
+              : tracked.preSubmitApprovalRevisions?.has(card.revisionFingerprint)).length,
+          approval_selected_card_index: observedApproval && snapshot.approvalCards
+            ? snapshot.approvalCards.indexOf(observedApproval) : -1,
           approval_mode: this.#approvalAutomationMode,
           ...(snapshot.approval ? { deny_count: snapshot.approval.denyCount, allow_count: snapshot.approval.allowCount,
             allow_once_count: snapshot.approval.allowOnceCount, always_allow_count: snapshot.approval.alwaysAllowCount,
@@ -2177,7 +2195,8 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         signal?.throwIfAborted();
         const action = await waitOwned(signal, () => driver.processApprovalCard!(this.#approvalAutomationMode, signal,
           this.#approvalAutomationDelayMs, { cardFingerprint: observedApproval.cardFingerprint!,
-            revisionFingerprint: observedApproval.revisionFingerprint }));
+            revisionFingerprint: observedApproval.revisionFingerprint,
+            ...(snapshot.approvalCards ? { index: snapshot.approvalCards.indexOf(observedApproval) } : {}) }));
         signal?.throwIfAborted();
         this.#tracked(surface, turn);
         if (action.status === "dispatched" || action.reason === "already_activated") {
@@ -2186,9 +2205,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             action.status === "dispatched" ? action.revisionFingerprint : undefined));
         } else {
           preparationFailure = approvalPreparationFailureSummary(action.reason);
-          const failure = JSON.stringify([observedApproval.cardFingerprint, observedApproval.revisionFingerprint, action.reason]);
-          if (tracked.approvalFailureCaptured !== failure) {
-            tracked.approvalFailureCaptured = failure;
+          const previous = tracked.approvalFailureCaptured.get(observedApproval.cardFingerprint);
+          if (previous?.revisionFingerprint !== observedApproval.revisionFingerprint || previous.reason !== action.reason) {
+            tracked.approvalFailureCaptured.set(observedApproval.cardFingerprint,
+              { revisionFingerprint: observedApproval.revisionFingerprint, reason: action.reason });
             await waitOwned(signal, () => captureBrowserDiagnosticEvidence(surface, "approval_preparation_failed"));
           }
         }

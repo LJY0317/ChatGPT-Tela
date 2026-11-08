@@ -69,6 +69,7 @@ interface RawSnapshot {
 }
 
 interface ApprovalDomObservation {
+  readonly cards?: readonly ApprovalDomObservation[];
   readonly diagnostics?: ApprovalDiagnosticProbe;
   readonly diagnosticUnavailable?: boolean;
   readonly inputReceived?: boolean;
@@ -130,15 +131,16 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
         visible(button) && isAllowButton(normalize(button.getAttribute('aria-label') || button.textContent || button.innerText))));
     const candidates = [...new Set([...marked, ...dialogs])];
     const distinct = candidates.filter(card => !candidates.some(other => other !== card && card.contains(other)));
-    return distinct.filter(card => !registry.cards.get(card)?.inputReceived
-      && [...card.querySelectorAll('button,[role="button"]')].some(button => visible(button)
+    // A trusted click is only an input receipt. The card stays pending until
+    // the provider actually removes it; otherwise an old final can escape.
+    return distinct.filter(card => [...card.querySelectorAll('button,[role="button"]')].some(button => visible(button)
         && !button.disabled && button.getAttribute('aria-disabled') !== 'true' && !button.closest('[inert]')
         && (isAllowButton(normalize(button.getAttribute('aria-label') || accessibleText(button)))
           || ['Deny', 'Always allow', 'Approval options'].includes(normalize(button.getAttribute('aria-label') || accessibleText(button))))));
   };
   const cards = discover();
   const card = prepare?.cardKey
-    ? cards.find(candidate => registry.cards.get(candidate)?.cardKey === prepare.cardKey) : cards[0];
+    ? cards.find(candidate => registry.cards.get(candidate)?.cardKey === prepare.cardKey) : cards[prepare?.index ?? 0];
   const diagnose = (${approvalDiagnosticProbe.toString()});
   let diagnosticTarget = null, diagnosticHit = null, diagnosticHitTested = false;
   const result = {
@@ -417,6 +419,12 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     else if (conversation) result.allowConversationPoint = target;
     else if (prepare.choice === "allow") result.allowPoint = target;
     else result.allowOncePoint = target;
+  }
+  if (prepare?.collectAll) {
+    result.cards = [{ ...result }];
+    for (let index = 1; index < cards.length; index++) {
+      result.cards.push(await inspectApproval({ index }));
+    }
   }
   return finish();
 }`;
@@ -2152,7 +2160,7 @@ function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
  * before exposing the snapshot to the provider/runtime boundary.
  */
 export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
-  #activatedApprovalCardKey: string | undefined;
+  readonly #activatedApprovalCardKeys = new Set<string>();
   #stopAttemptedTurn: string | undefined;
   #lastObstructionRevision: string | undefined;
   readonly #approvalProbeStates = new Map<string, string>();
@@ -2214,7 +2222,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     try {
       const raw = await this.page.evaluate<undefined, RawSnapshot>(OBSERVE_CHATGPT_SURFACE, undefined, signal);
       phase = "approval_read";
-      const card = await this.page.evaluate(INSPECT_APPROVAL_CARD, { diagnostics: true }, signal) as ApprovalDomObservation;
+      const card = await this.page.evaluate(INSPECT_APPROVAL_CARD, { diagnostics: true, collectAll: true }, signal) as ApprovalDomObservation;
       if (card.cardCount > 0) this.#recordApprovalProbe(card, "observation");
       phase = "snapshot_projection";
       // Observe only existing reads. Deduplicate bounded structural states, never prose/token
@@ -2293,6 +2301,16 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
           });
         }
       }
+      const approvalOf = (candidate: ApprovalDomObservation) => Object.freeze({
+        cardCount: candidate.cardCount, denyCount: candidate.denyCount, allowCount: candidate.allowCount,
+        allowOnceCount: candidate.allowOnceCount, allowConversationCount: candidate.allowConversationCount ?? 0,
+        alwaysAllowCount: candidate.alwaysAllowCount, unknownCount: candidate.unknownCount,
+        revisionFingerprint: fingerprint(JSON.stringify([candidate.cardKey, candidate.proofKey])),
+        ...(candidate.cardKey ? { cardFingerprint: diagnosticFingerprint(candidate.cardKey) } : {}),
+        inputReceived: candidate.inputReceived === true,
+      });
+      const approvalCards = card.cardCount > 0 && card.cards
+        ? Object.freeze(card.cards.map(approvalOf)) : undefined;
       const approval = card.cardCount > 0 ? Object.freeze({
         cardCount: card.cardCount, denyCount: card.denyCount, allowCount: card.allowCount,
         allowOnceCount: card.allowOnceCount, allowConversationCount: card.allowConversationCount ?? 0,
@@ -2306,6 +2324,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       const privateCapture = !!captureRoot && privateDiagnosticCaptureEnabled(captureRoot);
       const snapshot = {
         ...(approval ? { approval } : {}),
+        ...(approvalCards ? { approvalCards } : {}),
         ...(card.receipt ? { approvalInputReceipt: Object.freeze({
           cardFingerprint: diagnosticFingerprint(card.receipt.cardKey),
           revisionFingerprint: fingerprint(JSON.stringify([card.receipt.cardKey, card.receipt.proofKey])),
@@ -2438,11 +2457,11 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     mode: ChatGptApprovalAutomationMode,
     signal: AbortSignal,
     delayMs: number,
-    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
+    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string; readonly index?: number },
   ) {
     const inspect = async (phase = "observed", preparation?: { cardKey: string; proofKey: string; choice: string }) => {
       const observed = await this.page.evaluate(INSPECT_APPROVAL_CARD,
-        { ...preparation, diagnostics: true }, signal) as ApprovalDomObservation;
+        { index: expected?.index, ...preparation, diagnostics: true }, signal) as ApprovalDomObservation;
       this.#recordApprovalProbe(observed, phase);
       return observed;
     };
@@ -2516,7 +2535,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       return Object.freeze({ status: "none" as const, reason: observed.targetState === "occluded" || observed.targetState === "outside_viewport"
         ? observed.targetState : "target_missing" });
     }
-    if (observed.cardKey === this.#activatedApprovalCardKey) {
+    if (observed.cardKey && this.#activatedApprovalCardKeys.has(observed.cardKey)) {
       this.#diagnostic("approval_activation_withheld", { reason_class: "already_activated",
         card_fingerprint: diagnosticFingerprint(observed.cardKey), proof_fingerprint: diagnosticFingerprint(observed.proofKey ?? "") });
       return Object.freeze({ status: "none" as const, reason: "already_activated" });
@@ -2570,7 +2589,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
         reason_class: observed.targetState ?? "target_missing" });
       return Object.freeze({ status: "none" as const, reason: "target_missing" });
     }
-    if (observed.cardKey === this.#activatedApprovalCardKey) {
+    if (observed.cardKey && this.#activatedApprovalCardKeys.has(observed.cardKey)) {
       this.#diagnostic("approval_activation_withheld", { reason_class: "already_activated",
         card_fingerprint: diagnosticFingerprint(observed.cardKey), proof_fingerprint: diagnosticFingerprint(observed.proofKey ?? "") });
       return Object.freeze({ status: "none" as const, reason: "already_activated" });
@@ -2613,7 +2632,7 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     mode: ChatGptApprovalAutomationMode,
     signal?: AbortSignal,
     delayMs = 0,
-    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string },
+    expected?: { readonly cardFingerprint: string; readonly revisionFingerprint: string; readonly index?: number },
   ): ReturnType<NonNullable<ChatGptSurfaceDriver["processApprovalCard"]>> {
     if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 15_000) {
       throw new Error("ChatGPT approval delay must be 0-15000ms");
@@ -2640,12 +2659,12 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
     }
     if (prepared.status !== "ready") return prepared;
     // A concurrent preparation must still respect the single activation fence.
-    if (prepared.cardKey === this.#activatedApprovalCardKey) {
+    if (this.#activatedApprovalCardKeys.has(prepared.cardKey)) {
       this.#diagnostic("approval_activation_withheld", { reason_class: "already_activated" });
       return Object.freeze({ status: "none" as const, reason: "already_activated" });
     }
     // An ambiguous activation must never be retried against the same card.
-    this.#activatedApprovalCardKey = prepared.cardKey;
+    this.#activatedApprovalCardKeys.add(prepared.cardKey);
     this.#diagnostic("approval_dispatch_started", { card_fingerprint: diagnosticFingerprint(prepared.cardKey) });
     try {
       await this.page.pointerClick(prepared.target, signal);

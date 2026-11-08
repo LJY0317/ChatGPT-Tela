@@ -16,7 +16,11 @@ chatgpt-tela configure --file <product-config.json> --enable-app-owned-desktop
 
 The option is also accepted with `configure --stdin`. Omitting it preserves the
 existing managed-only default. Reconfiguration preserves an existing route;
-an explicit `appOwnedResponses: []` in the supplied configuration disables it.
+an explicit `appOwnedResponses: []` in the supplied configuration clears it
+when the opt-in flag is absent. With the flag, slot 1 is always provisioned,
+including when an old Native-first configuration contains an empty route list.
+Already configured additional slots are preserved, and slot 1 receives an
+unused loopback port rather than borrowing another slot's port.
 The launcher supports `services start` for all three services, or `services
 start chat` for Chat alone. It has no `services start codex` form.
 After configuring, start the installed services. If this computer has no saved Work
@@ -114,6 +118,44 @@ second turn in the same thread. This verifies the provider contract only:
 it does **not** constitute acceptance of production Desktop UI selection,
 Web model catalog admission, startup/restart behavior or user permissions.
 The app-owned route must remain opt-in until those are separately verified.
+
+## Two Native-first profiles: consumer transition handoff
+
+For an existing installation with `multiProfile` configured and no active
+`appOwnedResponses`, retain the installed Native-first binary and its settings
+until an operator has explicitly accepted the transition. The first executable,
+non-mutating step is to retain a recovery copy of the installed package and run
+the candidate's `upgrade --dry-run --payload <candidate.app>`. Inspect the
+reported installation ownership, `shutdownBlockers`, recovery source, and
+service preservation before considering any `--apply`. A successful dry run
+does not make the new Native-engine-free package compatible with the old routes.
+
+For an authorized transition, first complete or cancel active Work and managed
+profile tasks, disconnect the affected profiles through their existing controls,
+and preserve the current user-level Codex config and Tela product config for
+review. Arrange the package upgrade and the explicitly prepared configuration
+as one supervised maintenance window: install/upgrade only with the product's
+existing verified lifecycle, then use the newly installed launcher to run
+`configure --file <reviewed-product-config.json> --enable-app-owned-desktop`
+before reconnecting Work. Keep `multiProfile` and add a separate slot-2
+`appOwnedResponses` entry only when the optional Plura target is actually
+detected; supply a different port and private capability for that slot. The
+flag provisions slot 1 only. No ambient `HOME`, `CODEX_HOME`, or `XDG` override
+is part of this procedure.
+
+Start the owned services with `services start`, reconnect slot 1, and require
+its account-bound Web discovery and Native+Web model catalog to reach Ready.
+Only then run `desktop-provider register --dry-run`, review its exact current
+catalog/ownership decision, and explicitly authorize `register --apply`.
+Registration leaves `model_provider` and the model unchanged: select
+`chatgpt_tela_local` and a catalog-listed model in the user-level official
+Codex settings and normally restart the official Desktop under the user's
+control to make that selection effective. Reconnect slot 2 independently only
+after its managed target and route are proven. Do not equate a ready Web route
+with a Native RPC/terminalSession, nor infer account acceptance from a synthetic
+HTTP fixture. If admission, catalog or target verification fails, preserve the
+installed recovery source and use the existing explicit restore/cancellation
+path; never fall back silently to an unmanaged Native process.
 
 An additional isolated official engine run used this repository's exact
 registered provider stanza, a fake `HOME`/`CODEX_HOME` with only a synthetic

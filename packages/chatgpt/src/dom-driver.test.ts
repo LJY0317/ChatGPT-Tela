@@ -1262,7 +1262,7 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(clicks).toBe(["stopped", "still running"].includes(scenario) ? 1 : 0);
   });
 
-  test("multiple pending cards use the same approval path and settled cards do not block the next", async () => {
+  test("multiple pending cards remain visible after input and independently settle on removal", async () => {
     const callbacks = new Map<FixtureElement, (event: { isTrusted: boolean }) => void>();
     const makeCard = () => {
       const deny = new FixtureElement(); deny.textContent = "Deny";
@@ -1286,18 +1286,51 @@ describe("current ChatGPT DOM surface driver", () => {
     const driver = new ChatGptDomSurfaceDriver(page);
     const before = await driver.observe();
     expect(before.approval).toMatchObject({ cardCount: 2, allowOnceCount: 1 });
+    expect(before.approvalCards).toHaveLength(2);
+    expect(before.approvalCards?.[1]?.revisionFingerprint).not.toBe(before.approvalCards?.[0]?.revisionFingerprint);
     expect(typeof before.approval?.cardFingerprint).toBe("string");
     expect(await driver.processApprovalCard("off")).toMatchObject({ status: "none", reason: "disabled" });
     expect(clicks).toHaveLength(0);
     expect(await driver.processApprovalCard("full_access")).toMatchObject({ status: "dispatched" });
     target = second.allow;
     const next = await driver.observe();
-    expect(next.approval).toMatchObject({ cardCount: 1 });
-    expect(next.approval?.cardFingerprint).not.toBe(before.approval?.cardFingerprint);
+    expect(next.approval).toMatchObject({ cardCount: 2, inputReceived: true });
+    expect(next.approvalCards?.[1]?.cardFingerprint).toBe(before.approvalCards?.[1]?.cardFingerprint);
     expect(next.approvalInputReceipt?.cardFingerprint).toBe(before.approval?.cardFingerprint);
-    expect(await driver.processApprovalCard("full_access")).toMatchObject({ status: "dispatched" });
+    expect(await driver.processApprovalCard("full_access")).toMatchObject({ status: "none", reason: "already_activated" });
+    const secondProof = next.approvalCards?.[1];
+    if (!secondProof?.cardFingerprint) throw Error("second card proof missing");
+    expect(await driver.processApprovalCard("full_access", undefined, 0, {
+      cardFingerprint: secondProof.cardFingerprint, revisionFingerprint: secondProof.revisionFingerprint, index: 1,
+    })).toMatchObject({ status: "dispatched" });
     expect(clicks).toEqual([first.allow, second.allow]);
+    expect((await driver.observe()).approval).toMatchObject({ cardCount: 2 });
+    root.selectors['[data-codex-approval-surface="true"]'] = [];
     expect((await driver.observe()).approval).toBeUndefined();
+  });
+  test("an exact second-card proof activates that card while an older first card remains", async () => {
+    const makeCard = () => {
+      const deny = new FixtureElement(); deny.textContent = "Deny";
+      const allow = new FixtureElement(); allow.textContent = "Allow once";
+      const card = new FixtureElement({}, { button: [deny, allow] });
+      card.contains = node => node === card || node === deny || node === allow;
+      return { card, allow };
+    };
+    const old = makeCard(), current = makeCard();
+    const root = new FixtureElement({}, { '[data-codex-approval-surface="true"]': [old.card, current.card] });
+    const page = new RendererFixturePage(root);
+    page.hitTest = () => current.allow;
+    const clicks: { x: number; y: number }[] = [];
+    page.pointerClick = async point => { clicks.push(point); };
+    const driver = new ChatGptDomSurfaceDriver(page);
+    const seen = await driver.observe();
+    const second = seen.approvalCards?.[1];
+    if (!second?.cardFingerprint) throw Error("missing second-card identity");
+    const result = await driver.processApprovalCard("full_access", undefined, 0, {
+      cardFingerprint: second.cardFingerprint, revisionFingerprint: second.revisionFingerprint, index: 1,
+    });
+    expect(result.status).toBe("dispatched");
+    expect(clicks).toHaveLength(1);
   });
   test("generic Allow remains eligible when an unrelated options button is present", async () => {
     const buttons = ["Deny", "Allow", "Approval options"].map(label => {
@@ -1860,11 +1893,13 @@ describe("current ChatGPT DOM surface driver", () => {
 
   test("one approval card is activated at most once even if it stays visible", async () => {
     const page = new ApprovalPage();
-    page.observations = [approvalCard, { ...approvalCard, proofKey: "proof-2" }, { ...approvalCard, cardKey: "card-2" }];
+    page.observations = [approvalCard, { ...approvalCard, proofKey: "proof-2" },
+      { ...approvalCard, cardKey: "card-2" }, approvalCard];
     const driver = new ChatGptDomSurfaceDriver(page);
     expect((await driver.processApprovalCard("full_access")).status).toBe("dispatched");
     expect((await driver.processApprovalCard("full_access")).reason).toBe("already_activated");
     expect((await driver.processApprovalCard("full_access")).status).toBe("dispatched");
+    expect((await driver.processApprovalCard("full_access")).reason).toBe("already_activated");
     expect(page.actions).toHaveLength(2);
   });
 

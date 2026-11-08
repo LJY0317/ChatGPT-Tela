@@ -308,7 +308,7 @@ export async function selectNativeWorkingCheckpoint(input: WorkingCheckpointSour
       || (item.revision.kind === "tool-result"
         && item.revision.id !== projection.currentGoalObservationId));
   substage("working_checkpoint_maintenance_preflight");
-  const shouldAdvance = anchorIndex >= 0 && hasWorkHistory && (
+  const shouldAdvance = anchorIndex >= 0 && (hasWorkHistory || input.forceMaintenance === true) && (
     (selected !== undefined && (sealedTokens > input.policy.suffixTargetTokens
       || sealedTokens + summaryTokens >= input.policy.checkpointSourceTokens - input.policy.suffixTargetTokens))
     || (!selected && (sealedTokens > input.policy.suffixTargetTokens || prospectiveSeed > input.policy.firstMessageTargetTokens))

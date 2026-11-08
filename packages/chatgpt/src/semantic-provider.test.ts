@@ -3318,9 +3318,8 @@ describe("completed browser answer awaiting Native delivery", () => {
 
   test.each([
     ["changed", { ...recognizedApproval, revisionFingerprint: "new-card-revision" }],
-    ["missing revision", { ...recognizedApproval, revisionFingerprint: undefined }],
-    ["multiple cards", { ...recognizedApproval, cardCount: 2 }],
-  ])("a %s approval card still defers the completed request", async (_case, approval) => {
+    ["missing", { ...recognizedApproval, revisionFingerprint: undefined }],
+  ])("a preexisting card with %s revision remains foreign to the completed request", async (_case, approval) => {
     const driver = new FixtureDriver({ ...fixture("ready-new-chat"), approval: recognizedApproval });
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "off" });
@@ -3335,8 +3334,98 @@ describe("completed browser answer awaiting Native delivery", () => {
         turns: [...driver.current.turns, { key: "assistant-new", role: "assistant" as const,
           parentUserTurnKey: "user-turn-1", phase: "complete" as const, text: "Answer behind new approval" }] };
       const observed = await provider.observeTurn(surface.lease, submitted.value);
-      expect(observed.state === "proven" && observed.value.phase).toBe("tool-wait");
+      expect(observed.state === "proven" && observed.value.phase).toBe("completed");
       expect(driver.approvalCalls).toBe(0);
+    } finally { await surface.host.close(); }
+  });
+
+  test("old cards cannot block a completed turn while a distinct new card retains ownership", async () => {
+    const old = recognizedApproval;
+    const fresh = { ...old, revisionFingerprint: "fresh-proof", cardFingerprint: "b".repeat(24) };
+    const driver = new FixtureDriver({ ...fixture("ready-new-chat"), approval: old,
+      approvalCards: [old, { ...old, revisionFingerprint: "prior-second", cardFingerprint: "c".repeat(24) }] });
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "off" });
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw Error("expected accepted Web turn");
+      const completed = { ...driver.current, revision: "complete-with-cards",
+        turns: [...driver.current.turns, { key: "assistant-new", role: "assistant" as const,
+          parentUserTurnKey: "user-turn-1", phase: "complete" as const, text: "Done" }] };
+      driver.current = { ...completed, approval: old, approvalCards: [old, fresh] };
+      const waiting = await provider.observeTurn(surface.lease, submitted.value);
+      expect(waiting.state === "proven" && waiting.value.phase).toBe("tool-wait");
+      driver.current = { ...completed, revision: "fresh-cleared", approvalCards: [old] };
+      const finished = await provider.observeTurn(surface.lease, submitted.value);
+      expect(finished.state === "proven" && finished.value.phase).toBe("completed");
+      driver.queued.push({ ...driver.current, revision: "final-old-card" });
+      let completion;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const event = await provider.waitForTurnEvent(surface.lease, submitted.value);
+        if (event.state === "proven" && event.value.kind === "completed") { completion = event.value; break; }
+        driver.queued.push({ ...driver.current, revision: `old-card-final-${attempt}` });
+      }
+      expect(completion).toMatchObject({ kind: "completed", answer: "Done" });
+      expect(driver.approvalCalls).toBe(0);
+    } finally { await surface.host.close(); }
+  });
+
+  test("an older card revision does not acquire authority over a completed request", async () => {
+    const old = recognizedApproval;
+    const driver = new FixtureDriver({ ...fixture("ready-new-chat"), approval: old, approvalCards: [old] });
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "full_access" });
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw Error("expected accepted Web turn");
+      const changed = { ...old, revisionFingerprint: "old-card-controls-changed" };
+      driver.current = { ...driver.current, revision: "prior-approval-rerendered",
+        approval: changed, approvalCards: [changed],
+        turns: [...driver.current.turns, { key: "assistant-new", role: "assistant" as const,
+          parentUserTurnKey: "user-turn-1", phase: "complete" as const, text: "Finished" }] };
+      const observed = await provider.observeTurn(surface.lease, submitted.value);
+      expect(observed.state === "proven" && observed.value.phase).toBe("completed");
+      driver.queued.push({ ...driver.current, revision: "prior-card-remains" });
+      const event = await provider.waitForTurnEvent(surface.lease, submitted.value);
+      expect(event.state === "proven" && event.value.kind).toBe("completed");
+      expect(driver.approvalCalls).toBe(0);
+    } finally { await surface.host.close(); }
+  });
+
+  test("an obstructed first approval does not starve a distinct current card", async () => {
+    const first = recognizedApproval;
+    const second = { ...first, cardFingerprint: "b".repeat(24), revisionFingerprint: "second-card-proof" };
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    driver.processApprovalCard = async (_mode, _signal, _delay, expected) => {
+      driver.approvalCalls += 1;
+      return expected?.cardFingerprint === first.cardFingerprint
+        ? { status: "none", reason: "occluded" }
+        : { status: "dispatched", reason: "allow_once", cardFingerprint: second.cardFingerprint! };
+    };
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider({ approvalAutomationMode: "full_access" });
+    try {
+      const submitting = provider.submitTurn(surface.lease, request());
+      while (driver.current.revision === "r1") await Promise.resolve();
+      driver.queued.push(acceptedSnapshot(driver));
+      const submitted = await submitting;
+      if (submitted.state !== "proven") throw Error("expected accepted Web turn");
+      const pending = { ...driver.current, revision: "two-independent-cards", approval: { ...first, cardCount: 2 },
+        approvalCards: [{ ...first, cardCount: 2 }, { ...second, cardCount: 2 }] };
+      driver.queued.push(pending);
+      const obstructed = await provider.waitForTurnEvent(surface.lease, submitted.value);
+      expect(obstructed.state === "proven" && obstructed.value).toMatchObject({ kind: "progress",
+        summary: expect.stringContaining("could not be reached") });
+      const attempted = await provider.waitForTurnEvent(surface.lease, submitted.value);
+      expect(attempted.state === "proven" && attempted.value).toMatchObject({ kind: "progress",
+        summary: "Approval click sent; waiting for the Web browser to receive and process it." });
+      expect(driver.approvalCalls).toBe(2);
     } finally { await surface.host.close(); }
   });
 
