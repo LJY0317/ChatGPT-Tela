@@ -195,6 +195,8 @@ test("Electron input-only startup needs no Native source and exposes no Native M
   });
   try {
     expect(runtime.mcp.kind).toBe("external");
+    expect(runtime.resetWebAccount).toBeFunction();
+    await runtime.resetWebAccount!();
     const response = await fetch(new URL("responses", runtime.responses.baseUrl), {
       method: "POST", headers: { authorization: `Bearer ${runtime.responses.runtimeToken}` },
       body: JSON.stringify(nativeRequest()),
