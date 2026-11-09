@@ -1851,62 +1851,27 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   func openProfile(slot: Int) {
-    if profiles.first(where: { $0.slot == slot })?.connected == true,
-       let app = runningProfileApps[slot], !app.isTerminated, app.activate(options: []) {
-      return
-    }
-    guard !operationInProgress else { show(); return }
-    connectionProfileSlot = slot
-    profileFailure = nil
-    changingProfile = true
-    profileProgress = "Checking ChatGPT…"
-    renderCurrentPage()
+    // Opening an app is independent of Tela's Web connection and must not
+    // connect, restart, or reconfigure the user's profile.
+    if let app = runningProfileApps[slot], !app.isTerminated, app.activate(options: []) { return }
     Task {
       await refreshCurrentPage()
-      if workInventory.error != nil, installedServiceControlsAvailable(),
-         let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] {
-        profileProgress = "Starting Tela…"
-        let result = await Task.detached {
-          Self.runLauncher(launcher, arguments: ["services", "start"])
-        }.value
-        if result.0 != 0 {
-          profileProgress = nil
-          changingProfile = false
-          profileFailure = "Couldn't start Tela. Check the connection details in Settings."
-          selectedPage = .work; show(); return
-        }
-        await refreshCurrentPage()
-      }
-      profileProgress = nil
-      changingProfile = false
-      renderCurrentPage()
-      guard workInventory.error == nil, let profile = profiles.first(where: { $0.slot == slot }),
-            profile.connectionInProgress != true else {
-        profileFailure = "Couldn't check ChatGPT. Please try again in a moment."
+      if let app = runningProfileApps[slot], !app.isTerminated, app.activate(options: []) { return }
+      let targetId = profiles.first(where: { $0.slot == slot })?.targetId
+      let bundleId = slot == 1 ? "com.openai.codex" : targetId
+      guard let bundleId, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
+        profileFailure = "Couldn't find the ChatGPT app for this profile."
         selectedPage = .work; show(); return
       }
-      if let pid = profile.desktopProcessId, pid > 0, pid <= Int(Int32.max),
-         let app = NSRunningApplication(processIdentifier: pid_t(pid)), !app.isTerminated {
-        if !profile.connected {
-          changeConnection(slot: slot)
-          return
+      let configuration = NSWorkspace.OpenConfiguration()
+      configuration.activates = true
+      NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
+        guard error != nil else { return }
+        Task { @MainActor [weak self] in
+          guard let self else { return }
+          self.profileFailure = "Couldn't open ChatGPT. Please try again."
+          self.selectedPage = .work; self.show()
         }
-        if !app.activate(options: []) {
-          profileFailure = "Couldn't bring ChatGPT to the front. Please try again."
-          selectedPage = .work; show()
-        }
-      } else if profile.controlState == "running" && profile.targetSessionState == "independent" {
-        // Tela owns this Web route, while the official Desktop's launch and UI
-        // remain outside the service's process ownership.
-        selectedPage = .work; show()
-      } else if profile.controlState == "stopped" && profile.targetSessionState == "available" {
-        selectedPage = .work; show()
-        // A stopped managed Desktop requires a stopped-target receipt. An
-        // app-owned Web route has no Desktop lifecycle to acquire or quit.
-        changeConnection(slot: slot, requireStopped: profile.targetState == "stopped")
-      } else {
-        profileFailure = "ChatGPT is still opening or closing. Please try again in a moment."
-        selectedPage = .work; show()
       }
     }
   }
