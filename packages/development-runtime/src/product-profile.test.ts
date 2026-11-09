@@ -651,6 +651,9 @@ test("app-owned production shutdown resumes a failed browser close through the H
 });
 
 test("app-owned startup failure releases its fixed Responses listener even if runtime cleanup rejects", async () => {
+  const { observeDiagnosticEvents } = await import("@chatgpt-tela/core");
+  const events: Record<string, unknown>[] = [];
+  const stop = observeDiagnosticEvents(event => { events.push({ ...event }); });
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-startup-close-"));
   const config = loadProductProfileRuntimeConfig(common(root));
   mkdirSync(config.browserProfile.userDataDir, { recursive: true });
@@ -674,11 +677,15 @@ test("app-owned startup failure releases its fixed Responses listener even if ru
     await expect(startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter }))
       .rejects.toThrow("initial readiness failed");
     expect(cleanupAttempts).toBe(1);
+    expect(events.find(event => event.stage === "app_owned_startup_failed")).toMatchObject({
+      slot: config.slot, phase: "web_discovery", duration_ms: expect.any(Number),
+    });
+    expect(JSON.stringify(events)).not.toContain("initial readiness failed");
     const rebound = await startLocalResponsesServer({ hostname: "127.0.0.1", port: ingress.port,
       requestRouter: async () => new Response(null, { status: 204 }) });
     try { expect(rebound.port).toBe(ingress.port); }
     finally { await rebound.stop(); }
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { stop?.(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("app-owned first readiness binds durable results after login and isolates a changed account", async () => {

@@ -4,6 +4,7 @@ import type {
   MultiProfileControlRunner,
 } from "./multi-profile";
 import { MultiProfileControlClient } from "./multi-profile";
+import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 
 class FixtureRunner implements MultiProfileControlRunner {
   readonly calls: Array<{
@@ -52,6 +53,26 @@ function targetsContract(overrides: Record<string, unknown> = {}): Record<string
 }
 
 describe("optional Multi-Profile control client", () => {
+  test("failed launch diagnostics distinguish route rejection without retaining private CLI output", async () => {
+    const events: Record<string, unknown>[] = [];
+    const stop = observeDiagnosticEvents(event => { events.push({ ...event }); });
+    const runner = new FixtureRunner();
+    runner.results.push(result(targetsContract()), { exitCode: 1, stdout: "private-output-marker",
+      stderr: "Target is already running with a different Responses route; quit it normally once: private-target-marker" });
+    try {
+      await expect(new MultiProfileControlClient({ command: ["fixture"], runner }).launchRoutedTarget({
+        targetId: "local.plura-desktop.profile2", expectedProfileIndex: 2,
+        responsesBaseUrl: "http://127.0.0.1:18744/v1", responsesEnvKey: "TELA_TOKEN",
+        responsesToken: "private-route-marker".repeat(4),
+      })).rejects.toThrow("exit code 1");
+      expect(events.find(event => event.stage === "profile_control_failed")).toMatchObject({
+        action: "launch-target", phase: "exit", exit_code: 1, failure_class: "responses_route_conflict",
+        stdout_bytes: 21, stderr_bytes: expect.any(Number), stderr_fingerprint: expect.any(String),
+      });
+      expect(JSON.stringify(events)).not.toContain("private-");
+      expect(runner.calls.map(call => call.arguments[0])).toEqual(["targets", "launch-target"]);
+    } finally { stop?.(); }
+  });
   test("app-owned managed route rejects a different or default profile before launch", async () => {
     for (const target of [{ profileIndex: 3 }, { id: "default", managed: false, role: "default", profileIndex: undefined }]) {
       const runner = new FixtureRunner();

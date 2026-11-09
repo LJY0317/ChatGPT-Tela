@@ -826,6 +826,11 @@ export async function startCodexService(input: {
         owned.delete(slot);
       }
       const { target, session: initialSession } = ingress ? await appOwnedTargetFor(slot) : await targetAndSession(slot);
+      emitDiagnosticEvent("chatgpt_tela_codex", "profile_connection_target_observed", {
+        slot, mode: ingress ? "app-owned" : "managed", state: target.state,
+        remote_outcome: initialSession.state, desktop_process_present: initialSession.desktopProcessId !== undefined,
+        responses_route_present: initialSession.responsesRouteFingerprint !== undefined,
+      });
       let session = initialSession;
       if (options?.expectedDesktopProcessId !== undefined && session.desktopProcessId !== options.expectedDesktopProcessId) {
         throw new Error("ChatGPT has changed since you chose to reopen it; the current app was kept open");
@@ -840,6 +845,7 @@ export async function startCodexService(input: {
         // Ownership preparation must fail before any quit of the existing Desktop.
         progress("preparing");
         await input.prepareProfileRuntime?.(slot);
+        emitDiagnosticEvent("chatgpt_tela_codex", "profile_runtime_preparation_completed", { slot });
         progress("closing");
         emitDiagnosticEvent("chatgpt_tela_codex", "profile_reopen_quit_started", { slot,
           endpoint_available: !!session.endpoint, pid_bound: options?.expectedDesktopProcessId !== undefined,
@@ -853,6 +859,7 @@ export async function startCodexService(input: {
       if (!mustQuit) {
         progress("preparing");
         await input.prepareProfileRuntime?.(slot);
+        emitDiagnosticEvent("chatgpt_tela_codex", "profile_runtime_preparation_completed", { slot });
       }
       const route = routeId();
       const responsesToken = secret();

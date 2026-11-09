@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
+import { diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   AppServerCurrentTurnSource,
   connectCodexAppServerWebSocket,
@@ -515,12 +516,34 @@ export class MultiProfileControlClient {
     environment: Readonly<Record<string, string>> | undefined,
     signal: AbortSignal | undefined,
   ): Promise<MultiProfileControlResult> {
+    const started = performance.now();
+    const action = arguments_[0] ?? "unknown";
     const result = await this.#runner.run(this.#command, {
       arguments: arguments_,
       ...(environment ? { environment } : {}),
       ...(signal ? { signal } : {}),
+    }).catch(error => {
+      emitDiagnosticEvent("chatgpt_tela_setup", "profile_control_failed", {
+        action, phase: "execute", duration_ms: Math.round(performance.now() - started), ...diagnosticFailureFields(error),
+      });
+      throw error;
     });
     if (result.exitCode !== 0) {
+      // External prose is interpreted only at this adapter boundary, never persisted.
+      const rejection = [
+        ["different Responses route", "responses_route_conflict"],
+        ["different Codex engine", "engine_conflict"],
+        ["different model-list overlay", "catalog_conflict"],
+        ["without renderer CDP", "renderer_unavailable"],
+        ["outside the canonical runtime", "unmanaged_app_running"],
+        ["does not support", "contract_unsupported"],
+      ].find(([marker]) => result.stderr.includes(marker!))?.[1] ?? "unclassified";
+      emitDiagnosticEvent("chatgpt_tela_setup", "profile_control_failed", {
+        action, phase: "exit", exit_code: result.exitCode, failure_class: rejection,
+        duration_ms: Math.round(performance.now() - started),
+        stdout_bytes: Buffer.byteLength(result.stdout), stderr_bytes: Buffer.byteLength(result.stderr),
+        stderr_fingerprint: diagnosticFingerprint(result.stderr),
+      });
       let detail = result.stderr.trim();
       for (const secret of Object.values(environment ?? {})) {
         if (secret) detail = detail.split(secret).join("[redacted]");

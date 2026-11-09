@@ -251,6 +251,8 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     electron: { userDataDir: config.browserProfile.userDataDir },
   });
   let internalMcp: CodexBridgeMcpHttpServer | undefined;
+  let startupPhase = "native_catalog";
+  const startupStarted = performance.now();
   try {
     input.signal?.throwIfAborted();
     const preparation = input.catalogPreparation;
@@ -262,6 +264,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
         : readDefaultDesktopNativeCatalog({ installation: installation!, ...(input.signal ? { signal: input.signal } : {}) }))
       : undefined;
     revalidate = async () => {
+      startupPhase = "web_discovery";
       // Retire any Web rows from a previous account before attempting discovery.
       // If login, quota or model discovery fails, the install-owned registration
       // artifact remains usable with Native models only.
@@ -271,7 +274,10 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       }
       const webDiscovery = await prepareProductWebDiscovery({
         runtime, browserProfile: config.browserProfile, connectorName: identity.connectorName,
-        signal: input.signal ?? new AbortController().signal, stage: () => {},
+        signal: input.signal ?? new AbortController().signal,
+        stage: (stage, fields = {}) => emitDiagnosticEvent("chatgpt_tela_profile_startup", stage, {
+          slot: config.slot, mode: "app-owned", ...fields,
+        }),
       });
       const binding = assertChatGptTelaAccountBinding(config.browserProfile, webDiscovery.accountFingerprint);
       const resultStore = new FileNativeVisiblePrefixStageJournal({
@@ -295,6 +301,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
         });
       });
       await router.refreshWebModelFamilies(input.signal);
+      startupPhase = "catalog_publish";
       if (preparation && nativeCatalog !== undefined) {
         await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId,
           nativeCatalog, webFamilies: families,
@@ -311,9 +318,11 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     input.signal?.throwIfAborted();
     if (!runtime.suppliedToolBridge || !runtime.shutdownReadiness || !runtime.prepareShutdown)
       throw Error("App-owned runtime did not expose its operation lifecycle");
+    startupPhase = "internal_mcp";
     internalMcp = await startCodexBridgeMcpHttpServer({ bridge: runtime.suppliedToolBridge,
       port: 0, authentication: { kind: "bearer", token: config.internalMcpToken } });
     if (config.nativeTarget.kind === "multi-profile") {
+      startupPhase = "desktop_launch";
       const client = input.multiProfileClient ?? new MultiProfileControlClient({ command: [config.nativeTarget.launcherCli] });
       // The Responses listener and overlay callback have the same stable install-owned port
       // and credential across Tela restarts. Plura reuses an exact matching live session.
@@ -412,6 +421,10 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       },
     });
   } catch (error) {
+    emitDiagnosticEvent("chatgpt_tela_profile_startup", "app_owned_startup_failed", {
+      slot: config.slot, phase: startupPhase, duration_ms: Math.round(performance.now() - startupStarted),
+      ...diagnosticFailureFields(error),
+    });
     // Startup owns both resources once created. An MCP close failure must not
     // prevent the already-bound Responses listener and Web owner from closing.
     const cleanup = await Promise.allSettled([
