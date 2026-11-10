@@ -254,11 +254,14 @@ the owned payload receipt and dispatches the exact service executable declared b
 The menu-bar process is UI, not a fourth backend service. It may be launched from the installed launcher on
 macOS, reads the same standard product paths, and calls only authenticated loopback service endpoints. The
 macOS install blueprint registers `com.openai.chatgpt-tela.menu-bar` as a product-owned LaunchAgent with its
-own definition fingerprint and marker. It is `RunAtLoad` in the Aqua session but is never treated as
+own definition fingerprint and marker. Its one-shot `RunAtLoad` action uses `/usr/bin/open` to open the app
+through LaunchServices; it does not retain the replaced launcher executable’s signing identity. It is never treated as
 Gateway/Chat/Codex authority; uninstall removes it only when the exact definition/marker/manifest ownership is
 still proven. Upgrade and payload repair refresh this UI after the recorded background services have
-restored. The UI acknowledges its version and launcher parent only after creating its status item;
-the updater waits for that file-change event, rather than equating a wrapper PID with UI startup.
+restored. Both Sparkle and ordinary app launches acknowledge the UI’s version and live PID after creating
+its status item. UI readiness is independent of launcher parentage or launch-command exit formatting.
+After replacement, the existing ownership lifecycle renews the exact menu registration before settling
+the update journal; foreign definitions remain preserved.
 Its launch is admitted at that final checkpoint, and a failed launch leaves the existing journal
 resumable without stopping the restored services again. A pre-replacement cancellation keeps the original
 UI alongside its restored source payload. Both direct apply and maintenance apply run in the existing

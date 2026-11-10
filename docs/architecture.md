@@ -348,8 +348,8 @@ presence. A small AppKit menu-bar process is the intended local control surface.
 calls only Tela's private authenticated loopback contracts, and may expose user preferences such as one-shot
 approval automation. Signed installs own its Aqua LaunchAgent separately as a `product` resource; it is never
 counted as a fourth backend service and cannot manufacture workspace, turn, sandbox, or tool authority.
-The LaunchAgent is `RunAtLoad` and install explicitly kickstarts it after exact registration so successful
-installation produces a visible menu-bar surface immediately rather than waiting for the next login.
+The LaunchAgent’s one-shot `RunAtLoad` action opens the app through macOS LaunchServices. The OS owns the
+GUI lifetime, including Sparkle relaunches; no launcher wrapper or additional kickstart is needed.
 
 The same accessory process owns a normal resizable **Control Center** window. Because the application remains
 an AppKit accessory, opening the window does not create a permanent Dock presence; closing the last Control

@@ -273,9 +273,7 @@ export function packagedInstallSpecFromPayload(payloadSourcePath: string): Packa
   return Object.freeze({
     productVersion: manifest.productVersion,
     payloadSourcePath,
-    ...(manifest.menuBar ? { menuBar: manifest.launcher
-      ? { executableRelativePath: manifest.launcher.executable, arguments: Object.freeze(["menu-bar"]) }
-      : { executableRelativePath: manifest.menuBar.executable } } : {}),
+    ...(manifest.menuBar ? { menuBar: { executableRelativePath: manifest.menuBar.executable } } : {}),
     services: Object.freeze(services),
   });
 }

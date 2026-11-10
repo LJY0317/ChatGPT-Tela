@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  assertNoActivePackagedTransition, createPackagedInstallBlueprint, FilesystemOwnershipObserver,
+  assertNoActivePackagedTransition, createPackagedInstallBlueprint, FilesystemOwnershipObserver, installPackagedMenuBarRegistration,
   macApplicationUpdatePath, mutateOwnershipManifest, packagedInstallSpecFromPayload, packagedPayloadFingerprint,
   PackagedPlatformServiceController, PackagedServiceShutdownNotStartedError, readMacApplicationUpdate,
   readOwnershipManifest, readPackagedProductManifest, recordInstalledApplicationPayload, resolveProductPaths, ServiceRegistrationInstaller,
@@ -156,6 +156,7 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
         }
       }
       if (state.pendingStop) throw Error(`application update is postponed: ${state.pendingStop} shutdown has not been settled; acknowledged peers were restored`);
+      if (fingerprint !== state.sourceFingerprint) await step("menu_registration", () => installPackagedMenuBarRegistration({ blueprint, manifest, ...(options.runner ? { runner: options.runner } : {}) }));
       rmSync(path);
       return { ready: true, restored: true, productVersion: spec.productVersion, buildVersion: build };
     };

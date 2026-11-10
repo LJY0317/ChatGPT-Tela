@@ -317,7 +317,8 @@ describe("packaged product install", () => {
       const menuPlist = (mac.menuBar!.definition as { content: string }).content;
       expect(menuPlist).toContain("<key>RunAtLoad</key>\n    <true/>");
       expect(menuPlist).toContain("<key>LimitLoadToSessionType</key>\n    <string>Aqua</string>");
-      expect(menuPlist).toContain("<string>menu-bar</string>");
+      expect(menuPlist).toContain("<string>/usr/bin/open</string>");
+      expect(menuPlist).toContain("<string>-a</string>");
       expect(mac.desiredResources.some(resource => resource.id === "menu-bar-registration")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -361,8 +362,7 @@ describe("packaged product install", () => {
         && args[2]?.endsWith("com.openai.chatgpt-tela.menu-bar.plist"))).toBe(true);
       expect(runner.calls.some(([command, args]) => command === "/bin/launchctl"
         && args[0] === "kickstart"
-        && args[1]?.endsWith("/com.openai.chatgpt-tela.menu-bar"))).toBe(true);
-      expect(runner.running.has("com.openai.chatgpt-tela.menu-bar")).toBe(true);
+        && args[1]?.endsWith("/com.openai.chatgpt-tela.menu-bar"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -385,7 +385,7 @@ describe("packaged product install", () => {
       expect(planned.plan.createCount).toBe(5);
       const appPath = join(home, "Applications", "ChatGPT Tela.app");
       expect((planned.blueprint.menuBar!.definition as { content: string }).content)
-        .toContain(join(planned.blueprint.paths.binaryRoot, "Contents", "MacOS", "chatgpt-tela-menu-bar"));
+        .toContain(`<string>${planned.blueprint.paths.binaryRoot}</string>`);
       const applied = await applyPackagedInstall({ ...options, planned });
       expect(applied.verify.ready).toBe(true);
       expect(readFileSync(join(appPath, "Contents", "Info.plist"), "utf8")).toBe("<plist/>");

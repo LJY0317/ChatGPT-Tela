@@ -501,7 +501,8 @@ test("interrupted readiness resumes the target without re-stopping or restarting
     expect(readMacApplicationUpdate(f.paths)).toMatchObject({ phase: "resuming", resumedServices: ["chat"] });
     f.runner.calls.length = 0;
     expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true, restored: true });
-    expect(f.runner.calls.some(call => call.startsWith("bootout") || call.startsWith("kickstart"))).toBe(false);
+    expect(f.runner.calls.filter(call => call.startsWith("bootout"))).toEqual(["bootout gui/" + process.getuid!() + "/com.openai.chatgpt-tela.menu-bar"]);
+    expect(f.runner.calls.some(call => call.startsWith("kickstart"))).toBe(false);
     expect(existsSync(macApplicationUpdatePath(f.paths))).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

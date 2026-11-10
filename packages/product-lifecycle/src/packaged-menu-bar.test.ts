@@ -4,13 +4,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { applyPackagedInstallFromPayload, planPackagedInstallFromPayload } from "./packaged-install";
 import { applyPackagedRepairFromPayload, planPackagedRepairFromPayload } from "./packaged-repair";
-import { readOwnershipManifest } from "./ownership";
-import { refreshPackagedMenuBar, packagedMenuBarReadyPath, waitForPackagedMenuBar } from "./packaged-menu-bar";
+import { readOwnershipManifest, writeOwnershipManifest } from "./ownership";
+import { ServiceRegistrationInstaller, ServiceRegistrationManager, serviceRegistrationResourceForDefinition } from "./service-registration";
+import { installPackagedMenuBarRegistration, refreshPackagedMenuBar, packagedMenuBarReadyPath, waitForPackagedMenuBar } from "./packaged-menu-bar";
 import type { ServiceRegistrationCommandRunner } from "./service-registration";
 
 async function fixture() {
   const root = mkdtempSync(join(tmpdir(), "tela-menu-refresh-")), home = join(root, "home"); mkdirSync(home);
-  const paths = new Map<string, string>(); let failRefresh = false;
+  const paths = new Map<string, string>();
   let readyBlueprint: Awaited<ReturnType<typeof planPackagedInstallFromPayload>>["blueprint"];
   const calls: string[] = [], events: string[] = [];
   const runner: ServiceRegistrationCommandRunner = { async run(command, args) {
@@ -19,20 +20,19 @@ async function fixture() {
     const id = args.at(-1)!.split("/").at(-1)!;
     if (args[0] === "bootstrap") {
       paths.set(id.replace(/\.plist$/, ""), args.at(-1)!);
+      if (id.includes("menu-bar") && readyBlueprint) {
+        events.push("refresh-ui");
+        mkdirSync(readyBlueprint.paths.runtimeRoot,{recursive:true});
+        const ownership=readOwnershipManifest(readyBlueprint.paths.installManifest)!;
+        // A directly relaunched GUI has no launcher parent PID.
+        writeFileSync(packagedMenuBarReadyPath(readyBlueprint.paths),JSON.stringify({pid:process.pid,parentPid:1,productVersion:ownership.productVersion}));
+      }
       return {exitCode:0,stdout:"",stderr:""};
     }
     if (args[0] === "print") return {exitCode:paths.has(id)?0:1,
       stdout:paths.has(id)?`job = {\n path = ${paths.get(id)}\n state = running\n}\n`:"",stderr:""};
-    if (args[0] === "kickstart") {
-      if (args.includes("-k")) {
-        events.push("refresh-ui");
-        if (failRefresh) return {exitCode:1,stdout:"",stderr:"fixture launch failure"};
-        mkdirSync(readyBlueprint.paths.runtimeRoot,{recursive:true});
-        const ownership=readOwnershipManifest(readyBlueprint.paths.installManifest)!;
-        writeFileSync(packagedMenuBarReadyPath(readyBlueprint.paths),JSON.stringify({pid:process.pid,parentPid:4321,productVersion:ownership.productVersion}));
-      }
-      return {exitCode:0,stdout:args.includes("-p")?"4321\n":"",stderr:""};
-    }
+    if (args[0] === "bootout") { paths.delete(id); return {exitCode:0,stdout:"",stderr:""}; }
+    if (args[0] === "kickstart") return {exitCode:0,stdout:"",stderr:""};
     throw Error("unexpected launchd action");
   }};
   function payload(version: string) {
@@ -51,7 +51,7 @@ async function fixture() {
   const states=new Map(["gateway","codex","chat"].map(s=>[s,true]));
   const services={async inspect(s:string){return states.get(s)?"running" as const:"stopped" as const;},
     async quiesce(s:string){events.push("stop-"+s);states.set(s,false);},async resume(s:string){events.push("start-"+s);states.set(s,true);}};
-  return {root,source,options,blueprint:planned.blueprint,services,calls,events,fail(){failRefresh=true;},recover(){failRefresh=false;}};
+  return {root,source,options,blueprint:planned.blueprint,services,calls,events};
 }
 
 test("menu startup observes a valid receipt even when fs.watch omits the filename", async()=>{
@@ -70,7 +70,7 @@ test("menu startup observes a valid receipt even when fs.watch omits the filenam
   const runtimeRoot=fs.mkdtempSync(join(tmpdir(),'tela-menu-watch-'));
   try {
    const paths={runtimeRoot},abort=new AbortController();
-   const pending=waitForPackagedMenuBar({paths,parentPid:4321,productVersion:'2.0.0',signal:abort.signal});
+   const pending=waitForPackagedMenuBar({paths,productVersion:'2.0.0',signal:abort.signal});
    fs.writeFileSync(packagedMenuBarReadyPath(paths),JSON.stringify({pid:process.pid,parentPid:4321,productVersion:'2.0.0'}));
    notify('rename',null);
    abort.abort();
@@ -88,6 +88,8 @@ macTest("healthy repair also refreshes UI; changed registration never receives r
   const plan=await planPackagedRepairFromPayload({payloadSourcePath:f.source,...f.options});
   await applyPackagedRepairFromPayload({plan,payloadSourcePath:f.source,services:f.services,...f.options});
   expect(f.events).toEqual(["refresh-ui"]);
+  expect(f.calls.some(call=>call.startsWith("kickstart -"))).toBe(false);
+  expect(f.calls.some(call=>call.startsWith("bootout"))).toBe(true);
   const manifest=readOwnershipManifest(plan.blueprint.paths.installManifest)!;
   const before=f.calls.length;
   await expect(refreshPackagedMenuBar({blueprint:plan.blueprint,manifest:{...manifest,resources:manifest.resources.filter(r=>r.id!==plan.blueprint.menuBar!.resource.id)},runner:f.options.runner})).rejects.toThrow("ownership");
@@ -101,14 +103,14 @@ macTest("healthy repair also refreshes UI; changed registration never receives r
  }finally{rmSync(f.root,{recursive:true,force:true});}
 });
 
-macTest("a wrapper PID alone cannot acknowledge GUI startup, including an old instance lock",async()=>{
+macTest("GUI acknowledgement accepts Sparkle parentage but rejects an old version",async()=>{
  const f=await fixture();try{
   const paths=f.blueprint.paths;mkdirSync(paths.runtimeRoot,{recursive:true});
   writeFileSync(packagedMenuBarReadyPath(paths),JSON.stringify({pid:process.pid,parentPid:1234,productVersion:"1.0.0"}));
   const abort=new AbortController();
-  const pending=waitForPackagedMenuBar({paths,parentPid:4321,productVersion:"2.0.0",signal:abort.signal});
+  const pending=waitForPackagedMenuBar({paths,productVersion:"2.0.0",signal:abort.signal});
   abort.abort();await expect(pending).rejects.toThrow("did not acknowledge startup");
-  const ready=waitForPackagedMenuBar({paths,parentPid:4321,productVersion:"2.0.0",signal:new AbortController().signal});
+  const ready=waitForPackagedMenuBar({paths,productVersion:"2.0.0",signal:new AbortController().signal});
   await new Promise<void>(resolve=>setImmediate(()=>{
    // Match the Swift UI's Data.write(options: .atomic): publish a new
    // directory entry instead of relying on in-place file-write notifications.
@@ -118,5 +120,24 @@ macTest("a wrapper PID alone cannot acknowledge GUI startup, including an old in
    resolve();
   }));
   await ready;
+ }finally{rmSync(f.root,{recursive:true,force:true});}
+});
+
+macTest("renewal replaces an owned old executable registration and preserves foreign edits", async()=>{
+ const f=await fixture();try{
+  const menu=f.blueprint.menuBar!,path=f.blueprint.paths.installManifest;
+  let manifest=readOwnershipManifest(path)!;
+  await new ServiceRegistrationManager({platform:'darwin',runner:f.options.runner}).release(menu.resource,manifest);
+  const definition={platform:'darwin' as const,content:menu.definition.platform==='darwin'?menu.definition.content.replace('/usr/bin/open','/old/owned/launcher'):''};
+  const resource=serviceRegistrationResourceForDefinition({resourceId:menu.resource.id,owner:'product',registrationId:menu.resource.registrationId,markerPath:menu.resource.identity!.markerPath,definitionPath:menu.resource.identity!.definitionPath!,definition});
+  manifest={...manifest,resources:manifest.resources.map(r=>r.id===resource.id?resource:r)};writeOwnershipManifest(path,manifest);
+  await new ServiceRegistrationInstaller({platform:'darwin',runner:f.options.runner}).install({manifestPath:path,manifest,resource,definition});
+  await refreshPackagedMenuBar({blueprint:f.blueprint,manifest,runner:f.options.runner});
+  expect(readFileSync(menu.resource.identity!.definitionPath!,'utf8')).toContain('/usr/bin/open');
+  expect(readOwnershipManifest(path)!.resources.find(r=>r.id===resource.id)).toEqual(menu.resource);
+  writeFileSync(menu.resource.identity!.definitionPath!,'foreign edited definition');const before=f.calls.length;
+  await expect(installPackagedMenuBarRegistration({blueprint:f.blueprint,manifest:readOwnershipManifest(path)!,runner:f.options.runner})).rejects.toThrow('ownership');
+  expect(f.calls.slice(before).some(x=>x.startsWith('bootout'))).toBe(false);
+  expect(readFileSync(menu.resource.identity!.definitionPath!,'utf8')).toBe('foreign edited definition');
  }finally{rmSync(f.root,{recursive:true,force:true});}
 });

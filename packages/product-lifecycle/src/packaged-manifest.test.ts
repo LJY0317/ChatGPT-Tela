@@ -93,8 +93,7 @@ describe("packaged product manifest", () => {
       }
       writeFileSync(join(root, PACKAGED_PRODUCT_MANIFEST), `${JSON.stringify(signed)}\n`);
       expect(packagedInstallSpecFromPayload(root).menuBar).toEqual({
-        executableRelativePath: "chatgpt-tela",
-        arguments: ["menu-bar"],
+        executableRelativePath: "ui/chatgpt-tela-menu-bar",
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -145,6 +145,14 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     controlCenter.show()
     return true
   }
+  private var startupReceiptURL: URL? {
+    if let path = ProcessInfo.processInfo.environment["CHATGPT_TELA_MENU_BAR_READY_FILE"] {
+      return URL(fileURLWithPath: path)
+    }
+    guard Bundle.main.bundleIdentifier == "com.openai.chatgpt-tela.menu-bar" else { return nil }
+    return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+      .appendingPathComponent("ChatGPT Tela/runtime/menu-bar-ready.json")
+  }
   private var statusItem: NSStatusItem!
   private var statusMenu: NSMenu!
   private var connectionSpinner: NSProgressIndicator?
@@ -233,19 +241,17 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       await controlCenter.showFirstUseIfNeeded()
       await refreshNow()
     }
-    // Only the installed launcher supplies this acknowledgement destination.
-    if let path = ProcessInfo.processInfo.environment["CHATGPT_TELA_MENU_BAR_READY_FILE"],
-       let version = ProcessInfo.processInfo.environment["CHATGPT_TELA_PRODUCT_VERSION"] {
+    // The installed app acknowledges both LaunchServices and Sparkle startup.
+    if let url = startupReceiptURL,
+       let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
       do {
-        let url = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                attributes: [.posixPermissions: 0o700])
         let ready: [String: Any] = ["pid": Int(getpid()), "parentPid": Int(getppid()), "productVersion": version]
         try JSONSerialization.data(withJSONObject: ready).write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
       } catch {
         fputs("Tela menu bar could not acknowledge startup.\n", stderr)
-        NSApp.terminate(nil)
       }
     }
   }
@@ -321,11 +327,11 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
 
   func applicationWillTerminate(_ notification: Notification) {
     NSWorkspace.shared.notificationCenter.removeObserver(self)
-    if let path = ProcessInfo.processInfo.environment["CHATGPT_TELA_MENU_BAR_READY_FILE"],
-       let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+    if let url = startupReceiptURL,
+       let data = try? Data(contentsOf: url),
        let ready = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
        ready["pid"] as? Int == Int(getpid()) {
-      try? FileManager.default.removeItem(atPath: path)
+      try? FileManager.default.removeItem(at: url)
     }
   }
 
