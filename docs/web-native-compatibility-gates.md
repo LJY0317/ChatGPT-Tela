@@ -30,6 +30,12 @@ Native pipe/browser-host startup in the other profile. Do not treat a signed
 externally started engine as app-owned, or generalize Native-only acceptance
 to a shared-engine replacement: Web, history and compaction gates remain.
 
+The installed app-owned trial also accepted a real Web-family response followed
+by a Native model switch and `cua.getState()` in the same chat, with both turns
+completed. Native app enumeration succeeded, while browser discovery reported
+an unavailable browser access host. This accepts the model-switch/app-inventory
+path, not browser control or Web invocation of original Native tools.
+
 ## App-owned provider cutover
 
 An opt-in isolated acceptance fixture in
