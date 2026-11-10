@@ -59,3 +59,16 @@ test("startup restoration starts an app-owned slot through the normal path witho
     expect(nativeCalls).toBe(0);
   } finally { await service.close(); }
 });
+
+test("app-owned restoration attempts Web for an open official app without granting Native restart authority", async () => {
+  const profile: CodexProfileStatus = { slot: 2, targetId: "second", targetDisplayName: "ChatGPT Profile 2",
+    targetState: "running", targetSessionState: "available", controlState: "stopped" };
+  const calls: unknown[] = [];
+  await restoreWorkProfiles({ config: { appOwnedResponses: [{ slot: 2, port: 48232, capability: "h".repeat(48) }] },
+    async profiles() { return [profile]; },
+    async startProfile(slot, options) { calls.push([slot, options]); throw Error("launcher refuses a different live route"); },
+  }, ["second"], new AbortController().signal);
+  expect(calls).toEqual([[2, undefined]]);
+  expect(restorableWorkProfiles([profile], ["second"])).toEqual([]);
+  expect(restorableWorkProfiles([{ ...profile, controlState: "orphaned" }], ["second"], new Set([2]))).toEqual([]);
+});

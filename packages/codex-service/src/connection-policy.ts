@@ -2,12 +2,14 @@ import type { CodexProfileStatus } from "./controller";
 import type { CodexService } from "./controller";
 import { diagnosticFailureClass, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 
-/** Saved intent cannot authorize taking over or restarting an existing app. */
-export function restorableWorkProfiles(profiles: readonly CodexProfileStatus[], identities: readonly string[]): readonly number[] {
+/** App-owned Web restoration never owns or restarts the official app. */
+export function restorableWorkProfiles(profiles: readonly CodexProfileStatus[], identities: readonly string[],
+  appOwnedSlots: ReadonlySet<number> = new Set()): readonly number[] {
   const wanted = new Set(identities);
   return profiles.filter(profile => wanted.has(profile.targetId)
-    && profile.controlState === "stopped" && profile.targetSessionState === "available"
-    && profile.targetState !== "running").map(profile => profile.slot);
+    && profile.controlState === "stopped"
+    && (appOwnedSlots.has(profile.slot) || profile.targetSessionState === "available"
+      && profile.targetState !== "running")).map(profile => profile.slot);
 }
 
 /** Startup is one restoration pass; startProfile owns the fresh target check. */
@@ -16,7 +18,8 @@ export async function restoreWorkProfiles(service: Pick<CodexService, "config" |
   emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_started", { count: identities.length });
   let restored = 0, failed = 0;
   const inventory = identities.length ? await service.profiles() : [];
-  const slots = restorableWorkProfiles(inventory, identities);
+  const appOwnedSlots = new Set(service.config.appOwnedResponses?.map(ingress => ingress.slot));
+  const slots = restorableWorkProfiles(inventory, identities, appOwnedSlots);
   const selectedTargets = new Set(identities);
   const restorableSlots = new Set(slots);
   for (const profile of inventory) {
@@ -34,7 +37,7 @@ export async function restoreWorkProfiles(service: Pick<CodexService, "config" |
     if (signal.aborted) break;
     emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_attempted", { slot });
     try {
-      const result = service.config.appOwnedResponses?.some(ingress => ingress.slot === slot)
+      const result = appOwnedSlots.has(slot)
         ? await service.startProfile(slot)
         : await service.startProfile(slot, { requireStopped: true });
       restored++;
