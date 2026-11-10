@@ -386,7 +386,7 @@ describe("development runtime composition", () => {
       // Even when the Native request advertises a command tool, the default
       // Web route carries no exact Native turn bearer to either submission.
       expect(submitted).toHaveLength(2);
-      expect(submitted.map(request => request.chatTools)).toEqual([{ defaultProfileSlot: 2 }, { defaultProfileSlot: 2 }]);
+      expect(submitted.map(request => request.chatTools)).toEqual([{}, {}]);
       expect(submitted.map(request => request.physicalContext.mode)).toEqual(["full", "retained-delta"]);
       expect(submitted[0]!.webEpochId).toBe(submitted[1]!.webEpochId);
       expect(provider.surfaceLeaseIds).toHaveLength(2);

@@ -234,7 +234,7 @@ export function createSuppliedRequestGateway(input: {
                 }
               }
               plan = await planner.planSuppliedRequest(identity, body, { signal, onProgress: publish });
-              const chatTools = { ...(input.profileSlot === undefined ? {} : { defaultProfileSlot: input.profileSlot }),
+              const chatTools = {
                 ...(owned.advertisedGoals.length ? { nativeGoalControl: capability } : {}) };
               assertWebMessageFitsComposer({ ...plan, chatTools });
               if (plan.physicalContext.mode !== "retained-delta") await epochs.retire(identity.threadId);

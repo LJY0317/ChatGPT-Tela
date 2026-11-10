@@ -71,7 +71,6 @@ export async function startCodexServiceHttpServer(input: {
   readonly service: CodexService;
   readonly bearerToken?: string;
   readonly startupComplete?: () => boolean;
-  readonly delegationCapacity?: (slot: number, cleanupDetails: boolean) => unknown;
   /** Optional, owner-verified structural inspection; not a Native turn mutation. */
   readonly inspectWork?: (slot: number, threadId: string, minutes: number) => Promise<unknown>;
 }): Promise<CodexServiceHttpServer> {
@@ -117,13 +116,6 @@ export async function startCodexServiceHttpServer(input: {
           const profiles = await input.service.profiles();
           emitDiagnosticEvent("chatgpt_tela_codex", "profiles_inventory", { count: profiles.length });
           return Response.json({ contractVersion: 1, profiles });
-        }
-        const capacityMatch = request.method === "GET"
-          ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/web-delegation-capacity$/.exec(url.pathname) : null;
-        if (capacityMatch && input.delegationCapacity) {
-          return Response.json(input.delegationCapacity(Number(capacityMatch[1]), url.searchParams.get("cleanup-details") === "1"), {
-            headers: { "cache-control": "no-store" },
-          });
         }
         const terminalMatch = request.method === "GET"
           ? /^\/v1\/codex\/profiles\/([1-9][0-9]?)\/terminal-session$/.exec(url.pathname) : null;

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readServiceRuntimeDescriptor, writeServiceRuntimeDescriptor, removeServiceRuntimeDescriptor } from "./index";
-import { parseCodexTerminalSessionContract, parseCodexAccountDisplayContract, parseCodexAccountCheckContract, parseCodexProfileStatusContract, parseCodexBridgePreviewContract, parseServiceRuntimeDescriptor, parseServiceStatus, parseCodexWebDelegationCapacityContract } from "./index";
+import { parseCodexTerminalSessionContract, parseCodexAccountDisplayContract, parseCodexAccountCheckContract, parseCodexProfileStatusContract, parseCodexBridgePreviewContract, parseServiceRuntimeDescriptor, parseServiceStatus } from "./index";
 
 describe("private service protocol", () => {
   test("descriptor cleanup belongs to the exact publishing service, not a replacement", () => {
@@ -36,17 +36,6 @@ describe("private service protocol", () => {
     expect(() => parseCodexTerminalSessionContract({ ...value, responsesRouteFingerprint: undefined })).toThrow();
   });
 
-  test("retained count above legacy review threshold is valid with free execution permits", () => {
-    const base = { contractVersion: 3, profileSlot: 2, source: "managed_delegation_journal",
-      observedAt: new Date().toISOString(), coverage: "managed_jobs_only",
-      policy: "configurable_tasks_one_writer_per_checkout_v3", uncertain: 0,
-      total: { used: 0, limit: 3 }, records: { retained: 65, limit: 64, admissionBound: false },
-      available: true, messageKo: "프로필 2: 동시 작업 0/3", messageEn: "Profile 2: concurrent jobs 0/3",
-      nextAction: "start_if_profile_ready" };
-    expect(parseCodexWebDelegationCapacityContract(base).records.retained).toBe(65);
-    expect(parseCodexWebDelegationCapacityContract({ ...base, records: { retained: 3, limit: 64 } }).available).toBe(true);
-    expect(() => parseCodexWebDelegationCapacityContract({ ...base, records: { ...base.records, admissionBound: true } })).toThrow();
-  });
   test("email disclosure rejects unsafe values and false matching assertions", () => {
     const value = { contractVersion: 1, slot: 1, native: { state: "signed-in", email: "user@EXAMPLE.invalid" }, web: { state: "signed-in", email: "user@example.invalid" }, comparison: "matching" };
     expect(parseCodexAccountDisplayContract(value).comparison).toBe("matching");

@@ -40,14 +40,8 @@ Plura launches the official app; Tela provides a separate, explicitly registered
 Responses provider and per-profile model catalog. No external Native engine or
 launch-time proxy/overlay is used. See [explicit provider setup](docs/official-desktop-provider.md).
 This adapter remains pre-release; source verification and local acceptance do not establish a publicly supported release.
-Legacy external managed-delegation commands below require a Native session source;
-the Desktop-owned adapter does not expose that authority.
-
-## Separate managed Web delegations
-
-The source checkout supports `bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt` against an already running, signed-in Tela Work profile. Use `bun run cli web-delegate capacity --slot 1` to inspect managed-job occupancy, add `--cleanup` for the running service’s last per-conversation cleanup reasons and recommended actions, or use `result --job UUID` to retrieve a proven answer. Control Center Work displays this managed-only count; Settings selects independent per-profile concurrency limits from 1 to 5 (default 3). Direct Native conversations are outside this journal. See [Web delegation details](docs/web-delegation.md) for prerequisites, capacity and result retention. Managed conversations archive 24 hours after result retrieval, or after seven idle days when uncollected; Tela deletes its own automatic archives 30 days later. Above 32 unarchived managed conversations per profile, older idle conversations with collected answers may archive sooner. Active/queued work and observed manual restores are protected; local result receipts remain.
-
-Continue a finished job in the same conversation with `web-delegate continue --job UUID --prompt-file /path/to/followup.txt`; `status` and `reconcile` inspect an existing job without resending it. Native queue, steering and Goal controls are separate. When the active Native harness advertises its original Goal tools, Web workers can call them through Tela Chat's Goal-only control path; Native owns Goal state and scheduling. Collecting an answer does not complete its Goal. See the delegation details for availability and completion limits.
+Automatic delegation and conversation cleanup are not provided by the Desktop-owned
+adapter. Manage conversations in the official app; see [Web tasks](docs/web-delegation.md).
 
 ## Product goals
 

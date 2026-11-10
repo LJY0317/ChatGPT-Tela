@@ -57,7 +57,6 @@ struct TelaWorkProfile: Decodable, Equatable {
   var webState: String? = nil
   var webSignIn: String? = nil
   var accountManagementActive: Bool? = nil
-  var supportsManagedDelegations: Bool { targetSessionState == "ready" }
   var needsWebSignIn: Bool { connected && webState == "login-required" }
   var canReconnectWeb: Bool { connected && (webState == "failed" || webState == "ready") }
   var connected: Bool {

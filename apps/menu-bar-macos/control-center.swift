@@ -36,41 +36,6 @@ private struct ControlCenterProfilesEnvelope: Decodable {
   let profiles: [ControlCenterProfileStatus]
 }
 
-private struct ControlCenterDelegationCapacity: Decodable {
-  let contractVersion: Int
-  let profileSlot: Int
-  let source: String
-  let coverage: String
-  let total: Total
-  let cleanup: Cleanup?
-  struct Cleanup: Decodable {
-    let observedAt: String
-    let unarchived: Int
-    let target: Int
-    let uncertain: Bool
-    let protected: [String: Int]
-    var summary: String? {
-      if uncertain { return "Cleanup needs another check" }
-      return unarchived > target ? "Cleanup pending · \(unarchived) conversations" : nil
-    }
-    var help: String {
-      let labels = ["manually_managed": "outside automatic cleanup", "uncollected_answers": "answers to collect",
-                    "active_or_unresolved_tail": "active or unresolved", "queued_work": "queued work",
-                    "not_yet_due_or_unverified": "not yet due or unverified"]
-      let reasons = protected.sorted { $0.key < $1.key }.filter { $0.value > 0 }
-        .map { "\($0.value) \(labels[$0.key] ?? "need another check")" }.joined(separator: ", ")
-      return "Last cleanup: \(unarchived) unarchived conversations (target \(target)). "
-        + (reasons.isEmpty ? "" : "Protected: \(reasons). ")
-        + "Collect completed answers or let active work finish. Chats outside automatic cleanup won't be archived or deleted automatically. This target does not block new tasks."
-    }
-  }
-  struct Total: Decodable { let used: Int; let limit: Int }
-  func valid(for slot: Int) -> Bool {
-    contractVersion == 3 && profileSlot == slot && source == "managed_delegation_journal"
-      && coverage == "managed_jobs_only" && (0...8).contains(total.used) && (1...5).contains(total.limit)
-  }
-}
-
 private struct ControlCenterBridgeSurface: Decodable, Equatable { let id: String; let label: String; let title: String? }
 private struct ControlCenterBridgeInventory: Decodable {
   let contractVersion: Int
@@ -252,60 +217,6 @@ private final class SessionSidebarStack: NSStackView {
   override var isFlipped: Bool { true }
 }
 
-// AppKit supplies the hover timing; the popover keeps click-to-show help stable.
-private final class DelegationHelpButton: NSButton, NSViewToolTipOwner {
-  var helpText = ""
-  private var tracking: NSTrackingArea?
-  private var popover: NSPopover?
-
-  override func updateTrackingAreas() {
-    super.updateTrackingAreas()
-    if let tracking { removeTrackingArea(tracking) }
-    let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
-    addTrackingArea(area)
-    tracking = area
-    removeAllToolTips()
-    addToolTip(bounds, owner: self, userData: nil)
-  }
-
-  func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData: UnsafeMutableRawPointer?) -> String {
-    showHelp(self)
-    return ""
-  }
-
-  @objc func showHelp(_ sender: Any?) {
-    if popover?.isShown == true { return }
-    let message = NSTextField(wrappingLabelWithString: helpText)
-    message.font = .systemFont(ofSize: TelaStyle.bodySize)
-    message.translatesAutoresizingMaskIntoConstraints = false
-    let controller = NSViewController()
-    controller.view = NSView()
-    controller.view.addSubview(message)
-    NSLayoutConstraint.activate([
-      message.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor, constant: TelaStyle.cardInset),
-      message.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor, constant: -TelaStyle.cardInset),
-      message.topAnchor.constraint(equalTo: controller.view.topAnchor, constant: TelaStyle.cardVerticalInset),
-      message.bottomAnchor.constraint(equalTo: controller.view.bottomAnchor, constant: -TelaStyle.cardVerticalInset),
-      message.widthAnchor.constraint(equalToConstant: 260),
-    ])
-    let help = NSPopover()
-    help.behavior = .applicationDefined
-    help.contentViewController = controller
-    popover = help
-    help.show(relativeTo: bounds, of: self, preferredEdge: .maxY)
-  }
-
-  override func mouseExited(with event: NSEvent) {
-    super.mouseExited(with: event)
-    popover?.close()
-    popover = nil
-  }
-
-  override func viewWillMove(toWindow newWindow: NSWindow?) {
-    if newWindow == nil { popover?.close(); popover = nil }
-    super.viewWillMove(toWindow: newWindow)
-  }
-}
 
 private final class FlippedDocumentView: NSView {
   override var isFlipped: Bool { true }
@@ -405,8 +316,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var operationInProgress: Bool { changingDiagnosticCapture || changingProfile || changingServices || changingChatFolders || savingConfiguration || settingUp || preparingLocalPlugin || launchingMaintenance }
   private var approvalAutomation = "off"
   private var approvalDelay = "instant"
-  private var delegationLimits: [String: Int] = [:]
-  private var delegationCapacity: [Int: ControlCenterDelegationCapacity] = [:]
   private var bridgeImage: NSImage?
   private var bridgeMessage = "No preview requested yet."
   private var selectedPreviewSlot: Int?
@@ -419,7 +328,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var selectedBridgeSurface: String?
   private var previewRevision = 0
   private var preferenceError = false
-  private let delegationHelpText = "Web delegations run tasks in separate ChatGPT conversations. This usage counts tasks managed by Tela; your other chats are not included. Older collected conversations and settled idle browser windows are cleaned up automatically. Active work and uncollected answers are protected from capacity cleanup."
 
   private var supportRoot: URL {
     home.appendingPathComponent("Library/Application Support/ChatGPT Tela", isDirectory: true)
@@ -709,26 +617,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     height.isActive = true
   }
 
-  private func delegationRow(usage: String, help: DelegationHelpButton, in stack: NSStackView) {
-    let rowView = NSView()
-    let title = label("Web delegations")
-    let value = secondary(usage)
-    for view in [rowView, title, value, help] { view.translatesAutoresizingMaskIntoConstraints = false }
-    rowView.addSubview(title)
-    rowView.addSubview(value)
-    rowView.addSubview(help)
-    append(rowView, to: stack)
-    NSLayoutConstraint.activate([
-      title.leadingAnchor.constraint(equalTo: rowView.leadingAnchor),
-      title.centerYAnchor.constraint(equalTo: rowView.centerYAnchor),
-      value.trailingAnchor.constraint(equalTo: help.leadingAnchor, constant: -8),
-      value.centerYAnchor.constraint(equalTo: rowView.centerYAnchor),
-      help.trailingAnchor.constraint(equalTo: rowView.trailingAnchor),
-      help.centerYAnchor.constraint(equalTo: rowView.centerYAnchor),
-      rowView.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
-    ])
-  }
-
   private func divider(in stack: NSStackView) {
     let line = NSBox()
     line.boxType = .separator
@@ -934,25 +822,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         }
         row("Account", subtitle: workInventory.error == nil ? (localProgress ?? web.status) : "Status unavailable",
             control: controls, in: profileCard)
-        if profile.supportsManagedDelegations {
-          let help = DelegationHelpButton(title: "?", target: nil, action: nil)
-          help.target = help
-          help.action = #selector(DelegationHelpButton.showHelp(_:))
-          help.bezelStyle = .helpButton
-          help.controlSize = .small
-          help.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-          help.setButtonType(.momentaryPushIn)
-          let cleanup = delegationCapacity[profile.slot]?.cleanup
-          var helpText = delegationHelpText
-          if let cleanup, cleanup.summary != nil { helpText += "\n\n" + cleanup.help }
-          help.helpText = helpText
-          help.setAccessibilityLabel("Web delegations help")
-          help.setAccessibilityHelp(helpText)
-          let usage = delegationCapacity[profile.slot].map { "\($0.total.used) of \($0.total.limit) slots in use" } ?? "Usage unavailable"
 
-          delegationRow(usage: usage, help: help, in: profileCard)
-          if let summary = cleanup?.summary { append(secondary(summary), to: profileCard) }
-        }
       }
       let preview = card("Web activity")
       let runningProfiles = profiles.filter { $0.controlState == "running" }
@@ -1156,24 +1026,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       row("Wait before approving", control: delayPicker, in: approvals)
       append(secondary("Restart your Work profile to apply changes. This interrupts any active turn."), to: approvals)
       if preferenceError { append(secondary("Couldn't read approval settings."), to: approvals) }
-      let delegatedProfiles = profiles.filter { $0.supportsManagedDelegations }
-      if !delegatedProfiles.isEmpty {
-      let delegations = card("Web delegations")
-      for profile in delegatedProfiles {
-        let picker = NSPopUpButton()
-        for count in 1...5 {
-          picker.addItem(withTitle: String(count))
-          picker.lastItem?.representedObject = count
-        }
-        picker.selectItem(at: (delegationLimits[String(profile.slot)] ?? 3) - 1)
-        picker.tag = profile.slot
-        picker.target = self
-        picker.action = #selector(setDelegationLimit(_:))
-        picker.isEnabled = !preferenceError
-        row(profiles.count == 1 ? "Concurrent tasks" : "\(profile.targetDisplayName) · Concurrent tasks",
-            control: picker, in: delegations)
-      }
-      }
       if installedServiceControlsAvailable() && bootstrapState == "configured" {
         let background = card("Tela")
         let running = serviceStates.values.contains("Ready")
@@ -1746,22 +1598,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     }
   }
 
-  @objc private func setDelegationLimit(_ sender: NSPopUpButton) {
-    guard let limit = sender.selectedItem?.representedObject as? Int, (1...5).contains(limit) else { return }
-    do {
-      var preferences = try TelaPreferencesStore.read(at: preferencesURL)
-      var limits = preferences.webDelegationLimits ?? [:]
-      limits[String(sender.tag)] = limit
-      preferences.webDelegationLimits = limits
-      try TelaPreferencesStore.write(preferences, at: preferencesURL)
-      delegationLimits = limits
-      onPreferencesChanged?()
-    } catch {
-      sender.selectItem(at: (delegationLimits[String(sender.tag)] ?? 3) - 1)
-      NSSound.beep()
-    }
-  }
-
   @objc private func toggleApproval(_ sender: NSSwitch) {
     do {
       var preferences = try TelaPreferencesStore.read(at: preferencesURL)
@@ -2145,19 +1981,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         await refreshBridgeTitles(slot: profile.slot)
       }
     }
-    delegationCapacity = [:]
-    if selectedPage == .work, let descriptor = try? readDescriptor("codex") {
-      for profile in profiles where profile.supportsManagedDelegations {
-        if let data = try? await request(descriptor, path: "v1/codex/profiles/\(profile.slot)/web-delegation-capacity"),
-           let value = try? JSONDecoder().decode(ControlCenterDelegationCapacity.self, from: data),
-           value.valid(for: profile.slot) { delegationCapacity[profile.slot] = value }
-      }
-    }
     refreshProfileAccounts()
     if let preferences = try? TelaPreferencesStore.read(at: preferencesURL) {
       approvalAutomation = preferences.approvalAutomation
       approvalDelay = preferences.approvalDelay ?? "instant"
-      delegationLimits = preferences.webDelegationLimits ?? [:]
       preferenceError = false
     } else {
       preferenceError = true

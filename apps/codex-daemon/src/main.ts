@@ -5,11 +5,7 @@ import {
   startCodexServiceHttpServer,
   createCodexWorkInspector,
 } from "@chatgpt-tela/codex-service";
-import { connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
-import { createLocalNativeAccountProof, type TrustedNativeProfileSession } from "../../../packages/codex-service/src/cross-profile-account-proof";
-import { startWebDelegationRetention } from "../../../packages/codex-service/src/web-delegation-retention";
-import { WebDelegationStore, reconcileWebDelegationCapacity } from "../../../packages/codex-service/src/web-delegation";
-import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductConfigIfPresent, readProductPreferences, setWorkProfileConnection, webDelegationLimit } from "@chatgpt-tela/product-config";
+import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductConfigIfPresent, readProductPreferences, setWorkProfileConnection } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { prepareInstalledProfileOwnership } from "../../cli/src/profile-ownership";
 import { diagnosticFailureClass, emitDiagnosticEvent, observeDaemonUncaughtFailures, reportDaemonFailure } from "@chatgpt-tela/core";
@@ -32,10 +28,7 @@ async function main(): Promise<void> {
   const installId = required("CHATGPT_TELA_INSTALL_ID");
   const paths = resolveProductPaths();
   const descriptorPath = join(paths.serviceRuntime("codex"), "descriptor.json");
-  const delegationStore = new WebDelegationStore(join(paths.serviceState("codex"), "web-delegations"),
-    slot => webDelegationLimit(readProductPreferences(), slot));
   const lifecycle = new AbortController();
-  let retention: ReturnType<typeof startWebDelegationRetention> | undefined;
   const service = await startCodexService({
     signal: lifecycle.signal,
     config: {
@@ -49,8 +42,7 @@ async function main(): Promise<void> {
     prepareProfileRuntime: async slot => {
       await prepareInstalledProfileOwnership({ slot, productPaths: paths, installId, environment: process.env });
     },
-    webDelegationCapacity: slot => reconcileWebDelegationCapacity(delegationAdapters, slot, lifecycle.signal),
-    onProfileConnectionChanged: (...args) => { setWorkProfileConnection(...args); retention?.wake(); },
+    onProfileConnectionChanged: setWorkProfileConnection,
     profileRuntimeEnvironment: slot => {
       const preferences = readProductPreferences();
       return {
@@ -68,7 +60,6 @@ async function main(): Promise<void> {
     service,
     startupComplete: () => !restoring,
     inspectWork: createCodexWorkInspector({ service, logsRoot: paths.logsRoot }),
-    delegationCapacity: (slot, details) => delegationStore.capacity(slot, undefined, details),
   });
   writeServiceRuntimeDescriptor(descriptorPath, {
     version: 1,
@@ -84,31 +75,13 @@ async function main(): Promise<void> {
   // One startup attempt, no polling and no interruption of already-running apps.
   const restoration = restoreWorkProfiles(service, readProductPreferences().workProfileConnections ?? [], lifecycle.signal)
     .catch(error => emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_failed", { failure_class: diagnosticFailureClass(error) }))
-    .finally(() => { restoring = false; retention?.wake(); });
-
-  const ownedSession = async (slot: number): Promise<TrustedNativeProfileSession> => {
-    const terminal = await service.terminalSession(slot);
-    if (terminal.runtimeProcessId === undefined || terminal.responsesRouteFingerprint === undefined) {
-      throw Error("Native runtime owner details are unavailable; update Tela before delegation");
-    }
-    return { slot, runtimeProcessId: terminal.runtimeProcessId,
-      responsesRouteFingerprint: terminal.responsesRouteFingerprint, terminalEndpoint: terminal.endpoint };
-  };
-  const proof = createLocalNativeAccountProof({ resolveOwnedSession: ownedSession, fingerprintKey: delegationStore.fingerprintKey });
-  const delegationAdapters = {
-    store: delegationStore,
-    diagnosticRoot: join(paths.logsRoot, "diagnostics"),
-    owner: async (slot: number) => ({ binding: await proof(slot), session: await ownedSession(slot) }),
-    connect: (endpoint: string) => connectCodexAppServerWebSocket(endpoint, { signal: lifecycle.signal }),
-  };
-  retention = startWebDelegationRetention(delegationAdapters, lifecycle.signal);
+    .finally(() => { restoring = false; });
 
   let stopping: Promise<void> | undefined;
   const stop = () => {
     lifecycle.abort();
     if (!stopping) {
       stopping = (async () => {
-        await retention?.close();
         const results = await Promise.allSettled([http.close(), restoration.then(() => service.close())]);
         const failures = results
           .filter((result): result is PromiseRejectedResult => result.status === "rejected")

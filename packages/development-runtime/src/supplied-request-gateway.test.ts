@@ -101,7 +101,7 @@ test("input-only dispatch joins duplicate observers and reuses settled response 
     expect(a).toMatchObject({ type: "final", answer: "A inspected." });
     expect(await f.gateway.handle(request())).toEqual(a);
     expect(f.submissions).toHaveLength(1);
-    expect(f.submissions[0]!.chatTools).toEqual({ defaultProfileSlot: 2 });
+    expect(f.submissions[0]!.chatTools).toEqual({});
     expect(f.selections).toEqual([{ familyKey: chatGptWebFamilyKey("Supplied request fixture"), effort: "medium" }]);
     await expect(f.gateway.handle(request("turn-1", [{ role: "user", content: "Different question" }]))).rejects.toThrow("changed");
     expect(f.submissions).toHaveLength(1);

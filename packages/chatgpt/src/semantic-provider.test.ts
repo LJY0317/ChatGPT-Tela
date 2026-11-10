@@ -1034,7 +1034,7 @@ describe("ChatGPT semantic provider", () => {
 
   test("Goal-only routing metadata keeps Native work tools outside the Tela Chat contract", () => {
     const payload = formatWebPhysicalContext(request().physicalContext, undefined, [], {
-      defaultProfileSlot: 2, nativeGoalControl: "opaque-goal-only-control", nativeHistoryControl: "opaque-history-control",
+      nativeGoalControl: "opaque-goal-only-control", nativeHistoryControl: "opaque-history-control",
     });
     expect(payload).toContain('"nativeGoalControl":"opaque-goal-only-control"');
     expect(payload).toContain('"history_control":"opaque-history-control"');
@@ -1060,13 +1060,12 @@ describe("ChatGPT semantic provider", () => {
     const surface = await leaseFor(driver);
     const provider = new ChatGptSemanticProvider({ connectorName: "ChatGPT Tela Development" });
     try {
-      const submitting = provider.submitTurn(surface.lease, { ...request(), chatTools: { defaultProfileSlot: 2 } });
+      const submitting = provider.submitTurn(surface.lease, { ...request(), chatTools: {} });
       while (!driver.current.revision.includes(":appended")) await Promise.resolve();
       const payload = driver.appendedTexts[0]!;
       expect(payload).toContain('"toolBackend":"tela-chat"');
       expect(payload).toContain("Tela Chat tools only");
-      expect(payload).toContain('"defaultDelegationProfileSlot":2');
-      expect(payload).toContain("unless the user explicitly selects another profile");
+      expect(payload).not.toContain("delegation CLI");
       expect(payload).not.toContain("turnCapability");
       expect(payload).not.toContain("No Native Codex tool bridge");
       driver.queued.push(acceptedSnapshot(driver));

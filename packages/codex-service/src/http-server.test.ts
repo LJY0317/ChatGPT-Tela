@@ -130,40 +130,6 @@ describe("Tela Codex private HTTP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  test("managed Web delegation capacity is an authenticated, content-free read", async () => {
-    const service = fixtureService(), token = "c".repeat(48);
-    let reads = 0;
-    const server = await startCodexServiceHttpServer({
-      service, bearerToken: token,
-      delegationCapacity: (...args) => {
-        expect(args).toEqual([2, reads > 0]);
-        const [slot] = args;
-        reads++;
-        return { contractVersion: 3, profileSlot: slot, source: "managed_delegation_journal",
-          observedAt: new Date().toISOString(), coverage: "managed_jobs_only",
-          policy: "configurable_tasks_one_writer_per_checkout_v3",
-          uncertain: 0,
-          total: { used: 3, limit: 3 }, records: { retained: 3, limit: 64 },
-          available: false, blockCode: "CAPACITY_TOTAL_PROFILE",
-          messageKo: "위임 한도 도달", messageEn: "Delegation limit reached",
-          nextAction: "wait_for_active_job" };
-      },
-    });
-    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
-      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
-      bearerToken: token, startedAt: new Date().toISOString() });
-    try {
-      const url = new URL("v1/codex/profiles/2/web-delegation-capacity", server.endpoint);
-      expect((await fetch(url)).status).toBe(401);
-      expect((await fetch(url, { headers: { authorization: `Bearer ${token}`,
-        origin: "https://chatgpt.com" } })).status).toBe(403);
-      expect((await client.webDelegationCapacity(2)).blockCode).toBe("CAPACITY_TOTAL_PROFILE");
-      expect(reads).toBe(1);
-      expect((await client.webDelegationCapacity(2, undefined, { cleanupDetails: true })).total.used).toBe(3);
-      expect(reads).toBe(2);
-      await expect(client.webDelegationCapacity(0)).rejects.toThrow("invalid profile slot");
-    } finally { await client.close(); await server.close(); }
-  });
   test("shutdown does not acknowledge or stop the service when child cleanup is refused", async () => {
     const diagnosticFile = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
     const root = mkdtempSync(join(tmpdir(), "tela-shutdown-evidence-")), capture = join(root, "diagnostics");

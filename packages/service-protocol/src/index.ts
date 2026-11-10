@@ -5,8 +5,7 @@ import { parseBrowserRetentionObservation, type BrowserRetentionObservation } fr
 export { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
 export { parseCodexWorkInspectionContract } from "./work-inspection";
 export { parseCodexCheckpointInspectionContract } from "./work-inspection";
-export { parseCodexWebDelegationCapacityContract, type CodexWebDelegationCapacityContract,
-  type WebDelegationBlockCode } from "./web-delegation-capacity";
+
 export { parseCodexApprovalWait, type CodexApprovalWaitContract } from "./approval-review";
 import { parseCodexApprovalWait, type CodexApprovalWaitContract } from "./approval-review";
 import type {

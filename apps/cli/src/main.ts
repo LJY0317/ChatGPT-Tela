@@ -25,7 +25,6 @@ import {
   readEffectiveProductConfig,
 } from "./product-config-selection";
 import { profileSlotFromArguments } from "./profile-selection";
-import { runWebDelegationCommand } from "./web-delegation";
 import { inspectNativeThread, inspectNativeThreadHistoricalEvidence } from "./native-thread-inspection";
 import {
   readChatAgentProvidersConfig,
@@ -781,10 +780,6 @@ async function manageIngress(
 async function main(): Promise<void> {
   const command = process.argv[2] ?? "help";
   const productPaths = resolveProductPaths();
-  if (command === "web-delegate") {
-    await runWebDelegationCommand(process.argv.slice(3), productPaths);
-    return;
-  }
   if (command === "version") {
     console.log("ChatGPT Tela 0.0.0 (pre-alpha)");
     return;
@@ -1127,14 +1122,6 @@ async function main(): Promise<void> {
     "ChatGPT Tela — independent Chat and Codex runtimes.\n\n"
     + "Commands:\n"
     + "  version\n"
-    + "  web-delegate catalog [--slot N]\n"
-    + "  web-delegate capacity [--slot N] [--cleanup] (local admission; optional service cleanup details)\n"
-    + "  web-delegate start --cwd <workspace> --prompt-file <file> [--image-file <png|jpg|gif|webp>] [--slot N] [--job UUID] [--coordinator-thread UUID] [--coordinator-slot N]\n"
-    + "  web-delegate continue --job UUID --prompt-file <file> [--image-file <png|jpg|gif|webp>]\n"
-    + "  web-delegate <status|result|reconcile> --job UUID\n"
-    + "  web-delegate unanswered [--slot N] [--after UUID] [--limit N]\n"
-    + "  web-delegate request --job UUID [--output <new-private-json-file>]\n"
-    + "  web-delegate settle-request --job UUID --answer-job UUID (explicitly reviewed answer)\n"
     + "  configure --public-mcp-url <https-url> --allow-unauthenticated-public-mcp [--multi-profile-launcher <path>] [--mcp-abi stable|unified-development] [--manage-tailscale-funnel] [--tailscale-cli <path-or-name>]\n"
     + "  paths\n"
     + "  doctor\n"

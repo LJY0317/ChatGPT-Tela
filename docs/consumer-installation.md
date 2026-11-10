@@ -72,7 +72,7 @@ The configuration file is the secret-free `product-v1.json` described in [produc
 
 ## Related operating contracts
 
-- [Web delegation](web-delegation.md) documents managed task start/continuation, inline images, explicit Goal control, result settlement, and the limits of unattended coordinator recovery.
+- [Web tasks](web-delegation.md) describes the current app-owned boundary and unavailable automatic conversation management.
 - [Token efficiency](token-efficiency.md) defines instruction reuse, checkpoint/continuation budgets, and avoiding duplicate context transfer without truncating current authority or replaying uncertain work.
 - [Context continuity](context-continuity-contract.md) explains canonical Native history versus bounded Web working context and the recovery boundary for oversized history.
 - [Chat capability discovery](chat-capability-discovery.md) defines runtime capability discovery, execution effects, and why a successful command exit is not task-success evidence.

@@ -52,7 +52,7 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
 `);
   const built = await Bun.build({ entrypoints: [child], target: "bun", outdir: root, naming: "child.mjs" });
   expect(built.success).toBe(true);
-  let nativeCalls = 0, delegationCalls = 0;
+  let nativeCalls = 0;
   let providerSelection: "selected" | "unselected" | "unknown" = "unselected";
   const forbidden = async (): Promise<never> => { nativeCalls++; throw Error("Official Desktop is not owned"); };
   const adapter: CodexNativeTargetAdapter = {
@@ -65,8 +65,7 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
   };
   const service = await startCodexService({ config: { appOwnedResponses: [ingress] },
     nativeTargetAdapter: adapter, profileRuntimeCommand: [process.execPath, join(root, "child.mjs")],
-    appOwnedProviderSelection: () => providerSelection,
-    webDelegationCapacity: async () => { delegationCalls++; return { total: { used: 1 }, uncertain: 1 }; } });
+    appOwnedProviderSelection: () => providerSelection });
   const routed = service.tools as RoutedCodexTurnBridge;
   const http = await startCodexServiceHttpServer({ service });
   const paths = resolveProductPaths({ platform: "linux", home: root, environment: {} });
@@ -147,7 +146,6 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     expect(readFileSync(receipts, "utf8")).toBe("1111");
     expect(service.activeProfileCount).toBe(1);
     expect(nativeCalls).toBe(0);
-    expect(delegationCalls).toBe(0);
   } finally { await http.close(); await service.close().catch(() => {}); rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -298,7 +296,7 @@ await preview.close();lifecycle.dispose();
 
   const built = await Bun.build({ entrypoints: [child], target: "bun", outdir: root, naming: "assembly-child.mjs" });
   expect(built.success).toBe(true);
-  let nativeCalls = 0, managedDelegations = 0;
+  let nativeCalls = 0;
   const forbidden = async (): Promise<never> => { nativeCalls++; throw Error("Official Desktop is not owned"); };
   const adapter: CodexNativeTargetAdapter = {
     kind: "default-desktop", profiles: forbidden, resolve: forbidden,
@@ -317,7 +315,6 @@ await preview.close();lifecycle.dispose();
       FIXTURE_INGRESS_PORT: String(ingress.port),
       FIXTURE_INGRESS_CAPABILITY: ingress.capability,
     },
-    webDelegationCapacity: async () => { managedDelegations++; return { total: { used: 1 }, uncertain: 1 }; },
   });
   const route = new URL("http://127.0.0.1:" + ingress.port + "/" + ingress.capability + "/v1/responses");
   const body = { model: chatGptWebModelId(chatGptWebFamilyKey("Assembly fixture")),
@@ -417,7 +414,6 @@ await preview.close();lifecycle.dispose();
     await service.stopProfile(1);
     running = false;
     expect(nativeCalls).toBe(0);
-    expect(managedDelegations).toBe(0);
   } finally {
     if (running) await service.close().catch(() => {});
     else await service.close();

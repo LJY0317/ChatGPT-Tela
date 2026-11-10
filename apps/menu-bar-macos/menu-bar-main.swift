@@ -23,7 +23,6 @@ struct TelaPreferences: Codable {
   var approvalAutomation: String
   var approvalDelay: String?
   var workProfileConnections: [String]?
-  var webDelegationLimits: [String: Int]?
   var savedChatAcceptance: SavedChatAcceptance?
   struct SavedChatAcceptance: Codable { let slot: Int; let expiresAt: Int }
 }
@@ -45,10 +44,6 @@ enum TelaPreferencesStore {
           delays.contains(value.approvalDelay ?? "instant") else {
       throw NSError(domain: "ChatGPTTelaPreferences", code: 2)
     }
-    guard (value.webDelegationLimits ?? [:]).allSatisfy({ key, count in
-      guard let slot = Int(key) else { return false }
-      return String(slot) == key && (1...99).contains(slot) && (1...5).contains(count)
-    }) else { throw NSError(domain: "ChatGPTTelaPreferences", code: 3) }
     return value
   }
 

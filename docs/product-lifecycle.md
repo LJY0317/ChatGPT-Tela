@@ -94,7 +94,8 @@ authenticated services `ready`, profiles 1 and 2 Web/Native
 `ready`, retained Native engine and file publisher, and **no**
 outstanding upgrade/repair journal. The owner-bound, one-tool
 Web/Native/final-answer test passed on **both** profiles with exact
-synthetic-thread deletion; see [Web delegation](web-delegation.md).
+synthetic-thread deletion in the former external-Native architecture. Current Web task
+management limits are documented in [Web tasks](web-delegation.md).
 Real consecutive approval cards, Windows/Linux installed rollout and
 full cross-product lifecycle/removal acceptance remain open.
 

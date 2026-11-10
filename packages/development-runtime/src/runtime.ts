@@ -309,7 +309,6 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
             throw new Error("Deferred Native history requires its original readback source");
           }
           const chatTools = {
-            ...(input.profileSlot !== undefined ? { defaultProfileSlot: input.profileSlot } : {}),
             ...(nativeGoalControl ? { nativeGoalControl } : {}),
             ...(nativeHistoryControl ? { nativeHistoryControl } : {}),
           };
