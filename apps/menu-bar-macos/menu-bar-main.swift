@@ -230,9 +230,9 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     }
     Task {
       if await updater.start() { await controlCenter.startServicesAtLaunch() }
+      await controlCenter.showFirstUseIfNeeded()
       await refreshNow()
     }
-    Task { await controlCenter.showFirstUseIfNeeded() }
     // Only the installed launcher supplies this acknowledgement destination.
     if let path = ProcessInfo.processInfo.environment["CHATGPT_TELA_MENU_BAR_READY_FILE"],
        let version = ProcessInfo.processInfo.environment["CHATGPT_TELA_PRODUCT_VERSION"] {
