@@ -162,9 +162,6 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   if (config.nativeTarget.kind === "multi-profile" && config.slot < 2) {
     throw new Error("App-owned additional Desktop requires a managed profile slot");
   }
-  if (config.nativeTarget.kind !== "default-desktop" && input.catalogPreparation) {
-    throw new Error("Managed Desktop must use its public model-list overlay, not the default Desktop catalog");
-  }
   if (!Number.isSafeInteger(ingress.port) || ingress.port < 1 || ingress.port > 65535
     || !/^[A-Za-z0-9_-]{43,128}$/.test(ingress.capability)) {
     throw new Error("App-owned Responses requires an install-owned fixed port and URL capability");
@@ -234,16 +231,11 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       hostname: "127.0.0.1",
       port: ingress.port,
       runtimeToken: ingress.capability,
-      authentication: managed ? { kind: "header", name: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER } : { kind: "path" },
-      ...(managed ? { modelListOverlay: {
-        token: ingress.capability,
-        handle: (request: Request) => handleModelListOverlayRequest({ request,
-          families: () => webAccountCurrent() ? router.cachedWebModelFamilies : [] }),
-      } } : {}),
+      authentication: { kind: "path" },
       requestRouter: async request => {
         const native = await router.route(request);
         if (native) return native;
-        if (accountActive() || webState !== "ready") return Response.json({ error: {
+        if (!webAccountCurrent()) return Response.json({ error: {
           code: "tela_web_not_ready", message: "Finish account management and reconnect Web before continuing." } }, { status: 409 });
         return undefined;
       },
@@ -269,7 +261,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       // If login, quota or model discovery fails, the install-owned registration
       // artifact remains usable with Native models only.
       if (preparation && nativeCatalog !== undefined) {
-        await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId,
+        await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId, slot: config.slot,
           nativeCatalog, webFamilies: [], assertCurrentAccount: () => {} });
       }
       const webDiscovery = await prepareProductWebDiscovery({
@@ -303,7 +295,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       await router.refreshWebModelFamilies(input.signal);
       startupPhase = "catalog_publish";
       if (preparation && nativeCatalog !== undefined) {
-        await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId,
+        await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId, slot: config.slot,
           nativeCatalog, webFamilies: families,
           assertCurrentAccount: () => {
             const current = readChatGptTelaAccountBinding(config.browserProfile);
@@ -324,24 +316,8 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     if (config.nativeTarget.kind === "multi-profile") {
       startupPhase = "desktop_launch";
       const client = input.multiProfileClient ?? new MultiProfileControlClient({ command: [config.nativeTarget.launcherCli] });
-      // The Responses listener and overlay callback have the same stable install-owned port
-      // and credential across Tela restarts. Plura reuses an exact matching live session.
-      // Plura owns its Desktop/app-server lifetime; Tela must never quit it during cleanup.
-      await client.launchRoutedTarget({
-        targetId: config.nativeTarget.targetId,
-        expectedProfileIndex: config.slot,
-        responsesBaseUrl: runtime.responses.baseUrl,
-        responsesEnvKey: PRODUCT_RESPONSES_ENV_KEY,
-        responsesToken: ingress.capability,
-        runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
-        startupModelCatalog: true,
-        modelListOverlay: {
-          url: new URL("/model-list-overlay", runtime.responses.baseUrl).href,
-          envKey: PRODUCT_RESPONSES_ENV_KEY,
-          token: ingress.capability,
-        },
-        ...(input.signal ? { signal: input.signal } : {}),
-      });
+      await client.launchTarget({ targetId: config.nativeTarget.targetId, expectedProfileIndex: config.slot,
+        ...(input.signal ? { signal: input.signal } : {}) });
     }
     const ownedMcp = internalMcp;
     const owned = runtime;
@@ -646,6 +622,7 @@ export async function startProductProfileRuntime(
     readonly onStartupStage?: (stage: string) => void;
   } = {},
 ): Promise<ProductProfileRuntime> {
+  if (config.nativeTarget.kind !== "default-desktop") throw Error("Plura Desktop uses the app-owned Responses provider, not an external Native session");
   if (config.acceptanceSavedChat) {
     throw new Error("saved-chat acceptance requires the Native-first runtime's owner-bound account browser");
   }
@@ -659,9 +636,6 @@ export async function startProductProfileRuntime(
   const publicIdentity = productPublicMcpIdentity(config.publicMcpAbi);
   const turns = new ActiveTurnRegistry({ routeId: config.routeId });
   const source = new LateBoundCurrentTurnSource();
-  const client = config.nativeTarget.kind === "multi-profile"
-    ? options.multiProfileClient ?? new MultiProfileControlClient({ command: [config.nativeTarget.launcherCli] })
-    : undefined;
   let runtime: ElectronDevelopmentRuntime | undefined;
   let internalMcp: CodexBridgeMcpHttpServer | undefined;
   let routedTarget: ProductProfileRoutedTarget | undefined;
@@ -759,30 +733,7 @@ export async function startProductProfileRuntime(
     const { families } = webDiscovery;
     startupFamilies = families;
     await compositeRouter.refreshWebModelFamilies(nativePreparationSignal);
-    if (config.nativeTarget.kind === "multi-profile") {
-      modelListOverlay = await startModelListOverlayServer({
-        localCompaction: nativeEngine?.localCompaction === true,
-        token: config.responsesToken,
-        families: () => compositeRouter.cachedWebModelFamilies,
-      });
-      startupStage("native_target_starting");
-      routedTarget = await client!.launchRoutedTarget({
-        targetId: config.nativeTarget.targetId,
-        startupModelCatalog: true,
-        ...(nativeEngine ? { nativeEngine } : {}),
-        responsesBaseUrl: runtime.responses.baseUrl,
-        responsesEnvKey: PRODUCT_RESPONSES_ENV_KEY,
-        responsesToken: config.responsesToken,
-        runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
-        modelListOverlay: {
-          url: modelListOverlay.url,
-          envKey: PRODUCT_RESPONSES_ENV_KEY,
-          token: config.responsesToken,
-        },
-        ...(options.signal ? { signal: options.signal } : {}),
-      });
-      startupStage("native_target_ready");
-    } else {
+    {
       startupStage("native_backend_preparing");
       const installation = defaultInstallation!;
       const route = createDefaultDesktopResponsesRoute({
@@ -845,9 +796,6 @@ export async function startProductProfileRuntime(
     if (nativeCatalog) cleanup.push(nativeCatalog.catch(() => undefined));
     if (defaultDesktopTarget) cleanup.push(defaultDesktopTarget.stop().catch(() => undefined));
     if (modelListOverlay) cleanup.push(modelListOverlay.close().catch(() => undefined));
-    if (routedTarget && config.nativeTarget.kind === "multi-profile") {
-      cleanup.push(client!.quitTarget(config.nativeTarget.targetId, options.signal).catch(() => undefined));
-    }
     if (internalMcp) cleanup.push(internalMcp.stop());
     if (runtime) cleanup.push(runtime.stop());
     await Promise.allSettled(cleanup);
@@ -874,16 +822,6 @@ export async function startProductProfileRuntime(
         }
         if (!targetStopped && config.nativeTarget.kind === "default-desktop") {
           await defaultDesktopTarget!.stop();
-          targetStopped = true;
-        } else if (!targetStopped) {
-          const session = await client!.targetSession(config.nativeTarget.targetId, options.signal);
-          const ownsTargetRoute = session.state === "ready"
-            && session.responsesRouteFingerprint === routedTarget!.session.responsesRouteFingerprint
-            && session.modelListOverlayFingerprint === routedTarget!.session.modelListOverlayFingerprint;
-          if (ownsTargetRoute) {
-            const stopped = await client!.quitTarget(config.nativeTarget.targetId, options.signal);
-            if (stopped.state === "ready") throw new Error("product target remained ready after normal quit");
-          }
           targetStopped = true;
         }
         // If route ownership was lost, preserve the now-unrelated target but still tear down this

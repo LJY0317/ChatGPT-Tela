@@ -1,10 +1,10 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   editOfficialCodexProviderFile,
   officialCodexConfigPath,
   TELA_APP_OWNED_PROVIDER_ID,
 } from "@chatgpt-tela/default-desktop-target";
-import { readProductConfig } from "@chatgpt-tela/product-config";
+import { readProductConfig, writeProductConfig } from "@chatgpt-tela/product-config";
 import { appOwnedDesktopCatalogPath, readPreparedAppOwnedDesktopCatalog } from "@chatgpt-tela/development-runtime/app-owned-desktop-catalog";
 import type { ProductPathOptions } from "@chatgpt-tela/product-lifecycle";
 import { verifyInstalledPackage } from "./runtime";
@@ -22,21 +22,39 @@ export async function runPackagedDesktopProviderCommand(
 ): Promise<{ readonly action: string; readonly changed: boolean; readonly catalogStatus: string; readonly mode: string; readonly providerId: string;
   readonly selection: string }> {
   const action = args[1], mode = args[2];
-  if (args.length !== 3 || (action !== "register" && action !== "restore")
+  const rest = args.slice(3);
+  const optionsByName = new Map<string, string>();
+  for (let i = 0; i < rest.length; i += 2) {
+    const key = rest[i]!, value = rest[i + 1];
+    if (!["--slot", "--config-file"].includes(key) || !value || optionsByName.has(key)) throw Error("Invalid Desktop provider option");
+    optionsByName.set(key, value);
+  }
+  const slot = Number(optionsByName.get("--slot") ?? "1");
+  if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99) throw Error("Invalid Desktop provider slot");
+  if ((action !== "register" && action !== "restore")
     || (mode !== "--dry-run" && mode !== "--apply")) {
     throw new Error("usage: desktop-provider <register|restore> <--dry-run|--apply>");
   }
   const { paths, ownership } = verifyInstalledPackage(options);
-  const config = readProductConfig(join(paths.configRoot, "product-v1.json"));
-  const owned = config.appOwnedResponses?.find(entry => entry.slot === 1);
-  if (!owned) throw new Error("app-owned default Desktop Responses must be explicitly configured first");
+  const productPath = join(paths.configRoot, "product-v1.json");
+  const config = readProductConfig(productPath);
+  const owned = config.appOwnedResponses?.find(entry => entry.slot === slot);
+  if (!owned) throw new Error("app-owned Responses must be explicitly configured for the selected slot first");
   // Register consumes current account-bound production output; restore can
   // identify the owned path even after the producer has stopped.
+  const explicitConfig = optionsByName.get("--config-file");
+  const configPath = explicitConfig ? resolve(explicitConfig) : owned.desktopConfigPath ?? (slot === 1 ? officialCodexConfigPath(options.pathOptions?.home) : undefined);
+  if (!configPath) throw Error("Select the additional Desktop profile's config.toml explicitly with --config-file; Plura v2 does not disclose private profile paths");
+  if (owned.desktopConfigPath && owned.desktopConfigPath !== configPath) throw Error("Restore the existing owned registration before choosing another config file");
   const catalogPath = action === "register"
-    ? readPreparedAppOwnedDesktopCatalog({ paths, installId: ownership.installId })
-    : appOwnedDesktopCatalogPath(paths);
+    ? readPreparedAppOwnedDesktopCatalog({ paths, installId: ownership.installId, slot })
+    : appOwnedDesktopCatalogPath(paths, slot);
+  // Retain only an explicit restoration reference, never ownership of the user's file.
+  if (mode === "--apply" && action === "register" && explicitConfig && owned.desktopConfigPath !== configPath) {
+    writeProductConfig({ ...config, appOwnedResponses: config.appOwnedResponses!.map(route => route.slot === slot ? { ...route, desktopConfigPath: configPath } : route) }, productPath);
+  }
   const result = editOfficialCodexProviderFile({
-    configPath: officialCodexConfigPath(options.pathOptions?.home),
+    configPath,
     action,
     mode: mode === "--apply" ? "apply" : "dry-run",
     installId: ownership.installId,
@@ -44,6 +62,14 @@ export async function runPackagedDesktopProviderCommand(
     catalogPath,
     result: "detailed",
   });
+  if (mode === "--apply" && action === "restore" && owned.desktopConfigPath
+    && ["removed", "absent", "not-requested"].includes(result.catalogStatus)) {
+    writeProductConfig({ ...config, appOwnedResponses: config.appOwnedResponses!.map(route => {
+      if (route.slot !== slot) return route;
+      const { desktopConfigPath: _registered, ...remaining } = route;
+      return remaining;
+    }) }, productPath);
+  }
   return Object.freeze({
     action,
     changed: result.changed,

@@ -65,9 +65,6 @@ function mappedTarget(target: MultiProfileTarget): CodexNativeTarget | undefined
       ? target.profileIndex
       : undefined;
   if (!targetSlot) return undefined;
-  if (!target.sharedAppServerSupported || !target.responsesRouteSupported) {
-    throw new Error(`native target does not support the required Tela Codex route: ${target.displayName}`);
-  }
   return Object.freeze({
     slot: targetSlot,
     adapterKind: "multi-profile" as const,
@@ -253,11 +250,7 @@ export class CompositeNativeTargetAdapter implements CodexNativeTargetAdapter {
 function mappedSession(session: MultiProfileTargetSession): CodexNativeTargetSession {
   return Object.freeze({
     targetId: session.targetId,
-    state: session.state,
-    ...(session.endpoint ? { endpoint: session.endpoint } : {}),
-    ...(session.responsesRouteFingerprint
-      ? { responsesRouteFingerprint: session.responsesRouteFingerprint }
-      : {}),
+    state: session.state === "running" ? "independent" : session.state === "stopped" ? "available" : session.state,
     ...(session.desktopProcessId ? { desktopProcessId: session.desktopProcessId } : {}),
   });
 }

@@ -210,7 +210,7 @@ async function mainAppOwned(
     const installId = process.env.CHATGPT_TELA_INSTALL_ID;
     runtime = await startAppOwnedProductResponsesRuntime({
       config, ingress, signal: lifecycle.signal,
-      ...(installId && config.nativeTarget.kind === "default-desktop"
+      ...(installId
         ? { catalogPreparation: { paths: resolveProductPaths(), installId } } : {}),
     });
     const owned = runtime;

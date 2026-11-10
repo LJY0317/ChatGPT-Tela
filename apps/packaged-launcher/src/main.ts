@@ -28,7 +28,7 @@ Usage:
   chatgpt-tela configure --file <product-config.json> [--enable-app-owned-desktop [--slot <profile>]]
   chatgpt-tela configure --stdin [--if-missing] [--enable-app-owned-desktop [--slot <profile>]]
   chatgpt-tela setup [--slot <profile>]
-  chatgpt-tela desktop-provider <register|restore> <--dry-run|--apply>
+  chatgpt-tela desktop-provider <register|restore> <--dry-run|--apply> [--slot N] [--config-file /path/to/config.toml]
   chatgpt-tela ingress status --public [--public-dns-url <DNS-JSON-URL>]
   chatgpt-tela services <start|stop>
   chatgpt-tela services start chat
@@ -208,13 +208,6 @@ async function main(): Promise<void> {
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     if (!result.success) process.exitCode = 1;
-    return;
-  }
-  if (args[0] === "desktop-provider") {
-    const result = await runPackagedDesktopProviderCommand(args, {
-      payloadRoot: payloadRootForLauncherExecutable(), launcherExecutablePath: process.execPath,
-    });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
   if (args[0] === "uninstall") {

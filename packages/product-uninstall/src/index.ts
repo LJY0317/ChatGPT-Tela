@@ -114,8 +114,24 @@ export function profileSetupActivityBlockers(paths: ProductPaths, installId: str
 const APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID = "app-owned-desktop-model-catalog";
 
 function restoreOwnedDesktopProvider(input: ProductUninstallOptions, paths: ProductPaths, installId: string, manifest: OwnershipManifest) {
-  const configPath = officialCodexConfigPath(input.home);
+  const configPath = join(paths.configRoot, "product-v1.json");
+  const routes = existsSync(configPath) ? readProductConfig(configPath).appOwnedResponses ?? [] : [];
+  const slots = [1, ...routes.filter(route => route.slot > 1 && route.desktopConfigPath).map(route => route.slot)];
+  const results = slots.map(slot => restoreOwnedDesktopProviderForSlot(input, paths, installId, manifest, slot));
+  const summary = results.find(result => result.status === "preserved" && result.selected)
+    ?? results.find(result => result.status === "preserved")
+    ?? results.find(result => result.status === "restored" || result.status === "planned") ?? results[0]!;
+  const catalogsToDetach = slots.filter((_slot, index) => {
+    const result = results[index]!;
+    return result.status === "planned" && "catalogStatus" in result && result.catalogStatus === "removed";
+  }).map(slot => slot === 1 ? APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID : `${APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID}-${slot}`);
+  return { ...summary, catalogsToDetach };
+}
+
+function restoreOwnedDesktopProviderForSlot(input: ProductUninstallOptions, paths: ProductPaths, installId: string, manifest: OwnershipManifest, slot: number) {
   const productPath = join(paths.configRoot, "product-v1.json");
+  const registered = existsSync(productPath) ? readProductConfig(productPath).appOwnedResponses?.find(route => route.slot === slot) : undefined;
+  const configPath = registered?.desktopConfigPath ?? officialCodexConfigPath(input.home);
   const selectedByUser = () => {
     if (!existsSync(configPath)) return false;
     const parsed = Bun.TOML.parse(readFileSync(configPath, "utf8")) as Record<string, any>;
@@ -137,13 +153,13 @@ function restoreOwnedDesktopProvider(input: ProductUninstallOptions, paths: Prod
     };
     if (!existsSync(productPath)) return withoutOwnedRoute();
     const config = readProductConfig(productPath);
-    const ingress = config.appOwnedResponses?.find(item => item.slot === 1);
+    const ingress = config.appOwnedResponses?.find(item => item.slot === slot);
     if (!ingress) return withoutOwnedRoute();
     if (!existsSync(configPath)) return { status: "already-absent" as const };
-    const catalogResource = manifest.resources.find(resource => resource.id === APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID);
+    const catalogResource = manifest.resources.find(resource => resource.id === (slot === 1 ? APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID : `${APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID}-${slot}`));
     const catalogPath = catalogResource?.kind === "directory" && catalogResource.owner === "product"
       && catalogResource.dataClass === "config"
-      && catalogResource.path === join(paths.stateRoot, "install", "desktop-model-catalog")
+      && catalogResource.path === join(paths.stateRoot, "install", slot === 1 ? "desktop-model-catalog" : `desktop-model-catalog-${slot}`)
       && readOwnershipMarker(catalogResource)?.installId === installId
       && readOwnershipMarker(catalogResource)?.resourceId === catalogResource.id
       ? join(catalogResource.path, "models.json") : undefined;
@@ -165,51 +181,6 @@ function restoreOwnedDesktopProvider(input: ProductUninstallOptions, paths: Prod
   }
 }
 
-/**
- * The canonical Plura supervisor owns managed Desktop sessions. Its public API
- * can observe a routed session or normally quit the entire target, but cannot
- * detach a Responses/overlay route from a running Desktop. Uninstall therefore
- * waits for the user's explicit normal quit; Tela must never quit or adopt an
- * unproven target merely because its profile index is configured here.
- */
-async function managedDesktopRouteDependencies(
-  input: ProductUninstallOptions, paths: ProductPaths,
-): Promise<readonly string[]> {
-  const productPath = join(paths.configRoot, "product-v1.json");
-  if (!existsSync(productPath)) return [];
-  let config: ReturnType<typeof readProductConfig>;
-  try { config = readProductConfig(productPath); }
-  catch { return ["Installed product configuration cannot be read to prove managed Desktop route retirement"]; }
-  const managed = config.appOwnedResponses?.filter(row => row.slot > 1) ?? [];
-  if (managed.length === 0) return [];
-  if (!config.multiProfile) return ["Managed Desktop launcher ownership is unavailable"];
-  const client = input.multiProfileControlClient
-    ?? new MultiProfileControlClient({ command: [config.multiProfile.launcherCli] });
-  try {
-    const targets = await client.targets();
-    const blockers: string[] = [];
-    for (const { slot } of managed) {
-      const matching = targets.filter(target => target.managed && target.profileIndex === slot);
-      if (matching.length !== 1) {
-        blockers.push(`Managed Desktop slot ${slot} cannot be uniquely observed for route retirement`);
-        continue;
-      }
-      const session = await client.targetSession(matching[0]!.id);
-      if (session.targetId !== matching[0]!.id) {
-        blockers.push(`Managed Desktop slot ${slot} returned a different target session`);
-      } else if (session.responsesRouteFingerprint || session.modelListOverlayFingerprint) {
-        blockers.push(`Managed Desktop slot ${slot} target ${session.targetId} still has a live route; quit this target normally in Plura before uninstall`);
-      } else if (!["available", "unavailable", "unsupported", "stopped"].includes(session.state)) {
-        // A running target with no route proof is someone else's Desktop.
-        // Its absence of a Tela route cannot be inferred from arbitrary state.
-        blockers.push(`Managed Desktop slot ${slot} route state is unproven; inspect its target session before uninstall`);
-      }
-    }
-    return blockers;
-  } catch {
-    return ["Managed Desktop target/session state cannot be observed; leave installed routes intact"];
-  }
-}
 
 async function runProductUninstallOwned(input: ProductUninstallOptions): Promise<Readonly<Record<string, unknown>>> {
   const platform = input.platform ?? process.platform;
@@ -241,7 +212,7 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
     }
   }
   let providerRestore = restoreOwnedDesktopProvider({ ...input, mode: "dry-run" }, paths, manifest.installId, manifest);
-  const managedRouteBlockers = await managedDesktopRouteDependencies(input, paths);
+  const managedRouteBlockers: readonly string[] = [];
 
   const filesystemObserver = new FilesystemOwnershipObserver();
   const hasManagedWorktrees = manifest.resources.some(resource => resource.kind === "managed-worktree");
@@ -305,12 +276,14 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
       }
       // A planned detach is not its result: after editing Desktop config,
       // recheck the live shared catalog reference before removing its file.
-      if (resource.kind === "directory" && resource.id === APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID
-        && !(providerRestore.status === "planned" && "catalogStatus" in providerRestore
-          && providerRestore.catalogStatus === "removed")) {
+      if (resource.kind === "directory" && (resource.id === APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID || resource.id.startsWith(`${APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID}-`))
+        && !providerRestore.catalogsToDetach.includes(resource.id)) {
         try {
-          if (existsSync(officialCodexConfigPath(input.home))) {
-            const config = Bun.TOML.parse(readFileSync(officialCodexConfigPath(input.home), "utf8")) as Record<string, unknown>;
+          const productPath = join(paths.configRoot, "product-v1.json");
+          const explicitPaths = existsSync(productPath) ? readProductConfig(productPath).appOwnedResponses?.flatMap(route => route.desktopConfigPath ? [route.desktopConfigPath] : []) ?? [] : [];
+          for (const configPath of new Set([officialCodexConfigPath(input.home), ...explicitPaths])) {
+            if (!existsSync(configPath)) continue;
+            const config = Bun.TOML.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
             if (config.model_catalog_json === join(resource.path, "models.json")) return "dirty" as const;
           }
         } catch { return "dirty" as const; }
@@ -354,10 +327,10 @@ async function runProductUninstallOwned(input: ProductUninstallOptions): Promise
   const nothingRemovable = plan.removableCount === 0 && plan.preservedCount > 0 && providerRestore.status === "planned";
   // Activity admission and external provider ownership must settle before
   // stopping services or modifying the user's Codex settings.
-  if (activityBlockers.length > 0 || managedRouteBlockers.length > 0 || providerDependency || nothingRemovable) {
+  if (activityBlockers.length > 0 || providerDependency || nothingRemovable) {
     return Object.freeze({ applied: false, status: "uninstall-blocked", providerRestore,
       activityBlockers, managedRouteBlockers, removedCount: 0, preservedCount: Number(providerDependency),
-      failedCount: managedRouteBlockers.length || 1, shutdownFailures, destructiveActions: 0,
+      failedCount: 1, shutdownFailures, destructiveActions: 0,
       ...(nothingRemovable ? { reason: "No owned resources can be removed; Codex provider selection was preserved" } : {}) });
   }
   if (input.mode === "apply") {

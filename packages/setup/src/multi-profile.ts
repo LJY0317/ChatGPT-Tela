@@ -1,93 +1,20 @@
 import { spawn } from "node:child_process";
-import { isAbsolute } from "node:path";
 import { diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import {
-  AppServerCurrentTurnSource,
-  connectCodexAppServerWebSocket,
-  type CanonicalCurrentTurnSource,
-} from "@chatgpt-tela/codex";
 
-const CONTRACT_VERSION = 1;
 const MAX_CONTROL_OUTPUT_BYTES = 1024 * 1024;
-
 function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
-
 function stringField(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`Multi-Profile contract returned invalid ${field}`);
-  }
-  const normalized = value.trim();
-  if (normalized.length > 1024 || /[\u0000-\u001f\u007f]/.test(normalized)) {
-    throw new Error(`Multi-Profile contract returned invalid ${field}`);
-  }
-  return normalized;
+  if (typeof value !== "string" || !value.trim() || /[\u0000-\u001f\u007f]/.test(value)) throw Error(`Invalid Plura ${field}`);
+  return value.trim();
 }
-
-function booleanField(value: unknown, field: string): boolean {
-  if (typeof value !== "boolean") {
-    throw new Error(`Multi-Profile contract returned invalid ${field}`);
-  }
+function targetId(value: string): string { return stringField(value, "target ID"); }
+function parseJson(stdout: string, command: string): Record<string, unknown> {
+  const value = record(JSON.parse(stdout));
+  if (!value || value.contractVersion !== 2) throw Error(`Plura ${command} requires target contract v2`);
   return value;
 }
-
-function contractVersion(value: unknown): void {
-  if (value !== CONTRACT_VERSION) {
-    throw new Error(`unsupported Multi-Profile contract version: ${String(value)}`);
-  }
-}
-
-function loopbackResponsesBaseUrl(value: URL | string): string {
-  const url = value instanceof URL ? new URL(value.href) : new URL(value);
-  if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
-    throw new Error("Multi-Profile Responses route must use loopback http://");
-  }
-  if (!url.port) throw new Error("Multi-Profile Responses route must include an explicit port");
-  if (url.username || url.password || url.search || url.hash) {
-    throw new Error("Multi-Profile Responses route must not contain credentials, query, or fragment");
-  }
-  url.pathname = "/v1";
-  return url.href.replace(/\/$/, "");
-}
-
-function loopbackAppServerEndpoint(value: unknown): string {
-  const raw = stringField(value, "target session endpoint");
-  const url = new URL(raw);
-  if (url.protocol !== "ws:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
-    throw new Error("Multi-Profile target session endpoint must use loopback ws://");
-  }
-  if (!url.port || url.username || url.password || url.search || url.hash || !["", "/"].includes(url.pathname)) {
-    throw new Error("Multi-Profile target session endpoint is not a plain loopback WebSocket endpoint");
-  }
-  return url.href;
-}
-
-function environmentKey(value: string): string {
-  if (!/^[A-Z][A-Z0-9_]{0,127}$/.test(value)) {
-    throw new Error("Multi-Profile Responses env key must be an uppercase environment variable name");
-  }
-  return value;
-}
-
-function targetId(value: string): string {
-  const normalized = value.trim();
-  if (!normalized || normalized.length > 512 || /[\u0000-\u001f\u007f]/.test(normalized)) {
-    throw new Error("Multi-Profile target id is invalid");
-  }
-  return normalized;
-}
-
-function fingerprint(value: unknown): string {
-  const normalized = stringField(value, "Responses route fingerprint");
-  if (!/^[a-f0-9]{64}$/.test(normalized)) {
-    throw new Error("Multi-Profile Responses route fingerprint is invalid");
-  }
-  return normalized;
-}
-
 export interface MultiProfileControlResult {
   readonly stdout: string;
   readonly stderr: string;
@@ -189,367 +116,74 @@ export interface MultiProfileTarget {
   readonly managed: boolean;
   readonly role: string;
   readonly state: string;
-  readonly sessionState: string;
-  readonly sharedAppServerSupported: boolean;
-  readonly responsesRouteSupported: boolean;
-  readonly modelListOverlaySupported?: boolean;
-  readonly engineOverrideSupported?: boolean;
-  readonly startupModelCatalogSupported?: boolean;
+  readonly backendPolicy: "official-desktop-owned";
   readonly profileIndex?: number;
 }
-
 export interface MultiProfileTargetSession {
   readonly targetId: string;
   readonly state: string;
-  readonly endpoint?: string;
-  readonly responsesRouteFingerprint?: string;
-  readonly modelListOverlayFingerprint?: string;
   readonly desktopProcessId?: number;
-  readonly engineOverrideSha256?: string;
 }
-
-export interface MultiProfileManagedRuntime {
-  readonly target: MultiProfileTarget;
-  readonly session: Required<Pick<MultiProfileTargetSession,
-    "targetId" | "state" | "endpoint" | "responsesRouteFingerprint">>
-    & Pick<MultiProfileTargetSession, "modelListOverlayFingerprint" | "engineOverrideSha256" | "desktopProcessId">;
-  readonly currentTurnSource: CanonicalCurrentTurnSource;
-}
-
-export type MultiProfileRoutedRuntime = MultiProfileManagedRuntime;
-
-function parseJson(stdout: string, command: string): Record<string, unknown> {
-  let value: unknown;
-  try {
-    value = JSON.parse(stdout);
-  } catch {
-    throw new Error(`Multi-Profile ${command} did not return valid JSON`);
-  }
-  const result = record(value);
-  if (!result) throw new Error(`Multi-Profile ${command} returned an invalid JSON object`);
-  contractVersion(result.contractVersion);
-  return result;
-}
-
 function parseTarget(value: unknown): MultiProfileTarget {
   const target = record(value);
-  if (!target) throw new Error("Multi-Profile targets contract contains an invalid target");
+  if (!target || target.backendPolicy !== "official-desktop-owned" || typeof target.managed !== "boolean") throw Error("Invalid Plura Desktop target");
   const profileIndex = target.profileIndex;
-  if (profileIndex !== undefined
-    && (!Number.isSafeInteger(profileIndex) || (profileIndex as number) < 2 || (profileIndex as number) > 99)) {
-    throw new Error("Multi-Profile targets contract contains an invalid profile index");
-  }
-  return Object.freeze({
-    id: stringField(target.id, "target id"),
-    displayName: stringField(target.displayName, "target display name"),
-    managed: booleanField(target.managed, "target managed flag"),
-    role: stringField(target.role, "target role"),
-    state: stringField(target.state, "target state"),
-    sessionState: stringField(target.sessionState, "target session state"),
-    sharedAppServerSupported: booleanField(target.sharedAppServerSupported, "shared app-server support"),
-    responsesRouteSupported: booleanField(target.responsesRouteSupported, "Responses route support"),
-    ...(target.startupModelCatalogSupported !== undefined
-      ? { startupModelCatalogSupported: booleanField(target.startupModelCatalogSupported, "startup model catalog support") } : {}),
-    ...(target.engineOverrideSupported !== undefined
-      ? { engineOverrideSupported: booleanField(target.engineOverrideSupported, "engine override support") } : {}),
-    ...(target.modelListOverlaySupported !== undefined
-      ? { modelListOverlaySupported: booleanField(target.modelListOverlaySupported, "model-list overlay support") }
-      : {}),
-    ...(profileIndex !== undefined ? { profileIndex: profileIndex as number } : {}),
-  });
+  if (profileIndex !== undefined && (!Number.isSafeInteger(profileIndex) || Number(profileIndex) < 2 || Number(profileIndex) > 99)) throw Error("Invalid Plura profile index");
+  return Object.freeze({ id: targetId(stringField(target.id, "target ID")), displayName: stringField(target.displayName, "display name"),
+    role: stringField(target.role, "role"), managed: target.managed, state: stringField(target.state, "state"),
+    backendPolicy: "official-desktop-owned", ...(profileIndex === undefined ? {} : { profileIndex: profileIndex as number }) });
 }
-
 function parseSession(value: Record<string, unknown>, expectedTargetId: string): MultiProfileTargetSession {
-  const returnedTargetId = stringField(value.targetID, "target session target id");
-  if (returnedTargetId !== expectedTargetId) {
-    throw new Error("Multi-Profile returned a session for a different target");
-  }
-  const state = stringField(value.state, "target session state");
-  const endpoint = value.endpoint === undefined ? undefined : loopbackAppServerEndpoint(value.endpoint);
-  const responsesRouteFingerprint = value.responsesRouteFingerprint === undefined
-    ? undefined
-    : fingerprint(value.responsesRouteFingerprint);
-  const modelListOverlayFingerprint = value.modelListOverlayFingerprint === undefined
-    ? undefined
-    : fingerprint(value.modelListOverlayFingerprint);
-  const desktopProcessID = value.desktopProcessID;
-  if (desktopProcessID !== undefined
-    && (!Number.isSafeInteger(desktopProcessID) || (desktopProcessID as number) < 1)) {
-    throw new Error("Multi-Profile target session desktop process id is invalid");
-  }
-  return Object.freeze({
-    targetId: returnedTargetId,
-    state,
-    ...(endpoint ? { endpoint } : {}),
-    ...(responsesRouteFingerprint ? { responsesRouteFingerprint } : {}),
-    ...(modelListOverlayFingerprint ? { modelListOverlayFingerprint } : {}),
-    ...(desktopProcessID !== undefined ? { desktopProcessId: desktopProcessID as number } : {}),
-    ...(value.engineOverrideSha256 !== undefined ? { engineOverrideSha256: fingerprint(value.engineOverrideSha256) } : {}),
-  });
+  if (value.targetID !== expectedTargetId || value.backendPolicy !== "official-desktop-owned") throw Error("Plura returned another target or execution owner");
+  const pid = value.desktopProcessID;
+  if (pid !== undefined && (!Number.isSafeInteger(pid) || Number(pid) < 1)) throw Error("Invalid Desktop process ID");
+  return Object.freeze({ targetId: expectedTargetId, state: stringField(value.state, "state"),
+    ...(pid === undefined ? {} : { desktopProcessId: pid as number }) });
 }
 
-/**
- * Optional consumer of Plura Desktop's public multi-profile control contract.
- *
- * ChatGPT Tela never reconstructs managed CODEX_HOME/user-data paths. Plura Desktop remains lifecycle
- * owner; ChatGPT Tela supplies only a loopback Responses route at launch, consumes the returned
- * public session endpoint, and binds Native authority through Codex app-server's public read API.
- * Development stock canaries do not instantiate this adapter. Product callers may use the same public
- * contract for the canonical `default` target through launchRoutedTarget().
- */
+/** Optional app lifecycle only. Native execution and provider selection belong to Desktop. */
 export class MultiProfileControlClient {
   readonly #command: readonly [string, ...string[]];
   readonly #runner: MultiProfileControlRunner;
-
-  constructor(input: {
-    readonly command: readonly [string, ...string[]];
-    readonly runner?: MultiProfileControlRunner;
-  }) {
-    if (!input.command[0]?.trim()) throw new Error("Multi-Profile control command is empty");
+  constructor(input: { readonly command: readonly [string, ...string[]]; readonly runner?: MultiProfileControlRunner }) {
+    if (!input.command[0]?.trim()) throw Error("Plura command is empty");
     this.#command = Object.freeze([...input.command]) as readonly [string, ...string[]];
     this.#runner = input.runner ?? new NodeMultiProfileControlRunner();
   }
-
   async targets(signal?: AbortSignal): Promise<readonly MultiProfileTarget[]> {
-    const result = await this.#run(["targets", "--json"], undefined, signal);
-    const contract = parseJson(result.stdout, "targets");
-    if (!Array.isArray(contract.targets)) throw new Error("Multi-Profile targets contract is missing targets");
+    const contract = parseJson((await this.#run(["targets", "--json"], signal)).stdout, "targets");
+    if (!Array.isArray(contract.targets)) throw Error("Plura targets are missing");
     const targets = contract.targets.map(parseTarget);
-    const unique = new Set(targets.map(target => target.id));
-    if (unique.size !== targets.length) throw new Error("Multi-Profile targets contract contains duplicate target ids");
+    if (new Set(targets.map(target => target.id)).size !== targets.length) throw Error("Duplicate Plura targets");
     return Object.freeze(targets);
   }
-
   async targetSession(target: string, signal?: AbortSignal): Promise<MultiProfileTargetSession> {
-    const expectedTargetId = targetId(target);
-    const result = await this.#run([
-      "target-session",
-      "--target",
-      expectedTargetId,
-      "--json",
-    ], undefined, signal);
-    return parseSession(parseJson(result.stdout, "target-session"), expectedTargetId);
+    const id = targetId(target);
+    return parseSession(parseJson((await this.#run(["target-session", "--target", id, "--json"], signal)).stdout, "target-session"), id);
   }
-
-  async launchManagedTarget(input: {
-    readonly targetId: string;
-    readonly responsesBaseUrl: URL | string;
-    readonly responsesEnvKey: string;
-    readonly responsesToken: string;
-    readonly signal?: AbortSignal;
-  }): Promise<MultiProfileManagedRuntime> {
-    return this.#launchRoutedTarget(input, true);
+  async launchTarget(input: { readonly targetId: string; readonly expectedProfileIndex?: number; readonly signal?: AbortSignal }): Promise<MultiProfileTargetSession> {
+    const id = targetId(input.targetId);
+    if (input.expectedProfileIndex !== undefined) {
+      const matches = (await this.targets(input.signal)).filter(target => target.id === id && target.managed && target.profileIndex === input.expectedProfileIndex);
+      if (matches.length !== 1) throw Error("Plura target does not own the selected profile");
+    }
+    return parseSession(parseJson((await this.#run(["launch-target", "--target", id, "--json"], input.signal)).stdout, "launch-target"), id);
   }
-
-  /**
-   * Launch one public launcher target with a process-local Responses route.
-   *
-   * Unlike launchManagedTarget(), this product-control primitive also accepts the launcher's
-   * canonical `default` target. The development canary intentionally keeps using the stricter
-   * managed-only entrypoint so its stock-mode independence does not change accidentally.
-   */
-  async launchRoutedTarget(input: {
-    readonly targetId: string;
-    /** An installed managed slot must be proven before launch, never inferred from a target ID. */
-    readonly expectedProfileIndex?: number;
-    readonly responsesBaseUrl: URL | string;
-    readonly responsesEnvKey: string;
-    readonly responsesToken: string;
-    readonly runtimeHeaderName?: string;
-    readonly startupModelCatalog?: boolean;
-    readonly nativeEngine?: { readonly executable: string; readonly sha256: string };
-    readonly modelListOverlay?: {
-      readonly url: string;
-      readonly envKey: string;
-      readonly token: string;
-    };
-    readonly signal?: AbortSignal;
-  }): Promise<MultiProfileRoutedRuntime> {
-    return this.#launchRoutedTarget(input, false);
-  }
-
   async quitTarget(target: string, signal?: AbortSignal, expectedDesktopProcessId?: number): Promise<MultiProfileTargetSession> {
-    const expectedTargetId = targetId(target);
-    if (expectedDesktopProcessId !== undefined && (!Number.isSafeInteger(expectedDesktopProcessId) || expectedDesktopProcessId < 1)) {
-      throw new Error("Invalid expected Desktop process id");
-    }
-    const result = await this.#run([
-      "quit-target",
-      "--target",
-      expectedTargetId,
-      ...(expectedDesktopProcessId === undefined ? [] : ["--expected-desktop-pid", String(expectedDesktopProcessId)]),
-      "--json",
-    ], undefined, signal);
-    return parseSession(parseJson(result.stdout, "quit-target"), expectedTargetId);
+    const id = targetId(target);
+    return parseSession(parseJson((await this.#run(["quit-target", "--target", id,
+      ...(expectedDesktopProcessId === undefined ? [] : ["--expected-desktop-pid", String(expectedDesktopProcessId)]), "--json"], signal)).stdout, "quit-target"), id);
   }
-
-  async #launchRoutedTarget(input: {
-    readonly targetId: string;
-    readonly expectedProfileIndex?: number;
-    readonly responsesBaseUrl: URL | string;
-    readonly responsesEnvKey: string;
-    readonly responsesToken: string;
-    readonly runtimeHeaderName?: string;
-    readonly startupModelCatalog?: boolean;
-    readonly nativeEngine?: { readonly executable: string; readonly sha256: string };
-    readonly modelListOverlay?: {
-      readonly url: string;
-      readonly envKey: string;
-      readonly token: string;
-    };
-    readonly signal?: AbortSignal;
-  }, requireManaged: boolean): Promise<MultiProfileRoutedRuntime> {
-    const expectedTargetId = targetId(input.targetId);
-    const route = loopbackResponsesBaseUrl(input.responsesBaseUrl);
-    const envKey = environmentKey(input.responsesEnvKey);
-    if (input.responsesToken.length < 32) {
-      throw new Error("Multi-Profile Responses token must contain at least 32 characters");
-    }
-    const targets = await this.targets(input.signal);
-    const matches = targets.filter(target => target.id === expectedTargetId);
-    if (matches.length !== 1) throw new Error(`Multi-Profile target is not available: ${expectedTargetId}`);
-    const target = matches[0]!;
-    if (input.expectedProfileIndex !== undefined
-      && (!target.managed || target.profileIndex !== input.expectedProfileIndex)) {
-      throw new Error("Multi-Profile target does not own the requested profile slot");
-    }
-    if (input.nativeEngine) {
-      if (target.engineOverrideSupported !== true) throw new Error("Multi-Profile target does not support explicit engine selection");
-      if (!isAbsolute(input.nativeEngine.executable) || /[\u0000\r\n]/.test(input.nativeEngine.executable)) throw new Error("Multi-Profile engine executable path is invalid");
-      fingerprint(input.nativeEngine.sha256);
-    }
-    if (requireManaged && !target.managed) {
-      throw new Error("stock/default ChatGPT must use ChatGPT Tela's native single-profile path");
-    }
-    if (!target.sharedAppServerSupported || !target.responsesRouteSupported) {
-      throw new Error("Multi-Profile target does not support the required app-server/Responses contract");
-    }
-    if (input.startupModelCatalog && (target.startupModelCatalogSupported !== true || !input.modelListOverlay)) {
-      throw new Error("Update the profile launcher to support startup model catalogs");
-    }
-    if (input.modelListOverlay && target.modelListOverlaySupported !== true) {
-      throw new Error("Multi-Profile target does not support the model-list overlay contract");
-    }
-    if (input.runtimeHeaderName && !/^[A-Za-z][A-Za-z0-9-]{0,127}$/.test(input.runtimeHeaderName)) {
-      throw new Error("Multi-Profile runtime header name is invalid");
-    }
-    const overlay = input.modelListOverlay;
-    let overlayUrl: string | undefined;
-    if (overlay) {
-      const url = new URL(overlay.url);
-      if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
-        || !url.port || !url.pathname || url.pathname === "/" || url.username || url.password
-        || url.search || url.hash) {
-        throw new Error("Multi-Profile model-list overlay must be an exact loopback HTTP URL");
-      }
-      overlayUrl = url.href;
-      environmentKey(overlay.envKey);
-      if (overlay.token.length < 32) throw new Error("Multi-Profile model-list overlay token is too short");
-      if (overlay.envKey === envKey && overlay.token !== input.responsesToken) {
-        throw new Error("Multi-Profile shared runtime environment key has conflicting tokens");
-      }
-    }
-
-    const result = await this.#run([
-      "launch-target",
-      "--target",
-      expectedTargetId,
-      "--responses-base-url",
-      route,
-      "--responses-env-key",
-      envKey,
-      ...(input.runtimeHeaderName ? ["--responses-runtime-header-name", input.runtimeHeaderName] : []),
-      ...(input.startupModelCatalog ? ["--startup-model-catalog"] : []),
-      ...(overlay ? [
-        "--model-list-overlay-url", overlayUrl!,
-        "--model-list-overlay-env-key", overlay.envKey,
-      ] : []),
-      "--json",
-    ], {
-      [envKey]: input.responsesToken,
-      // This child owns a new route; a launching Codex turn may carry another route's header.
-      ...(input.runtimeHeaderName === "OpenAI-Organization"
-        ? { OPENAI_ORGANIZATION: input.responsesToken } : {}),
-      ...(overlay ? { [overlay.envKey]: overlay.token } : {}),
-      ...(input.nativeEngine ? { CODEX_EXECUTABLE: input.nativeEngine.executable, CODEX_EXECUTABLE_SHA256: input.nativeEngine.sha256 } : {}),
-    }, input.signal);
-    const session = parseSession(parseJson(result.stdout, "launch-target"), expectedTargetId);
-    if (session.state !== "ready" || !session.endpoint || !session.responsesRouteFingerprint) {
-      throw new Error("Multi-Profile launch did not return a ready routed target session");
-    }
-    if (overlay && !session.modelListOverlayFingerprint) {
-      throw new Error("Multi-Profile launch did not prove model-list overlay ownership");
-    }
-    if (input.nativeEngine && session.engineOverrideSha256 !== input.nativeEngine.sha256) {
-      throw new Error("Multi-Profile launch did not prove the selected engine identity");
-    }
-
-    const readySession = Object.freeze({
-      targetId: session.targetId,
-      state: session.state,
-      endpoint: session.endpoint,
-      responsesRouteFingerprint: session.responsesRouteFingerprint,
-      ...(session.desktopProcessId !== undefined ? { desktopProcessId: session.desktopProcessId } : {}),
-      ...(session.engineOverrideSha256 ? { engineOverrideSha256: session.engineOverrideSha256 } : {}),
-      ...(session.modelListOverlayFingerprint
-        ? { modelListOverlayFingerprint: session.modelListOverlayFingerprint }
-        : {}),
-    });
-    return Object.freeze({
-      target,
-      session: readySession,
-      currentTurnSource: new AppServerCurrentTurnSource(
-        signal => connectCodexAppServerWebSocket(
-          readySession.endpoint,
-          signal ? { signal } : {},
-        ),
-        // An optional Plura-owned profile must follow the same bounded
-        // Native current-turn proof as the default Desktop target. Older
-        // Legacy whole-thread snapshots are not safe on long conversations.
-        { preferBoundedTurnProof: true },
-      ),
-    });
-  }
-
-  async #run(
-    arguments_: readonly string[],
-    environment: Readonly<Record<string, string>> | undefined,
-    signal: AbortSignal | undefined,
-  ): Promise<MultiProfileControlResult> {
-    const started = performance.now();
-    const action = arguments_[0] ?? "unknown";
-    const result = await this.#runner.run(this.#command, {
-      arguments: arguments_,
-      ...(environment ? { environment } : {}),
-      ...(signal ? { signal } : {}),
-    }).catch(error => {
-      emitDiagnosticEvent("chatgpt_tela_setup", "profile_control_failed", {
-        action, phase: "execute", duration_ms: Math.round(performance.now() - started), ...diagnosticFailureFields(error),
-      });
-      throw error;
+  async #run(arguments_: readonly string[], signal?: AbortSignal): Promise<MultiProfileControlResult> {
+    const started = performance.now(), action = arguments_[0] ?? "unknown";
+    const result = await this.#runner.run(this.#command, { arguments: arguments_, ...(signal ? { signal } : {}) }).catch(error => {
+      emitDiagnosticEvent("chatgpt_tela_setup", "profile_control_failed", { action, phase: "execute", ...diagnosticFailureFields(error) }); throw error;
     });
     if (result.exitCode !== 0) {
-      // External prose is interpreted only at this adapter boundary, never persisted.
-      const rejection = [
-        ["different Responses route", "responses_route_conflict"],
-        ["different Codex engine", "engine_conflict"],
-        ["different model-list overlay", "catalog_conflict"],
-        ["without renderer CDP", "renderer_unavailable"],
-        ["outside the canonical runtime", "unmanaged_app_running"],
-        ["does not support", "contract_unsupported"],
-      ].find(([marker]) => result.stderr.includes(marker!))?.[1] ?? "unclassified";
-      emitDiagnosticEvent("chatgpt_tela_setup", "profile_control_failed", {
-        action, phase: "exit", exit_code: result.exitCode, failure_class: rejection,
-        duration_ms: Math.round(performance.now() - started),
-        stdout_bytes: Buffer.byteLength(result.stdout), stderr_bytes: Buffer.byteLength(result.stderr),
-        stderr_fingerprint: diagnosticFingerprint(result.stderr),
-      });
-      let detail = result.stderr.trim();
-      for (const secret of Object.values(environment ?? {})) {
-        if (secret) detail = detail.split(secret).join("[redacted]");
-      }
-      const suffix = detail ? `: ${detail}` : "";
-      throw new Error(`Multi-Profile control command failed with exit code ${result.exitCode}${suffix}`);
+      emitDiagnosticEvent("chatgpt_tela_setup", "profile_control_failed", { action, phase: "exit", exit_code: result.exitCode,
+        duration_ms: Math.round(performance.now() - started), stdout_bytes: Buffer.byteLength(result.stdout),
+        stderr_bytes: Buffer.byteLength(result.stderr), stderr_fingerprint: diagnosticFingerprint(result.stderr) });
+      throw Error(`Plura ${action} failed with exit code ${result.exitCode}`);
     }
     return result;
   }

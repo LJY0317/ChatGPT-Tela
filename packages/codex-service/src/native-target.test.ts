@@ -13,9 +13,7 @@ const targets: readonly MultiProfileTarget[] = [
     role: "default",
     managed: false,
     state: "stopped",
-    sessionState: "available",
-    sharedAppServerSupported: true,
-    responsesRouteSupported: true,
+    backendPolicy: "official-desktop-owned",
   },
   {
     id: "local.plura-desktop.profile2",
@@ -24,9 +22,7 @@ const targets: readonly MultiProfileTarget[] = [
     managed: true,
     profileIndex: 2,
     state: "stopped",
-    sessionState: "available",
-    sharedAppServerSupported: true,
-    responsesRouteSupported: true,
+    backendPolicy: "official-desktop-owned",
   },
 ];
 

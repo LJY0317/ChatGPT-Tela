@@ -267,8 +267,7 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     // private route generator; it never borrows the default slot's capability.
     const managed = new MultiProfileNativeTargetAdapter({ launcherCli: optionalAdapter.launcherCli, client: {
       targets: async () => [{ id: "synthetic-managed", displayName: "Synthetic managed", role: "managed",
-        managed: true, profileIndex: 2, state: "stopped", sessionState: "available",
-        sharedAppServerSupported: true, responsesRouteSupported: true }],
+        managed: true, profileIndex: 2, state: "stopped", backendPolicy: "official-desktop-owned" }],
       targetSession: async targetId => ({ targetId, state: "available" }),
       quitTarget: async targetId => ({ targetId, state: "available" }),
     } });
@@ -295,6 +294,21 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).appOwnedResponses).toEqual(selectedRoutes);
     await expect(runPackagedBootstrapCommand(["configure", "--file", configFile, "--slot", "2"], bootstrap))
       .rejects.toThrow("requires --enable-app-owned-desktop");
+    const selectedConfig = join(root, "selected-profile-config.toml");
+    writeFileSync(selectedConfig, 'model_provider = "openai"\n# selected profile\n');
+    const originalDefaultConfig = readFileSync(codexConfig, "utf8");
+    const slot2Catalog = await publishAppOwnedDesktopCatalog({ paths, installId: manifest.installId, slot: 2,
+      nativeCatalog: { models: [] }, webFamilies: [], assertCurrentAccount() {} });
+    expect(slot2Catalog).not.toBe(catalogFile);
+    await expect(runPackagedDesktopProviderCommand(["desktop-provider", "register", "--dry-run", "--slot", "2"], providerOptions)).rejects.toThrow("--config-file");
+    const selectedProvider = ["desktop-provider", "register", "--apply", "--slot", "2", "--config-file", selectedConfig];
+    await runPackagedDesktopProviderCommand(selectedProvider, providerOptions);
+    expect((Bun.TOML.parse(readFileSync(selectedConfig, "utf8")) as any).model_providers.chatgpt_tela_local.base_url)
+      .toBe(`http://127.0.0.1:${selectedRoutes[1].port}/${selectedRoutes[1].capability}/v1`);
+    expect(readFileSync(codexConfig, "utf8")).toBe(originalDefaultConfig);
+    expect(await runPackagedDesktopProviderCommand(selectedProvider, providerOptions)).toMatchObject({ changed: false });
+    await runPackagedDesktopProviderCommand(["desktop-provider", "restore", "--apply", "--slot", "2"], providerOptions);
+    expect(readFileSync(selectedConfig, "utf8")).toBe('model_provider = "openai"\n# selected profile\n');
     writeFileSync(configFile, JSON.stringify({ ...(JSON.parse(configurationInput) as object), appOwnedResponses }));
     await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
     writeFileSync(join(paths.logsRoot, "fixture.log"), "synthetic diagnostic\n");

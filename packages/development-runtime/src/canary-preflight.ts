@@ -1,7 +1,4 @@
 import { createServer } from "node:net";
-import {
-  MultiProfileControlClient,
-} from "@chatgpt-tela/setup";
 import type { WebConversationProvider } from "@chatgpt-tela/chatgpt";
 import type { ElectronMainRuntimeLike } from "@chatgpt-tela/electron-host";
 import type { DevelopmentCanaryPreflightConfig } from "./canary";
@@ -23,7 +20,7 @@ export interface CanaryPreflightCheck {
 
 export interface DevelopmentCanaryPreflight {
   readonly ready: boolean;
-  readonly nativeProfile: "stock" | "multi-profile";
+  readonly nativeProfile: "stock";
   readonly checks: readonly CanaryPreflightCheck[];
 }
 
@@ -62,7 +59,6 @@ export async function preflightDevelopmentCanary(
     readonly electron?: {
       readonly loadRuntime?: () => Promise<ElectronMainRuntimeLike>;
     };
-    readonly multiProfileClient?: MultiProfileControlClient;
     readonly signal?: AbortSignal;
   } = {},
 ): Promise<DevelopmentCanaryPreflight> {
@@ -94,34 +90,6 @@ export async function preflightDevelopmentCanary(
       "pass",
       "stock canary uses process-local Codex overrides and never rewrites the live config.toml",
     );
-  } else {
-    const nativeProfile = config.nativeProfile;
-    try {
-      const client = options.multiProfileClient ?? new MultiProfileControlClient({
-        command: [nativeProfile.controlCli],
-      });
-      const targets = await client.targets(options.signal);
-      const target = targets.find(candidate => candidate.id === nativeProfile.targetId);
-      if (!target) {
-        push("managed-target-contract", "blocked", `Multi-Profile target is not available: ${nativeProfile.targetId}`);
-      } else if (!target.managed || !target.sharedAppServerSupported || !target.responsesRouteSupported) {
-        push("managed-target-contract", "blocked", "selected Multi-Profile target does not support the required managed app-server/Responses contract");
-      } else {
-        push("managed-target-contract", "pass", `${target.displayName} exposes the required public control contract`);
-        const session = await client.targetSession(target.id, options.signal);
-        if (session.state === "ready") {
-          push(
-            "managed-target-restart-boundary",
-            "blocked",
-            `${target.displayName} is currently running; quit it normally before the launch-time Responses route canary`,
-          );
-        } else {
-          push("managed-target-restart-boundary", "pass", `${target.displayName} is not holding a live routed session`);
-        }
-      }
-    } catch (error) {
-      push("managed-target-contract", "blocked", detail(error));
-    }
   }
 
   push(

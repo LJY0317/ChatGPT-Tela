@@ -5,7 +5,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CodexHomeCurrentTurnSource } from "@chatgpt-tela/codex";
-import type { CanonicalCurrentTurnSource } from "@chatgpt-tela/codex";
 import {
   ExistingHttpsExposure,
   OpenAiSecureMcpTunnelExposure,
@@ -14,7 +13,6 @@ import {
 } from "@chatgpt-tela/mcp";
 import {
   MultiProfileControlClient,
-  type MultiProfileManagedRuntime,
   codexProcessRouteArguments,
 } from "@chatgpt-tela/setup";
 import {
@@ -87,12 +85,8 @@ export interface DevelopmentCanaryConfig {
         readonly kind: "stock";
         readonly codexHome: string;
         readonly sqliteHome: string;
-      }
-    | {
-        readonly kind: "multi-profile";
-        readonly controlCli: string;
-        readonly targetId: string;
       };
+
   readonly chatGptTelaProfileId: string;
   readonly browserUserDataDir: string;
   readonly browserProfile: ChatGptTelaBrowserProfile;
@@ -120,13 +114,8 @@ export interface DevelopmentCanaryRuntime {
           readonly arguments: readonly string[];
           readonly envKey: "CHATGPT_TELA_CANARY_RESPONSES_TOKEN";
         };
-      }
-    | {
-        readonly kind: "multi-profile";
-        readonly targetId: string;
-        readonly endpoint: string;
-        readonly responsesRouteFingerprint: string;
       };
+
   stop(): Promise<void>;
 }
 
@@ -414,24 +403,8 @@ export function loadDevelopmentCanaryPreflightConfig(
       codexHome,
       sqliteHome,
     });
-  } else if (nativeMode === "multi-profile") {
-    const targetId = required(env, "CHATGPT_TELA_CANARY_PLURA_DESKTOP_TARGET");
-    const encodedSlot = /\.profile([1-9][0-9]*)$/.exec(targetId)?.[1];
-    if (encodedSlot && Number(encodedSlot) !== browserProfile.slot) {
-      throw new Error(
-        `Multi-Profile target ${targetId} must use CHATGPT_TELA_CANARY_PROFILE_SLOT=${encodedSlot}`,
-      );
-    }
-    nativeProfile = Object.freeze({
-      kind: "multi-profile" as const,
-      controlCli: absoluteFile(
-        required(env, "CHATGPT_TELA_PLURA_DESKTOP_CLI"),
-        "CHATGPT_TELA_PLURA_DESKTOP_CLI",
-      ),
-      targetId,
-    });
   } else {
-    throw new Error("CHATGPT_TELA_CANARY_NATIVE_MODE must be stock or multi-profile");
+    throw new Error("CHATGPT_TELA_CANARY_NATIVE_MODE must be stock");
   }
 
   return Object.freeze({
@@ -443,22 +416,6 @@ export function loadDevelopmentCanaryPreflightConfig(
     mcpAbi,
     mcp,
   });
-}
-
-class LateBoundCurrentTurnSource implements CanonicalCurrentTurnSource {
-  #source: CanonicalCurrentTurnSource | undefined;
-
-  bind(source: CanonicalCurrentTurnSource): void {
-    if (this.#source) throw new Error("managed current-turn source is already bound");
-    this.#source = source;
-  }
-
-  currentTurn(threadId: string) {
-    if (!this.#source) {
-      throw new Error("managed current-turn source is not bound yet");
-    }
-    return this.#source.currentTurn(threadId);
-  }
 }
 
 async function inspectCanaryMcpEndpoint(input: {
@@ -513,19 +470,10 @@ export async function startDevelopmentCanary(
     readonly accountIdentityObserver?: ElectronDevelopmentRuntimeOptions["accountIdentityObserver"];
     readonly fetch?: FetchLike;
     readonly signal?: AbortSignal;
-    readonly multiProfileClient?: MultiProfileControlClient;
     readonly tunnelClientRunner?: TunnelClientCommandRunner;
   } = {},
 ): Promise<DevelopmentCanaryRuntime> {
-  const lateBoundSource = config.nativeProfile.kind === "multi-profile"
-    ? new LateBoundCurrentTurnSource()
-    : undefined;
-  const currentTurnSource = config.nativeProfile.kind === "stock"
-    ? new CodexHomeCurrentTurnSource({
-        codexHome: config.nativeProfile.codexHome,
-        sqliteHome: config.nativeProfile.sqliteHome,
-      })
-    : lateBoundSource!;
+  const currentTurnSource = new CodexHomeCurrentTurnSource({ codexHome: config.nativeProfile.codexHome, sqliteHome: config.nativeProfile.sqliteHome });
   const mcpConfig = config.mcp;
   const mcpRuntime: ElectronDevelopmentRuntimeOptions["mcp"] = mcpConfig.kind === "existing-https"
     ? {
@@ -599,8 +547,6 @@ export async function startDevelopmentCanary(
     },
   });
 
-  let managedRuntime: MultiProfileManagedRuntime | undefined;
-  let multiProfileClient: MultiProfileControlClient | undefined;
   let mcpSchemaFingerprint: string | undefined;
   try {
     if (runtime.mcp.kind !== "http-exposure") {
@@ -621,19 +567,7 @@ export async function startDevelopmentCanary(
     });
     const observed = await runtime.probeChatGptProfile(options.signal);
     assertChatGptTelaAccountBinding(config.browserProfile, observed.account.accountFingerprint);
-    if (config.nativeProfile.kind !== "stock") {
-      multiProfileClient = options.multiProfileClient ?? new MultiProfileControlClient({
-        command: [config.nativeProfile.controlCli],
-      });
-      managedRuntime = await multiProfileClient.launchManagedTarget({
-        targetId: config.nativeProfile.targetId,
-        responsesBaseUrl: runtime.responses.baseUrl,
-        responsesEnvKey: "CHATGPT_TELA_CANARY_RESPONSES_TOKEN",
-        responsesToken: config.responsesToken,
-        ...(options.signal ? { signal: options.signal } : {}),
-      });
-      lateBoundSource!.bind(managedRuntime.currentTurnSource);
-    }
+
   } catch (error) {
     const failures: unknown[] = [error];
     try {
@@ -653,14 +587,7 @@ export async function startDevelopmentCanary(
     runtime,
     mcpAbi: config.mcpAbi,
     mcpSchemaFingerprint: mcpSchemaFingerprint!,
-    nativeProfile: managedRuntime
-      ? Object.freeze({
-          kind: "multi-profile" as const,
-          targetId: managedRuntime.session.targetId,
-          endpoint: managedRuntime.session.endpoint,
-          responsesRouteFingerprint: managedRuntime.session.responsesRouteFingerprint,
-        })
-      : Object.freeze({
+    nativeProfile: Object.freeze({
           kind: "stock" as const,
           processRoute: Object.freeze({
             arguments: codexProcessRouteArguments({
@@ -674,22 +601,7 @@ export async function startDevelopmentCanary(
       if (stopping) return stopping;
       stopping = (async () => {
         const failures: unknown[] = [];
-        if (managedRuntime && multiProfileClient) {
-          const session = await multiProfileClient.targetSession(
-            managedRuntime.session.targetId,
-            options.signal,
-          );
-          if (session.state === "ready") {
-            if (session.responsesRouteFingerprint !== managedRuntime.session.responsesRouteFingerprint) {
-              throw new Error(
-                "managed Multi-Profile target changed Responses route ownership while the canary was running",
-              );
-            }
-            throw new Error(
-              `managed Multi-Profile target is still running; quit ${managedRuntime.target.displayName} normally before stopping ChatGPT Tela`,
-            );
-          }
-        }
+
         try {
           await runtime.stop();
         } catch (error) {

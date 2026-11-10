@@ -45,6 +45,8 @@ export interface ProductConfig {
     readonly port: number;
     /** Stable secret in the private provider URL, never forwarded to the Native backend. */
     readonly capability: string;
+    /** Explicit user-selected official profile config; only Tela-marked entries are restored. */
+    readonly desktopConfigPath?: string;
   }[];
 }
 
@@ -157,7 +159,7 @@ export function parseProductConfig(value: unknown): ProductConfig {
     appOwnedResponses = Object.freeze(record.appOwnedResponses.map(value => {
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("app-owned Responses entry is invalid");
       const entry = value as Record<string, unknown>;
-      exactFields(entry, ["slot", "port", "capability"], "app-owned Responses entry");
+      exactFields(entry, ["slot", "port", "capability", "desktopConfigPath"], "app-owned Responses entry");
       if (!Number.isSafeInteger(entry.slot) || (entry.slot as number) < 1 || (entry.slot as number) > 99) {
         throw new Error("app-owned Responses slot must be an integer from 1 to 99");
       }
@@ -168,9 +170,10 @@ export function parseProductConfig(value: unknown): ProductConfig {
       if (typeof entry.capability !== "string" || !/^[A-Za-z0-9_-]{43,128}$/.test(entry.capability)) {
         throw new Error("app-owned Responses capability must be a URL-safe secret of 43-128 characters");
       }
+      if (entry.desktopConfigPath !== undefined && (typeof entry.desktopConfigPath !== "string" || !isAbsolute(entry.desktopConfigPath))) throw Error("Desktop config path must be absolute");
       slots.add(entry.slot as number);
       ports.add(responsePort);
-      return Object.freeze({ slot: entry.slot as number, port: responsePort, capability: entry.capability });
+      return Object.freeze({ slot: entry.slot as number, port: responsePort, capability: entry.capability, ...(entry.desktopConfigPath === undefined ? {} : { desktopConfigPath: entry.desktopConfigPath as string }) });
     }));
     if (appOwnedResponses.some(profile => profile.slot > 1) && !multiProfile) {
       throw new Error("additional app-owned Responses profiles require the optional Multi-Profile adapter");

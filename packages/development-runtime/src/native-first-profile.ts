@@ -9,13 +9,11 @@ import { startLocalResponsesServer, type LocalResponsesServer } from "@chatgpt-t
 import { startCodexBridgeMcpHttpServer, type CodexBridgeMcpHttpServer } from "@chatgpt-tela/mcp";
 import { resolveOwnedNativeEngine, acquireNativeBackendOwnership } from "@chatgpt-tela/product-lifecycle";
 import { ActiveTurnRegistry } from "@chatgpt-tela/runtime";
-import { MultiProfileControlClient } from "@chatgpt-tela/setup";
 import { createDefaultProfileCompositeProviderRouter } from "./composite-provider-router";
 import { FileContextCheckpointCache } from "./context-cache";
 import { inspectNativeWorkingCheckpointCandidates } from "./native-working-context";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 import { readChatGptTelaAccountBinding } from "./browser-profile";
-import { startModelListOverlayServer } from "./model-list-overlay-server";
 import { readWebModelDisplayCache, writeWebModelDisplayCache } from "./web-model-display-cache";
 import { startElectronDevelopmentRuntime, type ElectronDevelopmentRuntime, type ElectronDevelopmentRuntimeOptions, type NativeElectronDevelopmentRuntimeOptions } from "./electron";
 import { webPreparationFailureDetail, type ElectronProfileSetupSurface } from "./profile-control";
@@ -157,52 +155,7 @@ async function startNativeTarget(config: ProductProfileRuntimeConfig, url: URL, 
       stop: () => host.stop(),
     };
   }
-  const client = new MultiProfileControlClient({ command: [config.nativeTarget.launcherCli] });
-  const id = config.nativeTarget.targetId;
-  // Use the same public display contract as the atomic multi-profile path. This
-  // callback is on demand; cached display families never grant turn authority.
-  const overlay = await startModelListOverlayServer({
-    token: config.responsesToken, families: displayFamilies,
-    localCompaction: nativeEngine?.localCompaction === true,
-  });
-  try {
-    const launched = await observeStartupWait("native_adapter_launch", () => client.launchRoutedTarget({
-      targetId: id, responsesBaseUrl: url, responsesEnvKey: PRODUCT_RESPONSES_ENV_KEY,
-      responsesToken: config.responsesToken, runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
-      ...(nativeEngine ? { nativeEngine } : {}),
-      modelListOverlay: { url: overlay.url, envKey: PRODUCT_RESPONSES_ENV_KEY, token: config.responsesToken },
-    }));
-    // The completed public launch already proves its ready session, route/overlay/engine and exact
-    // Desktop PID. Preserve that proof instead of discarding PID and issuing another CLI inventory.
-    const initial = launched.session;
-    if (!initial.desktopProcessId) throw new Error("Native launch did not prove its Desktop process identity");
-    const routedTarget: ProductProfileRoutedTarget = {
-      ...launched, session: { ...launched.session, desktopProcessId: initial.desktopProcessId },
-    };
-    return {
-      localCompaction: nativeEngine?.localCompaction === true,
-      ...(nativeEngine?.catalogRefresh ? { refreshModelCatalog: catalogRefreshForEndpoint(routedTarget.session.endpoint) } : {}),
-      routedTarget,
-      async stop() {
-        const current = await client.targetSession(id);
-        // Lost ownership means preserve the unrelated app and release only Tela resources.
-        if (current.state === "ready"
-          && current.responsesRouteFingerprint === routedTarget.session.responsesRouteFingerprint
-          && current.modelListOverlayFingerprint === routedTarget.session.modelListOverlayFingerprint
-          && current.desktopProcessId === routedTarget.session.desktopProcessId) {
-          if (current.endpoint && await countLoadedAppServerActiveTurns(current.endpoint) > 0) {
-            throw new Error("Native profile has an active turn; finish it before shutdown");
-          }
-          const stopped = await client.quitTarget(id, undefined, current.desktopProcessId);
-          if (stopped.state === "ready") throw new Error("Native profile remained ready after normal quit");
-        }
-        await overlay.close();
-      },
-    };
-  } catch (error) {
-    await overlay.close();
-    throw error;
-  }
+  throw new Error("Plura Desktop owns Native execution; use the app-owned Responses provider instead");
 }
 
 /**

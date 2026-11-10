@@ -58,23 +58,6 @@ class FakeWindow implements ElectronBrowserWindowLike {
   destroy(): void { this.destroyed = true; }
 }
 
-class FixtureMultiProfileRunner implements MultiProfileControlRunner {
-  readonly results: MultiProfileControlResult[] = [];
-  readonly calls: Array<{ arguments: readonly string[]; environment?: Readonly<Record<string, string>> }> = [];
-
-  async run(_command: readonly [string, ...string[]], input: {
-    readonly arguments: readonly string[];
-    readonly environment?: Readonly<Record<string, string>>;
-  }): Promise<MultiProfileControlResult> {
-    this.calls.push({
-      arguments: [...input.arguments],
-      ...(input.environment ? { environment: { ...input.environment } } : {}),
-    });
-    const result = this.results.shift();
-    if (!result) throw new Error("fixture Multi-Profile runner has no result");
-    return result;
-  }
-}
 
 function multiResult(value: unknown): MultiProfileControlResult {
   return { stdout: JSON.stringify(value), stderr: "", exitCode: 0 };
@@ -366,62 +349,6 @@ describe("development canary configuration", () => {
     }
   });
 
-  test("Multi-Profile mode is explicit, needs only the public control CLI/target, and forbids config mutation", () => {
-    const root = scratch();
-    const controlCli = join(root, "plura-desktop");
-    writeFileSync(controlCli, "fixture\n");
-    const base = {
-      CHATGPT_TELA_CANARY_NATIVE_MODE: "multi-profile",
-      CHATGPT_TELA_PLURA_DESKTOP_CLI: controlCli,
-      CHATGPT_TELA_CANARY_PLURA_DESKTOP_TARGET: "local.plura-desktop.profile2",
-      CHATGPT_TELA_CANARY_PROFILE_SLOT: "2",
-      CHATGPT_TELA_CANARY_CONNECTOR_NAME: "ChatGPT Tela Development",
-      CHATGPT_TELA_PROFILE_ROOT: root,
-      CHATGPT_TELA_CANARY_RESPONSES_PORT: "18741",
-      CHATGPT_TELA_CANARY_RESPONSES_TOKEN: "r".repeat(48),
-      CHATGPT_TELA_CANARY_MCP_LOCAL_PORT: "18742",
-      CHATGPT_TELA_CANARY_MCP_PUBLIC_URL: "https://chatgpt-tela.example.ts.net/mcp",
-      CHATGPT_TELA_CANARY_MCP_PUBLIC_AUTH: "bearer",
-      CHATGPT_TELA_CANARY_MCP_BEARER_TOKEN: "x".repeat(48),
-    };
-    try {
-      const config = loadDevelopmentCanaryConfig(base);
-      expect(config.nativeProfile).toEqual({
-        kind: "multi-profile",
-        controlCli,
-        targetId: "local.plura-desktop.profile2",
-      });
-      expect(() => loadDevelopmentCanaryConfig({
-        ...base,
-        CHATGPT_TELA_CANARY_INSTALL_CODEX_ROUTE: "1",
-      })).toThrow("no longer supported");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("Multi-Profile target slot cannot reuse another ChatGPT Tela account profile", () => {
-    const root = scratch();
-    const controlCli = join(root, "plura-desktop");
-    writeFileSync(controlCli, "fixture\n");
-    try {
-      expect(() => loadDevelopmentCanaryPreflightConfig({
-        CHATGPT_TELA_CANARY_NATIVE_MODE: "multi-profile",
-        CHATGPT_TELA_PLURA_DESKTOP_CLI: controlCli,
-        CHATGPT_TELA_CANARY_PLURA_DESKTOP_TARGET: "local.plura-desktop.profile2",
-        CHATGPT_TELA_CANARY_PROFILE_SLOT: "1",
-        CHATGPT_TELA_CANARY_CONNECTOR_NAME: "ChatGPT Tela Development",
-        CHATGPT_TELA_PROFILE_ROOT: root,
-        CHATGPT_TELA_CANARY_RESPONSES_PORT: "18741",
-        CHATGPT_TELA_CANARY_MCP_LOCAL_PORT: "18742",
-        CHATGPT_TELA_CANARY_MCP_PUBLIC_URL: "https://chatgpt-tela.example.ts.net/mcp",
-        CHATGPT_TELA_CANARY_MCP_PUBLIC_AUTH: "bearer",
-      })).toThrow("must use CHATGPT_TELA_CANARY_PROFILE_SLOT=2");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   test("canary Web turn deadline is bounded and may be explicitly overridden", () => {
     const root = scratch();
     const base = {
@@ -656,121 +583,6 @@ describe("development canary runtime", () => {
       })).rejects.toThrow("ChatGPT profile readiness is not proven: probable");
       expect(readFileSync(join(root, "config.toml"), "utf8")).toBe(originalConfig);
     } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("managed profile uses only the public launcher contract and keeps Tela alive until the target quits", async () => {
-    const root = scratch();
-    const controlCli = join(root, "plura-desktop");
-    writeFileSync(controlCli, "fixture\n");
-    const responsesPort = freePort();
-    const localMcpPort = freePort();
-    const mcpToken = "b".repeat(48);
-    const responsesToken = "r".repeat(48);
-    const targetId = "local.plura-desktop.profile2";
-    const routeFingerprint = "a".repeat(64);
-    const config = loadDevelopmentCanaryConfig({
-      CHATGPT_TELA_CANARY_NATIVE_MODE: "multi-profile",
-      CHATGPT_TELA_PLURA_DESKTOP_CLI: controlCli,
-      CHATGPT_TELA_CANARY_PLURA_DESKTOP_TARGET: targetId,
-      CHATGPT_TELA_CANARY_PROFILE_SLOT: "2",
-      CHATGPT_TELA_CANARY_CONNECTOR_NAME: "ChatGPT Tela Development",
-      CHATGPT_TELA_PROFILE_ROOT: root,
-      CHATGPT_TELA_CANARY_RESPONSES_PORT: String(responsesPort),
-      CHATGPT_TELA_CANARY_RESPONSES_TOKEN: responsesToken,
-      CHATGPT_TELA_CANARY_MCP_LOCAL_PORT: String(localMcpPort),
-      CHATGPT_TELA_CANARY_MCP_PUBLIC_URL: "https://chatgpt-tela-canary.invalid/mcp",
-      CHATGPT_TELA_CANARY_MCP_PUBLIC_AUTH: "bearer",
-      CHATGPT_TELA_CANARY_MCP_BEARER_TOKEN: mcpToken,
-    });
-    const runner = new FixtureMultiProfileRunner();
-    runner.results.push(multiResult({
-      contractVersion: 1,
-      platform: "macos",
-      targets: [{
-        id: targetId,
-        displayName: "ChatGPT Profile 2",
-        role: "managed",
-        managed: true,
-        state: "stopped",
-        sessionState: "available",
-        sharedAppServerSupported: true,
-        responsesRouteSupported: true,
-      }],
-    }));
-    runner.results.push(multiResult({
-      contractVersion: 1,
-      targetID: targetId,
-      state: "ready",
-      endpoint: "ws://127.0.0.1:19002",
-      responsesRouteFingerprint: routeFingerprint,
-    }));
-    runner.results.push(multiResult({
-      contractVersion: 1,
-      targetID: targetId,
-      state: "ready",
-      endpoint: "ws://127.0.0.1:19002",
-      responsesRouteFingerprint: routeFingerprint,
-    }));
-    runner.results.push(multiResult({
-      contractVersion: 1,
-      targetID: targetId,
-      state: "stopped",
-    }));
-    const multiProfileClient = new MultiProfileControlClient({ command: [controlCli], runner });
-    const rewriteFetch: FetchLike = async (input, init) => {
-      const original = input instanceof Request ? input : new Request(input, init);
-      const localUrl = new URL(original.url);
-      localUrl.protocol = "http:";
-      localUrl.hostname = "127.0.0.1";
-      localUrl.port = String(localMcpPort);
-      return fetch(new Request(localUrl, original));
-    };
-
-    let canary;
-    try {
-      bindFixtureAccount(root, 2);
-      canary = await startDevelopmentCanary(config, {
-        fetch: rewriteFetch,
-        multiProfileClient,
-        provider: capabilityProvider(true),
-        accountIdentityObserver: fixtureAccountIdentityObserver,
-        electron: {
-          async loadRuntime() {
-            return {
-              app: { setPath() {}, async whenReady() {} },
-              BrowserWindow: FakeWindow as unknown as new (options: BrowserWindowConstructorOptions) => FakeWindow,
-            };
-          },
-        },
-      });
-
-      expect(canary.nativeProfile).toEqual({
-        kind: "multi-profile",
-        targetId,
-        endpoint: "ws://127.0.0.1:19002/",
-        responsesRouteFingerprint: routeFingerprint,
-      });
-      expect(runner.calls[1]?.arguments).toContain("launch-target");
-      expect(runner.calls[1]?.environment).toEqual({
-        CHATGPT_TELA_CANARY_RESPONSES_TOKEN: responsesToken,
-      });
-      expect(runner.calls[1]?.arguments.join(" ")).not.toContain(responsesToken);
-
-      await expect(canary.stop()).rejects.toThrow("quit ChatGPT Profile 2 normally");
-      const portStillOwned = await fetch(new URL("responses", canary.runtime.responses.baseUrl), {
-        method: "POST",
-        headers: { authorization: `Bearer ${responsesToken}`, "content-type": "application/json" },
-        body: "{}",
-      });
-      expect(portStillOwned.status).not.toBe(0);
-
-      await canary.stop();
-    } finally {
-      if (canary) {
-        try { await canary.stop(); } catch {}
-      }
       rmSync(root, { recursive: true, force: true });
     }
   });

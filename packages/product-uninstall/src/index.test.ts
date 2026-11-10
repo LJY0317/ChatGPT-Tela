@@ -50,58 +50,13 @@ async function binaryFixture(root: string, externalMetadata = false, installId =
   return { home, paths, options };
 }
 
-test("managed route uninstall waits for public target retirement", async () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-route-retirement-"));
-  try {
-    const fixture = await binaryFixture(root);
-    const launcher = join(root, "plura-stub");
-    writeFileSync(launcher, "synthetic");
-    mkdirSync(fixture.paths.configRoot, { recursive: true });
-    writeFileSync(join(fixture.paths.configRoot, "product-v1.json"), JSON.stringify({
-      version: 1, multiProfile: { launcherCli: launcher },
-      publicMcpAbi: "stable",
-      exposure: { kind: "existing-https", publicUrl: "https://example.test/mcp",
-        localPort: 18743, authentication: "none", allowUnauthenticatedPublicEndpoint: true },
-      appOwnedResponses: [{ slot: 2, port: 18744, capability: "b".repeat(48) }],
-    }));
-    let state = "ready";
-    let route: string | undefined = "a".repeat(64);
-    let profileIndex = 2;
-    const observations: string[] = [];
-    const client = {
-      async targets() {
-        observations.push("targets");
-        return [{ managed: true, id: "fixture.target.2", profileIndex }];
-      },
-      async targetSession(id: string) {
-        observations.push("session:" + id);
-        return { targetId: id, state, ...(route ? { responsesRouteFingerprint: route } : {}) };
-      },
-    } as unknown as Pick<MultiProfileControlClient, "targets" | "targetSession">;
-    const options = { ...fixture.options, multiProfileControlClient: client };
-    expect((await runProductUninstall({ ...options, mode: "dry-run" })).managedRouteBlockers)
-      .toEqual([expect.stringContaining("fixture.target.2")]);
-    const blocked = await runProductUninstall({ ...options, mode: "apply" });
-    expect(blocked).toMatchObject({ applied: false, status: "uninstall-blocked", destructiveActions: 0 });
-    expect(existsSync(fixture.paths.binaryRoot)).toBe(true);
-    expect(observations).toEqual(["targets", "session:fixture.target.2", "targets", "session:fixture.target.2"]);
-    route = undefined;
-    expect((await runProductUninstall({ ...options, mode: "dry-run" })).managedRouteBlockers)
-      .toEqual([expect.stringContaining("unproven")]);
-    state = "available";
-    expect((await runProductUninstall({ ...options, mode: "dry-run" })).managedRouteBlockers).toEqual([]);
-    profileIndex = 3;
-    expect((await runProductUninstall({ ...options, mode: "dry-run" })).managedRouteBlockers)
-      .toEqual([expect.stringContaining("cannot be uniquely observed")]);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
 
-test("owned Desktop provider register, re-register and selected uninstall restore in an isolated HOME", async () => {
+for (const slot of [1, 2]) test(`owned Desktop provider ${slot} register, re-register and selected uninstall restore`, async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-provider-uninstall-"));
   try {
     const installId = randomUUID();
     const { home, paths, options } = await binaryFixture(root, false, installId);
-    const codex = join(home, ".codex"); mkdirSync(codex);
+    const codex = join(home, slot === 1 ? ".codex" : "explicit-profile-config"); mkdirSync(codex);
     const configPath = join(codex, "config.toml");
     const original = 'model_provider = "openai"\nmodel = "user-choice"\n# existing comment\n';
     writeFileSync(configPath, original, { mode: 0o640 });
@@ -114,7 +69,7 @@ test("owned Desktop provider register, re-register and selected uninstall restor
     const product = { version: 1, publicMcpAbi: "stable", exposure: {
       kind: "existing-https", publicUrl: "https://example.test/mcp", localPort: 18743,
       authentication: "none", allowUnauthenticatedPublicEndpoint: true,
-    }, appOwnedResponses: [{ slot: 1, port: 18744, capability }] };
+    }, ...(slot > 1 ? { multiProfile: { launcherCli: "/fixture/plura" } } : {}), appOwnedResponses: [{ slot, port: 18744, capability, ...(slot > 1 ? { desktopConfigPath: configPath } : {}) }] };
     mkdirSync(paths.configRoot, { recursive: true });
     writeFileSync(join(paths.configRoot, "product-v1.json"), JSON.stringify(product));
     expect(editOfficialCodexProviderFile({ ...registration, action: "register", mode: "apply" })).toBe(true);
@@ -137,7 +92,7 @@ test("owned Desktop provider register, re-register and selected uninstall restor
     expect(applied.providerRestore).toMatchObject({ status: "restored" });
     expect(readFileSync(configPath, "utf8")).toBe(original);
     expect((await runProductUninstall({ mode: "apply", ...options })).providerRestore)
-      .toMatchObject({ status: "already-absent" });
+      .toMatchObject({ status: slot === 1 ? "already-absent" : "not-configured" });
     expect(readFileSync(configPath, "utf8")).toBe(original);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

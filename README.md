@@ -33,6 +33,16 @@ ignored. Credentials, browser profiles, Tailscale state, MCP secrets, and machin
 stay outside Git. Running the live source runtime still requires the explicit development setup documented
 below and should not be confused with an installer-supported release.
 
+## Optional Desktop profiles
+
+The current Desktop-owned adapter targets Plura Desktop's v2 lifecycle contract.
+Plura launches the official app; Tela provides a separate, explicitly registered
+Responses provider and per-profile model catalog. No external Native engine or
+launch-time proxy/overlay is used. See [explicit provider setup](docs/official-desktop-provider.md).
+The coordinated source candidates are not yet installed or publicly released.
+Legacy external managed-delegation commands below require a Native session source;
+the Desktop-owned adapter does not expose that authority.
+
 ## Separate managed Web delegations
 
 The source checkout supports `bun run cli web-delegate start --cwd /path/to/project --prompt-file /path/to/task.txt` against an already running, signed-in Tela Work profile. Use `bun run cli web-delegate capacity --slot 1` to inspect managed-job occupancy, add `--cleanup` for the running service’s last per-conversation cleanup reasons and recommended actions, or use `result --job UUID` to retrieve a proven answer. Control Center Work displays this managed-only count; Settings selects independent per-profile concurrency limits from 1 to 5 (default 3). Direct Native conversations are outside this journal. See [Web delegation details](docs/web-delegation.md) for prerequisites, capacity and result retention. Managed conversations archive 24 hours after result retrieval, or after seven idle days when uncollected; Tela deletes its own automatic archives 30 days later. Above 32 unarchived managed conversations per profile, older idle conversations with collected answers may archive sooner. Active/queued work and observed manual restores are protected; local result receipts remain.

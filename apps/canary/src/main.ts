@@ -30,19 +30,7 @@ async function main(): Promise<void> {
     stage: "development-canary",
     profileId: config.chatGptTelaProfileId,
     profileSlot: config.browserProfile.slot,
-    nativeProfile: canary.nativeProfile.kind === "stock"
-      ? {
-          kind: "stock",
-          routeMode: "process-local",
-          routeEnvKey: canary.nativeProfile.processRoute.envKey,
-          codexArguments: canary.nativeProfile.processRoute.arguments,
-        }
-      : {
-          kind: "multi-profile",
-          targetId: canary.nativeProfile.targetId,
-          endpoint: canary.nativeProfile.endpoint,
-          responsesRouteFingerprint: canary.nativeProfile.responsesRouteFingerprint,
-        },
+    nativeProfile: { kind: "stock", processRoute: canary.nativeProfile.processRoute },
     responsesUrl: canary.runtime.responses.baseUrl.href,
     responsesAuth: "Bearer CHATGPT_TELA_CANARY_RESPONSES_TOKEN",
     publicMcp,

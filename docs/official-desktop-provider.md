@@ -80,14 +80,32 @@ does not bundle the optional Native engine. Keep the existing `openai` provider
 and Native model until the app-owned profile reports Ready and catalog
 registration reports `installed` or `already-owned`. Then explicitly select
 `model_provider = "chatgpt_tela_local"` and a model in the prepared catalog.
-The optional multi-profile adapter requires a detected, managed Plura target.
-Select it explicitly with `configure --file <product-config.json> --enable-app-owned-desktop --slot 2`
-(or `--stdin`); the launcher validates the public target and allocates a separate
-private port and capability. Managed targets use authenticated `/v1/` requests and a dedicated
-model-list overlay; the independent default Desktop retains its capability-path
-`/v1/` URL. Each profile's account binding, tool bridge, route and Web model
-choices remain separate. Without `--slot`, `--enable-app-owned-desktop` provisions
-only slot 1. Other profiles are never automatically migrated.
+The optional adapter requires Plura's **target contract v2** (official Desktop-owned
+execution). Select an installed managed target explicitly with
+`configure --file <product-config.json> --enable-app-owned-desktop --slot 2`.
+Plura only opens or normally quits the app; it receives no provider token, socket,
+engine override, or catalog callback. Every slot uses its own capability URL and
+install-owned catalog, with separate account bindings and result journals.
+
+To register an additional profile, explicitly select its existing user-level
+configuration file; Tela never reconstructs private Plura profile paths:
+
+```text
+chatgpt-tela desktop-provider register --dry-run --slot 2 --config-file /selected/profile/config.toml
+chatgpt-tela desktop-provider register --apply --slot 2 --config-file /selected/profile/config.toml
+chatgpt-tela desktop-provider restore --apply --slot 2
+```
+
+Registration preserves the user's provider/model choice. The private product
+config retains only the selected file's restoration reference; uninstall restores
+Tela-marked settings there and preserves unrelated data. A user-modified catalog
+reference remains protected. Select the provider in the official app configuration
+and normally restart that app to load it. Web route readiness alone does not prove
+that the app selected the provider or admitted its models. Slot 1 needs no Plura;
+Plura works without Tela. Missing optional integration does not block slot 1.
+The coordinated v2 source candidates must be verified before replacing an installed
+v1 integration. There is no v1 route or engine fallback.
+
 An installed `multiProfile` value with no `appOwnedResponses` entries keeps
 the Native-first configuration and is incompatible with replacing an existing
 Native-engine-dependent install with this engine-free candidate unchanged.

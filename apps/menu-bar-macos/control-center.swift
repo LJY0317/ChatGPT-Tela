@@ -898,21 +898,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         connectionControls.addArrangedSubview(toggle)
         row("Web models", subtitle: workInventory.error != nil ? "Status unavailable" : connection.status,
             control: connectionControls, in: profileCard)
-        let help = DelegationHelpButton(title: "?", target: nil, action: nil)
-        help.target = help
-        help.action = #selector(DelegationHelpButton.showHelp(_:))
-        help.bezelStyle = .helpButton
-        help.controlSize = .small
-        help.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        help.setButtonType(.momentaryPushIn)
-        let cleanup = delegationCapacity[profile.slot]?.cleanup
-        var helpText = delegationHelpText
-        if let cleanup, cleanup.summary != nil { helpText += "\n\n" + cleanup.help }
-        help.helpText = helpText
-        help.setAccessibilityLabel("Web delegations help")
-        help.setAccessibilityHelp(helpText)
-        let usage = delegationCapacity[profile.slot].map { "\($0.total.used) of \($0.total.limit) slots in use" } ?? "Usage unavailable"
-
         let web = TelaWebPresentation(profile: profile, account: account)
         let controls = NSStackView()
         controls.orientation = .horizontal
@@ -949,8 +934,25 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         }
         row("Account", subtitle: workInventory.error == nil ? (localProgress ?? web.status) : "Status unavailable",
             control: controls, in: profileCard)
-        delegationRow(usage: usage, help: help, in: profileCard)
-        if let summary = cleanup?.summary { append(secondary(summary), to: profileCard) }
+        if profile.supportsManagedDelegations {
+          let help = DelegationHelpButton(title: "?", target: nil, action: nil)
+          help.target = help
+          help.action = #selector(DelegationHelpButton.showHelp(_:))
+          help.bezelStyle = .helpButton
+          help.controlSize = .small
+          help.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+          help.setButtonType(.momentaryPushIn)
+          let cleanup = delegationCapacity[profile.slot]?.cleanup
+          var helpText = delegationHelpText
+          if let cleanup, cleanup.summary != nil { helpText += "\n\n" + cleanup.help }
+          help.helpText = helpText
+          help.setAccessibilityLabel("Web delegations help")
+          help.setAccessibilityHelp(helpText)
+          let usage = delegationCapacity[profile.slot].map { "\($0.total.used) of \($0.total.limit) slots in use" } ?? "Usage unavailable"
+
+          delegationRow(usage: usage, help: help, in: profileCard)
+          if let summary = cleanup?.summary { append(secondary(summary), to: profileCard) }
+        }
       }
       let preview = card("Web activity")
       let runningProfiles = profiles.filter { $0.controlState == "running" }
@@ -1154,8 +1156,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       row("Wait before approving", control: delayPicker, in: approvals)
       append(secondary("Restart your Work profile to apply changes. This interrupts any active turn."), to: approvals)
       if preferenceError { append(secondary("Couldn't read approval settings."), to: approvals) }
+      let delegatedProfiles = profiles.filter { $0.supportsManagedDelegations }
+      if !delegatedProfiles.isEmpty {
       let delegations = card("Web delegations")
-      for profile in profiles {
+      for profile in delegatedProfiles {
         let picker = NSPopUpButton()
         for count in 1...5 {
           picker.addItem(withTitle: String(count))
@@ -1168,6 +1172,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         picker.isEnabled = !preferenceError
         row(profiles.count == 1 ? "Concurrent tasks" : "\(profile.targetDisplayName) · Concurrent tasks",
             control: picker, in: delegations)
+      }
       }
       if installedServiceControlsAvailable() && bootstrapState == "configured" {
         let background = card("Tela")
@@ -1854,7 +1859,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     // Opening an app is independent of Tela's Web connection and must not
     // connect, restart, or reconfigure the user's profile.
     if let app = runningProfileApps[slot], !app.isTerminated, app.activate(options: []) { return }
-    Task {
+    Task { [self] in
       await refreshCurrentPage()
       if let app = runningProfileApps[slot], !app.isTerminated, app.activate(options: []) { return }
       let targetId = profiles.first(where: { $0.slot == slot })?.targetId
@@ -2142,7 +2147,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     }
     delegationCapacity = [:]
     if selectedPage == .work, let descriptor = try? readDescriptor("codex") {
-      for profile in profiles {
+      for profile in profiles where profile.supportsManagedDelegations {
         if let data = try? await request(descriptor, path: "v1/codex/profiles/\(profile.slot)/web-delegation-capacity"),
            let value = try? JSONDecoder().decode(ControlCenterDelegationCapacity.self, from: data),
            value.valid(for: profile.slot) { delegationCapacity[profile.slot] = value }

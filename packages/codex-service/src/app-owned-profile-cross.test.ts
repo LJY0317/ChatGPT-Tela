@@ -7,7 +7,7 @@ import type { CodexNativeTargetAdapter } from "./native-target";
 import { loadProductProfileRuntimeConfig } from "../../development-runtime/src/product-profile";
 import { bindChatGptTelaAccount } from "../../development-runtime/src/browser-profile";
 
-test("parent-to-child managed Responses routes keep profile ownership across real HTTP, overlay, stop and restart", async () => {
+test("parent-to-child managed Responses routes keep profile ownership across real HTTP, stop and restart", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-managed-parent-cross-"));
   const launcher = join(root, "plura-fixture");
   const failMarker = join(root, "wrong-owner");
@@ -46,23 +46,16 @@ const lifecycle = await createProfileSupervisorLifecycle();
 const control = new MultiProfileControlClient({ command: [process.env.FIXTURE_PLURA_LAUNCHER], runner: {
   async run(_command, input) {
     if (input.arguments[0] === "targets") return { exitCode: 0, stderr: "", stdout: JSON.stringify({
-      contractVersion: 1, targets: [{ id: targetId, displayName: "Fixture " + slot,
-      role: "managed", managed: true, state: "available", sessionState: "available",
-      sharedAppServerSupported: true, responsesRouteSupported: true,
-      modelListOverlaySupported: true, startupModelCatalogSupported: true,
+      contractVersion: 2, targets: [{ id: targetId, displayName: "Fixture " + slot,
+      role: "managed", managed: true, state: "stopped", backendPolicy: "official-desktop-owned",
       profileIndex: existsSync(process.env.FIXTURE_FAIL_MARKER) ? slot + 1 : slot }] }) };
     if (input.arguments[0] !== "launch-target") throw Error("Unexpected public Plura operation");
     const args = input.arguments;
     const value = name => args[args.indexOf(name) + 1];
-    if (value("--target") !== targetId || input.environment.CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN !== ingress.capability) {
-      throw Error("Wrong owner or capability in Plura launch");
-    }
-    return { exitCode: 0, stderr: "", stdout: JSON.stringify({
-      contractVersion: 1, targetID: targetId, state: "ready",
-      endpoint: "ws://127.0.0.1:19012",
-      responsesRouteFingerprint: createHash("sha256").update(value("--responses-base-url")).digest("hex"),
-      modelListOverlayFingerprint: createHash("sha256").update(value("--model-list-overlay-url")).digest("hex"),
-    }) };
+    if (value("--target") !== targetId || input.environment !== undefined) throw Error("Wrong owner or inherited route credential");
+    return { exitCode: 0, stderr: "", stdout: JSON.stringify({ contractVersion: 2,
+      targetID: targetId, backendPolicy: "official-desktop-owned", state: "running" }) };
+
   },
 } });
 const starter = async options => {
@@ -160,9 +153,9 @@ try {
     const second = await service.startProfile(3);
     expect([first.targetId, second.targetId]).toEqual(["fixture.managed.2", "fixture.managed.3"]);
     expect([first.webModelsReady, second.webModelsReady]).toEqual([true, true]);
-    const url = (slot: number) => new URL(`http://127.0.0.1:${ingress.find(item => item.slot === slot)!.port}/v1/`);
+    const url = (slot: number, capability = ingress.find(item => item.slot === slot)!.capability) => new URL(`http://127.0.0.1:${ingress.find(item => item.slot === slot)!.port}/${capability}/v1/`);
     const send = async (slot: number, capability: string, model: string) => {
-      const response = await fetch(new URL("responses", url(slot)), { method: "POST",
+      const response = await fetch(new URL("responses", url(slot, capability)), { method: "POST",
         headers: { "OpenAI-Organization": capability, authorization: "Bearer fixture-native",
           "content-type": "application/json" }, body: JSON.stringify({ model, input: [] }) });
       return { status: response.status, body: await response.json() as { slot?: number; provider?: string } };
@@ -174,20 +167,7 @@ try {
       expect((await send(slot, foreign.capability, webModel)).status).toBe(401);
       expect((await send(slot, own.capability, "native-fixture")).body).toMatchObject({ slot, provider: "native" });
       expect((await send(slot, own.capability, webModel)).body).toMatchObject({ slot, provider: "web" });
-      const overlay = new URL("/model-list-overlay", url(slot));
-      const native = { contractVersion: 1, result: { models: [{ slug: "native-fixture",
-        display_name: "Native", visibility: "list", supported_in_api: true,
-        supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] } };
-      const wrong = await fetch(overlay, { method: "POST",
-        headers: { authorization: `Bearer ${foreign.capability}`, "content-type": "application/json" },
-        body: JSON.stringify(native) });
-      expect(wrong.status).toBe(401);
-      const ownOverlay = await fetch(overlay, { method: "POST", headers: {
-        authorization: `Bearer ${own.capability}`, "content-type": "application/json",
-      }, body: JSON.stringify(native) });
-      expect(ownOverlay.status).toBe(200);
-      const models = await ownOverlay.json() as { result: { models: { slug: string }[] } };
-      expect(models.result.models.map(item => item.slug)).toEqual(["native-fixture", webModel]);
+
     }
     const profile2 = loadProductProfileRuntimeConfig({
       CHATGPT_TELA_PROFILE_ROOT: join(root, "profiles"),
@@ -205,15 +185,7 @@ try {
     });
     expect((await staleCatalog.json() as { models: { slug: string }[] }).models.map(item => item.slug))
       .toEqual(["native-fixture"]);
-    const nativeCatalog = { contractVersion: 1, result: { data: [{ id: "native", model: "native",
-      supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Medium" }] }] } };
-    const overlayAfterChange = await fetch(new URL("/model-list-overlay", url(2)), { method: "POST",
-      headers: { authorization: `Bearer ${ingress[0]!.capability}`, "content-type": "application/json" },
-      body: JSON.stringify(nativeCatalog),
-    });
-    expect((await overlayAfterChange.json() as { result: { data: { model: string }[] } }).result.data
-      .map(item => item.model)).toEqual(["native"]);
-    expect((await send(2, ingress[0]!.capability, webModel)).status).toBe(502);
+    expect((await send(2, ingress[0]!.capability, webModel)).status).toBe(409);
     expect((await send(3, ingress[1]!.capability, webModel)).body).toMatchObject({ slot: 3, provider: "web" });
     bindChatGptTelaAccount(profile2.browserProfile, "2".repeat(64));
     expect(await service.shutdownReadiness()).toBe("ready");

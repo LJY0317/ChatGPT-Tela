@@ -62,6 +62,9 @@ precondition(notice.notice(pid: 123, profiles: [unconnected], wantedTargets: ["d
 var busy = unconnected; busy.connectionInProgress = true
 precondition(notice.notice(pid: 123, profiles: [busy], wantedTargets: ["default"], inventoryValid: true) == nil)
 var ready = unconnected; ready = TelaWorkProfile(slot: 1, targetDisplayName: "ChatGPT", targetState: "running", targetSessionState: "ready", controlState: "running", targetId: "default", desktopProcessId: 123, connectionInProgress: false)
+precondition(ready.supportsManagedDelegations)
+let independent = TelaWorkProfile(slot: 2, targetDisplayName: "Profile 2", targetState: "running", targetSessionState: "independent", controlState: "running")
+precondition(independent.connected && !independent.supportsManagedDelegations)
 precondition(notice.notice(pid: 123, profiles: [ready], wantedTargets: ["default"], inventoryValid: true) == nil)
 precondition(notice.notice(pid: 123, profiles: [unconnected], wantedTargets: ["default"], inventoryValid: true) != nil)
 precondition(notice.notice(pid: 123, profiles: [unconnected], wantedTargets: ["default"], inventoryValid: true) == nil)

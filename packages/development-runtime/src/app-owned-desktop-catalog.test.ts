@@ -50,3 +50,24 @@ test("producer refuses to adopt a foreign pre-existing catalog directory", async
       .rejects.toThrow("another owner");
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+test("additional profiles publish and retire their own account catalogs without changing another profile", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-slot-catalogs-"));
+  try {
+    const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
+    const manifest = createOwnershipManifest("fixture", new Date(), "11111111-2222-4333-8444-555555555555");
+    writeOwnershipManifest(paths.installManifest, manifest);
+    const nativeCatalog = { models: [{ slug: "native", visibility: "list", supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] };
+    const publish = (slot: number, label: string) => publishAppOwnedDesktopCatalog({ paths, installId: manifest.installId,
+      slot, nativeCatalog, webFamilies: label ? [{ key: chatGptWebFamilyKey(label), label, availableEfforts: ["medium"] }] : [], assertCurrentAccount() {} });
+    const second = await publish(2, "second-account");
+    const third = await publish(3, "third-account");
+    expect(second).not.toBe(third);
+    const thirdBytes = readFileSync(third, "utf8");
+    expect(readFileSync(second, "utf8")).not.toContain(chatGptWebModelId(chatGptWebFamilyKey("third-account")));
+    await publish(2, "");
+    expect(JSON.parse(readFileSync(second, "utf8")).models.map((model: { slug: string }) => model.slug)).toEqual(["native"]);
+    expect(readFileSync(third, "utf8")).toBe(thirdBytes);
+    expect(readPreparedAppOwnedDesktopCatalog({ paths, installId: manifest.installId, slot: 3 })).toBe(third);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});

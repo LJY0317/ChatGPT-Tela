@@ -346,7 +346,7 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("two managed app-owned profiles keep independent fixed header routes, overlay and Plura lifetime across a Tela restart", async () => {
+test("two managed app-owned profiles keep independent capability routes and Desktop lifetime across a Tela restart", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-managed-"));
   const launcher = join(root, "fixture-plura");
   writeFileSync(launcher, "fixture");
@@ -364,39 +364,14 @@ test("two managed app-owned profiles keep independent fixed header routes, overl
       const argument = (name: string) => args[args.indexOf(name) + 1]!;
       const id = argument("--target");
       const output = action === "targets" ? {
-        contractVersion: 1,
-        targets: profiles.map(slot => ({
-          id: `managed.fixture.${slot}`, displayName: `Fixture ${slot}`,
-          managed: true, role: "managed", state: "stopped", sessionState: "available",
-          sharedAppServerSupported: true, responsesRouteSupported: true,
-          modelListOverlaySupported: true, startupModelCatalogSupported: true, profileIndex: slot,
-        })),
+        contractVersion: 2,
+        targets: profiles.map(slot => ({ id: `managed.fixture.${slot}`, displayName: `Fixture ${slot}`,
+          managed: true, role: "managed", state: "stopped", backendPolicy: "official-desktop-owned", profileIndex: slot })),
       } : (() => {
-        if (action !== "launch-target" || !fixtureIds.includes(id as typeof fixtureIds[number])) {
-          throw Error("Unexpected fixture public control operation");
-        }
-        const route = argument("--responses-base-url");
-        const overlay = argument("--model-list-overlay-url");
-        const before = sessions.get(id);
-        if (before && (before.route !== route || before.overlay !== overlay)) {
-          throw Error("Existing Plura session route changed: normal quit required");
-        }
-        if (!before) {
-          createdSessions++;
-          sessions.set(id, {
-            route, overlay,
-            body: {
-              contractVersion: 1, targetID: id, state: "ready",
-              endpoint: `ws://127.0.0.1:${19000 + profiles.indexOf(Number(id.split(".").at(-1)) as 2 | 3)}`,
-              desktopProcessID: 4200 + Number(id.split(".").at(-1)),
-              responsesRouteFingerprint: createHash("sha256").update(route).digest("hex"),
-              modelListOverlayFingerprint: createHash("sha256").update(overlay).digest("hex"),
-            },
-          });
-        }
-        expect(args).toContain("--startup-model-catalog");
-        expect(input.environment?.CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN).toBe(capabilities[Number(id.split(".").at(-1))]);
-        return sessions.get(id)!.body;
+        if (action !== "launch-target" || !fixtureIds.includes(id as typeof fixtureIds[number])) throw Error("Unexpected lifecycle call");
+        expect(input.arguments).toEqual(["launch-target", "--target", id, "--json"]);
+        if (!sessions.has(id)) { createdSessions++; sessions.set(id, { route: "", overlay: "", body: {} }); }
+        return { contractVersion: 2, targetID: id, state: "running", backendPolicy: "official-desktop-owned", desktopProcessID: 4200 + Number(id.split(".").at(-1)) };
       })();
       return { stdout: JSON.stringify(output), stderr: "", exitCode: 0 };
     },
@@ -422,8 +397,8 @@ test("two managed app-owned profiles keep independent fixed header routes, overl
     const webBySlot = new Map<number, string[]>();
     const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
       const slot = options.profileSlot!;
-      expect(options.responses?.authentication).toEqual({ kind: "header", name: "OpenAI-Organization" });
-      expect(options.responses?.modelListOverlay).toBeDefined();
+      expect(options.responses?.authentication).toEqual({ kind: "path" });
+      expect(options.responses?.modelListOverlay).toBeUndefined();
       const responses = await startLocalResponsesServer({ ...options.responses,
         async requestRouter(request) {
           const routed = await options.responses!.requestRouter!(request);
@@ -483,22 +458,10 @@ test("two managed app-owned profiles keep independent fixed header routes, overl
     for (const [i, owned] of active.entries()) {
       const slot = profiles[i]!;
       const base = owned.responses.baseUrl;
-      expect(base.pathname).toBe("/v1/");
-      const overlay = new URL("/model-list-overlay", base);
-      expect((await fetch(overlay, { method: "POST", headers: {
-        authorization: "Bearer wrong", "content-type": "application/json",
-      }, body: JSON.stringify(models) })).status).toBe(401);
-      const catalog = await fetch(overlay, { method: "POST", headers: {
-        authorization: `Bearer ${capabilities[slot]}`, "content-type": "application/json",
-      }, body: JSON.stringify(models) });
-      expect(catalog.status).toBe(200);
-      const projected = await catalog.json() as { result: { models: { slug: string }[] } };
-      expect(projected.result.models.map(value => value.slug)).toEqual(["native-model", chatGptWebModelId(family.key)]);
-      const send = async (model: string, token = capabilities[slot]!) => fetch(new URL("responses", base), {
-        method: "POST", headers: {
-          "OpenAI-Organization": token,
-          authorization: "Bearer synthetic-native-auth", "content-type": "application/json",
-        }, body: JSON.stringify({ model, input: [] }),
+      expect(base.pathname).toBe(`/${capabilities[slot]}/v1/`);
+      const send = async (model: string, token = capabilities[slot]!) => fetch(new URL(`/${token}/v1/responses`, base), {
+        method: "POST", headers: { authorization: "Bearer synthetic-native-auth", "content-type": "application/json" },
+        body: JSON.stringify({ model, input: [] }),
       });
       expect((await send("native-model", "wrong")).status).toBe(401);
       expect((await send("native-model", capabilities[slot === 2 ? 3 : 2])).status).toBe(401);
@@ -523,12 +486,11 @@ test("two managed app-owned profiles keep independent fixed header routes, overl
     }
     expect(toolCalls).toEqual([2, 3]);
     bindChatGptTelaAccount(configs[1]!.browserProfile, "e".repeat(64));
-    const changedAccountCatalog = await fetch(new URL("/model-list-overlay", second.responses.baseUrl), {
-      method: "POST", headers: { authorization: `Bearer ${capabilities[3]}`, "content-type": "application/json" },
-      body: JSON.stringify(models),
+    const changedAccountRequest = await fetch(new URL("responses", second.responses.baseUrl), {
+      method: "POST", headers: { authorization: "Bearer synthetic-native-auth", "content-type": "application/json" },
+      body: JSON.stringify({ model: chatGptWebModelId(family.key), input: [] }),
     });
-    expect((await changedAccountCatalog.json() as { result: { models: { slug: string }[] } })
-      .result.models.map(model => model.slug)).toEqual(["native-model"]);
+    expect(changedAccountRequest.status).toBe(409);
     bindChatGptTelaAccount(configs[1]!.browserProfile, "3".repeat(64));
     await first.stop(); active.splice(0, 1);
     const restarted = await open(2); active.push(restarted);
@@ -542,24 +504,24 @@ test("two managed app-owned profiles keep independent fixed header routes, overl
     const rejectedClient = new MultiProfileControlClient({ command: [launcher], runner: {
       async run(_command, input) {
         expect(input.arguments[0]).toBe("targets");
-        return { stderr: "", exitCode: 0, stdout: JSON.stringify({ contractVersion: 1, targets: [{
+        return { stderr: "", exitCode: 0, stdout: JSON.stringify({ contractVersion: 2, targets: [{
           id: "managed.fixture.2", displayName: "Wrong owner", managed: true, role: "managed",
-          state: "stopped", sessionState: "available", profileIndex: 3,
-          sharedAppServerSupported: true, responsesRouteSupported: true,
-          modelListOverlaySupported: true, startupModelCatalogSupported: true,
+          state: "stopped", backendPolicy: "official-desktop-owned", profileIndex: 3,
+
+
         }] }) };
       },
     } });
-    await expect(open(2, rejectedClient)).rejects.toThrow("does not own the requested profile slot");
+    await expect(open(2, rejectedClient)).rejects.toThrow("does not own the selected profile");
     const abort = new AbortController();
     const cancellingClient = new MultiProfileControlClient({ command: [launcher], runner: {
       async run(_command, input) {
         if (input.arguments[0] === "targets") return { stderr: "", exitCode: 0,
-          stdout: JSON.stringify({ contractVersion: 1, targets: [{
+          stdout: JSON.stringify({ contractVersion: 2, targets: [{
             id: "managed.fixture.2", displayName: "Fixture 2", managed: true, role: "managed",
-            state: "stopped", sessionState: "available", profileIndex: 2,
-            sharedAppServerSupported: true, responsesRouteSupported: true,
-            modelListOverlaySupported: true, startupModelCatalogSupported: true,
+            state: "stopped", backendPolicy: "official-desktop-owned", profileIndex: 2,
+
+
           }] }) };
         abort.abort();
         throw new DOMException("Fixture launch cancelled", "AbortError");

@@ -769,7 +769,7 @@ await lifecycle.shutdownRequested;await preview.close();await mcp.stop();lifecyc
       FIXTURE_STATE: state[target.slot - 1]!,
       FIXTURE_RESPONSES: target.slot === 1
         ? `http://127.0.0.1:${ingress[0]!.port}/${ingress[0]!.capability}/v1/`
-        : `http://127.0.0.1:${ingress[target.slot - 1]!.port}/v1/` }; },
+        : `http://127.0.0.1:${ingress[target.slot - 1]!.port}/${ingress[target.slot - 1]!.capability}/v1/` }; },
   };
   const service = await startCodexService({ config: { multiProfile: { launcherCli: "/fixture/plura" }, appOwnedResponses: ingress },
     nativeTargetAdapter: adapter, profileRuntimeCommand: [process.execPath, join(root, "child.mjs")] });
