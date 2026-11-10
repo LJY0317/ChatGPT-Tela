@@ -138,111 +138,21 @@ it does **not** constitute acceptance of production Desktop UI selection,
 Web model catalog admission, startup/restart behavior or user permissions.
 The app-owned route must remain opt-in until those are separately verified.
 
-## Two Native-first profiles: consumer transition handoff
+## Updates and restoration
 
-The recorded installed baseline `83323f73` still has two Native-first profiles,
-an embedded Native engine and no `appOwnedResponses`. Neither the historical
-build-7/8 candidates nor the **final engine-free local candidate** can replace
-those routes unchanged. The final build-9 candidate was assembled once from
-`5e3b93bf`, ad-hoc signed and verified locally, with no embedded Native engine.
-Unlike build 8, it includes the existing protocol-v2 workspace-files helper for
-Chat file import/export, independently of ordinary workspace read/write.
-Its private receipt is `build/nov08-final-engine-free/candidate-manifest.json`.
-This is **not** an approved update or an installed package. Keep the installed
-source and both profiles in place until an operator accepts an explicit,
-recoverable per-slot configuration change.
+On macOS, Sparkle owns app download, verification, replacement and relaunch.
+Tela’s existing update handshake settles its services and ownership records;
+there is no separate macOS CLI upgrade path. See [upgrade recovery](upgrade-recovery.md#macos-updates-through-sparkle).
 
-The **public packaged launcher routes** `upgrade --dry-run` and `upgrade --apply`
-through `runPackagedLifecycleCommand`, but on **macOS both are rejected** by
-`planPackagedUpgradeFromPayload` with `macOS updates use Sparkle; choose Check
-for Updates in Tela`, before reading source files or preparing an upgrade plan.
-Thus the routed command is not a usable macOS preview or apply path. The
-isolated whole-payload lifecycle upgrade tests use a Linux fixture. For an
-existing app-bundle installation, Sparkle owns app replacement and relaunch;
-Tela's separate `application-update wait/prepare/finish/cancel` handshake only
-settles owned services and update metadata. A separately verified legacy
-split-payload install requires its own owning lifecycle; the recorded current
-installation is an app bundle and **does not require** a keep-data uninstall.
-See [upgrade recovery](upgrade-recovery.md#macos-updates-through-sparkle).
-Neither route has been exercised against the live installed baseline. Build 7
-has a synthetic version, ad-hoc signature and test feed, so it is not an
-approved public Sparkle update or an accepted production installer.
+After an engine-free update, missing app-owned routes are prepared before
+service restoration. Additional profiles are included only when detected and
+already saved as Work connections. Existing routes and credentials are preserved;
+an unavailable optional profile does not block the default profile.
+Registration and provider/model selection remain explicit actions as described above.
 
-Source now prepares missing app-owned routes inside `application-update finish`,
-after recording the verified replacement and before restoring any service.
-It reuses the existing configure implementation: slot 1 is prepared, and
-additional managed targets are prepared only when detected and already saved
-as Work connections. Disconnected targets are not enabled, existing routes and
-preferences are preserved, and an unavailable optional provider does not block
-the independent default profile. Provider registration and official Desktop
-model selection remain explicit user actions.
-
-The Native-first replacement regression starts with an empty route list,
-verifies preparation before service readiness, and interrupts/resumes restoration
-without changing route credentials or user settings. This is isolated acceptance,
-not a real Desktop/account migration. Build 9 predates this fix; do not publish
-that artifact as a direct update for Native-first installations. A newly built,
-signed candidate and actual transition acceptance remain required.
-
-Required transition order:
-
-1. Finish or explicitly cancel active Work/Native tasks; use the existing
-   controls to disconnect affected profiles. Preserve the installed signed
-   source, ownership/recovery receipts, Tela product config and user-level
-   official Codex config. Check the old installation format and the owning
-   lifecycle's **read-only** removal/installation previews. Do not apply an
-   update if the recoverable source or task settlement is uncertain.
-2. Use only the lifecycle appropriate to the verified source format. The
-   recorded installation is an app bundle: use a valid signed Sparkle
-   feed/update and its standard maintenance handshake. Only a separately
-   proven legacy split-payload installation would require its own keep-data
-   owner-controlled removal, followed by a new signed install and dry-run.
-   Do not invoke macOS `upgrade`, restore an old legacy updater or treat the
-   synthetic build-7 label as a release number.
-3. Let update completion prepare the routes **before service restoration**,
-   preserving `multiProfile`, connection preferences and distinct private ports
-   and capabilities. No postinstall command should race Sparkle's relaunch.
-   Do not recreate the removed Native engine or reuse another profile's credentials.
-4. After route configuration, restore services and reconnect
-   the approved slot 1 and require account-bound Web discovery
-   and its Native+Web model catalog to reach **Ready**. Review
-   `desktop-provider register --dry-run` and explicitly apply registration
-   only after the reported catalog and ownership are accepted. Independently
-   verify the managed target and route and obtain that profile's separate
-   account acceptance before reconnecting slot 2. A missing or unapproved
-   route remains disconnected; there is no automatic Native-first fallback.
-5. Registration does not select a model. The user must choose
-   `model_provider = "chatgpt_tela_local"` and a catalog-listed model in their
-   user-level official Codex config, then normally restart the official Desktop
-   under their own control and accept the real account/provider behavior.
-   Synthetic Responses success or Web Ready status does not establish that
-   Desktop acceptance.
-
-For recovery, switch the official Codex selection back to its previous
-`openai` provider/model first, then review and apply `desktop-provider restore`
-for the exact install-owned stanza. Disconnect affected app-owned profiles and
-use the preserved source with the **owning** restore/removal/install lifecycle;
-`application-update cancel` is valid only while the unchanged signed source
-remains. Preserve uncertain transition journals and work state for settlement.
-No live dry-run, apply, account change or Desktop restart was performed in this
-handoff. Current source gates provider maintenance when a running official
-Desktop may have selected Tela, but does not block an unrelated provider merely
-because Desktop is running. User-level config alone cannot prove an
-already-running session's selection or its overrides; provider-only installation
-is distinct from complete Native replacement. The earlier build-7 package does
-not contain this guard, explicit multi-slot configure or later source changes.
-Its historical source/package receipt is
-`build/nov08-transition-handoff/final-candidate-manifest.json`; build 8 remains
-historical and lacked the file-transfer helper. The final build-9 receipt records
-the actual compiled source, helper and signature, fingerprint and local checks.
-Developer ID signing, notarization, a real signed Sparkle feed and user-approved
-installed Desktop/account acceptance remain separate steps.
-
-An additional isolated official engine run used this repository's exact
-registered provider stanza, a fake `HOME`/`CODEX_HOME` with only a synthetic
-API-key login file, and a local Responses endpoint. The engine forwarded
-`Authorization: Bearer synthetic-fixture-key`, returned an actual host tool
-result and finished the turn in two Responses requests. The local app-owned
-ingress test separately traversed the existing composite router with
-Native → Web → Native and preserved the synthetic first-party header for
-both Native requests. No real login, keychain, browser or upstream call was made.
+To undo the optional provider integration, choose Codex’s built-in `openai`
+provider and a Native model first, then run `desktop-provider restore` for the
+registered slot. Restoration removes only Tela-owned settings and preserves
+unrelated configuration. Do not remove transition records or force a second
+installation when a previous replacement is uncertain; reconcile its existing
+update state through the normal recovery path.

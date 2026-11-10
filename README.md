@@ -39,7 +39,7 @@ The current Desktop-owned adapter targets Plura Desktop's v2 lifecycle contract.
 Plura launches the official app; Tela provides a separate, explicitly registered
 Responses provider and per-profile model catalog. No external Native engine or
 launch-time proxy/overlay is used. See [explicit provider setup](docs/official-desktop-provider.md).
-The coordinated source candidates are not yet installed or publicly released.
+This adapter remains pre-release; source verification and local acceptance do not establish a publicly supported release.
 Legacy external managed-delegation commands below require a Native session source;
 the Desktop-owned adapter does not expose that authority.
 
