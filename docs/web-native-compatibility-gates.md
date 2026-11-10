@@ -36,6 +36,13 @@ completed. Native app enumeration succeeded, while browser discovery reported
 an unavailable browser access host. This accepts the model-switch/app-inventory
 path, not browser control or Web invocation of original Native tools.
 
+In that managed-profile observation, the browser service failed before connecting
+because its official host binding was absent. The Native tool process descended
+from the optional launcher's separate backend, not from the Desktop process.
+App enumeration is therefore insufficient to accept Native browser parity.
+Do not copy private host capabilities into another process or weaken peer
+authorization. A supported Desktop-owned integration remains a release gate.
+
 ## App-owned provider cutover
 
 An opt-in isolated acceptance fixture in
