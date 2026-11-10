@@ -1,6 +1,5 @@
 export * from "./authority";
 export * from "./context";
-export * from "./diagnostics";
 export * from "./diagnostic-events";
 export * from "./diagnostic-failure";
 export * from "./diagnostic-context";

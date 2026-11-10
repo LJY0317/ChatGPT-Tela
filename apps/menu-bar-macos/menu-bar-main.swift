@@ -451,10 +451,9 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     let directory = home.appendingPathComponent("Library/Logs/ChatGPT Tela", isDirectory: true)
     let url = directory.appendingPathComponent("menu-ui-events.json")
     var rows: [[String: Any]] = []
-    if let data = try? Data(contentsOf: url), data.count < 131072,
+    if let data = try? Data(contentsOf: url), data.count <= 131072,
        let existing = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] { rows = existing }
     let now = Date().timeIntervalSince1970
-    rows = rows.filter { ($0["at"] as? Double ?? 0) > now - 86400 }
     var evidence: [String: Any] = ["at": now, "event": event, "menuOpen": menuOpen,
       "uiSession": decisionUiSession,
       "appActive": NSApp.isActive, "ownAppFrontmost": NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
@@ -465,7 +464,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     do {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
         attributes: [.posixPermissions: 0o700])
-      try JSONSerialization.data(withJSONObject: Array(rows.suffix(64))).write(to: url, options: .atomic)
+      try retainedMenuDiagnosticData(rows, since: now - 86400, maxBytes: 131072).write(to: url, options: .atomic)
       try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     } catch { /* Diagnostics cannot alter UI behavior. */ }
   }

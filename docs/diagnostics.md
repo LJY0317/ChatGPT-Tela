@@ -836,7 +836,7 @@ A successful socket write does not prove frontend receipt, filtering or renderin
 
 ### macOS menu and Control Center evidence
 
-`menu-ui-events.json` in the product log directory records only menu lifecycle, own-app activation and own-window visible/key/main/occlusion booleans. It is event-driven, local-only, and bounded to the latest 64 events within 24 hours (read bound 128 KiB). It contains no window titles, other-app identity or content. It distinguishes deactivation before menu tracking from an explicit close/hide; user observation is still needed to confirm relative window ordering.
+`menu-ui-events.json` in the product log directory records only menu lifecycle, own-app activation and own-window visible/key/main/occlusion booleans. It is event-driven, local-only, and bounded to 24 hours and 128 KiB of encoded JSON, evicting oldest events by bytes without an event-count cutoff. It contains no window titles, other-app identity or content. It distinguishes deactivation before menu tracking from an explicit close/hide; user observation is still needed to confirm relative window ordering.
 
 ### Turn ownership and inspection witnesses
 
