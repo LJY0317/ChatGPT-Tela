@@ -57,6 +57,9 @@ for (const slot of [1, 2]) test(`owned Desktop provider ${slot} register, re-reg
     const installId = randomUUID();
     const { home, paths, options } = await binaryFixture(root, false, installId);
     const codex = join(home, slot === 1 ? ".codex" : "explicit-profile-config"); mkdirSync(codex);
+    const journal = join(paths.serviceState("codex"), "web-delegations", "preserved.json");
+    mkdirSync(join(journal, ".."), { recursive: true });
+    writeFileSync(journal, "preserved-request-and-result");
     const configPath = join(codex, "config.toml");
     const original = 'model_provider = "openai"\nmodel = "user-choice"\n# existing comment\n';
     writeFileSync(configPath, original, { mode: 0o640 });
@@ -89,6 +92,7 @@ for (const slot of [1, 2]) test(`owned Desktop provider ${slot} register, re-reg
       expect(existsSync(paths.binaryRoot)).toBe(true);
     } finally { releaseProductActivity({ path: activityPath, expected: activity }); }
     const applied = await runProductUninstall({ mode: "apply", ...options });
+    expect(readFileSync(journal, "utf8")).toBe("preserved-request-and-result");
     expect(applied.providerRestore).toMatchObject({ status: "restored" });
     expect(readFileSync(configPath, "utf8")).toBe(original);
     expect((await runProductUninstall({ mode: "apply", ...options })).providerRestore)

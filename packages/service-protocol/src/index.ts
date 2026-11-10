@@ -3,7 +3,6 @@ import { dirname } from "node:path";
 import { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
 import { parseBrowserRetentionObservation, type BrowserRetentionObservation } from "@chatgpt-tela/core";
 export { parseChatCapabilitySemantics, type ChatCapabilitySemantics } from "./chat-capability-semantics";
-export { parseCodexWorkInspectionContract } from "./work-inspection";
 export { parseCodexCheckpointInspectionContract } from "./work-inspection";
 
 export { parseCodexApprovalWait, type CodexApprovalWaitContract } from "./approval-review";

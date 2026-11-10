@@ -261,40 +261,9 @@ and makes no model calls. It does not reduce cold-checkpoint inference time.
 
 ### Exact Native conversation inspection by ID
 
-For a connected Tela Chat agent, prefer its `inspect_native_work`
-read-only capability (opened workspace ID + exact Native thread UUID,
-optional profile slot/minutes) over composing a `bun -e` diagnostic
-script through `exec_command`. The authenticated Codex-service
-inspection checks the Native owner, projects bounded logs, observes
-the uniquely matching Web task surface and reports historical approval-wait evidence.
-`browser.attributableToThread` is derived from the selected retained surface's task ID,
-not a sender's attribution label or the profile's browser count. Missing or ambiguous matches
-remain unknown, even if the profile has one unrelated window. Thread attribution alone does not prove
-that the current Native turn executed in that browser. `unavailable` includes a fixed observation
-failure reason where supported; ChatGPT host-owned approval cards
-remain pre-ingress and are handled by ChatGPT.
-
-`diagnostics.activeRequestBoundary` keeps the latest official Native turn status beside exact-turn
-local receipts for browser completion, Web answer receipt, Native final commit and response-body drain.
-A completed Native turn without a local final receipt means delivery was not observed by Tela; it does
-not mean the turn is still running or prove what ChatGPT rendered. The projection contains no answer body.
-
-When a current selected Web card is pending, `browser.approvalState` and the
-optional `browser.approvalWait` report only the existing owner-bound waiting
-state. No second agent classifier or authority is involved. An unresolved
-automatic dispatch cannot cause repeated clicks; a missing observation
-does not terminate the accepted task.
-
-When the user supplies an original Native conversation UUID, use one scoped,
-read-only inspection instead of searching private rollout files or repeatedly
-auditing all logs:
-
-```sh
-bun run cli thread inspect --thread <Native-conversation-UUID> --slot 2 --minutes 30
-```
-
-If the selected Native owner is stopped, orphaned, or its public status
-cannot be verified, use the **offline historical-only** fallback:
+For historical structural evidence, use Tela Chat's `inspect_native_evidence` or
+the source CLI below. Live Native thread inspection through Tela's former
+external terminal is no longer available.
 
 ```sh
 bun run cli thread evidence --thread <Native-conversation-UUID> --turn <Native-turn-UUID> --minutes 180
@@ -308,7 +277,7 @@ transition, terminal/failure classification, and the gap between
 observations. A long elapsed gap does **not** prove the card remained
 visible for that entire period; current browser status stays
 `not_verified`. Missing/truncated sources are reported explicitly.
-Historical and live thread inspection also reuse canonical incident timelines
+Historical thread inspection also reuses canonical incident timelines
 after rotating logs expire. The common reader filters the same time window,
 test origins and duplicate events; source-fit evidence includes the retained
 input estimates, limits and item-byte accounting without source text.

@@ -61,17 +61,6 @@ Reopen or explicitly rediscover workspace instructions after editing them. Neste
 are listed for the agent to read before working in their directories. Native-backed Web conversations
 also retain the Native app's existing instruction and checkpoint handling.
 
-For development operators diagnosing one existing Native conversation, a
-read-only source CLI command now joins its exact thread status, recent bounded
-turn statuses, matching structural diagnostic events and last observed approval
-wait without searching the user's private messages:
-`bun run cli thread inspect --thread <UUID> --slot 2 --minutes 30`.
-See [diagnostics](docs/diagnostics.md) for limits.
-Tela Chat additionally exposes an optional authenticated `inspect_native_work`
-read-only capability (opened workspace ID, exact Native thread UUID and
-optional profile/window), without an arbitrary shell command. It reports
-the Web surface uniquely matching that Native thread's existing task ownership.
-Absent or ambiguous matches remain unknown; profile-only browser evidence does not establish ownership.
 The host's own ChatGPT tool approval prompts are outside Tela ingress.
 For selected owned Web sessions, agents can inspect a bounded one-shot or
 conversation-scoped eligibility classification; the actual automatic click
@@ -1100,41 +1089,6 @@ nonnegative integer fields: `maxModelCalls`, `maxInputTokens` (estimated) and `m
 admission only). For example: `{"maxModelCalls":4,"maxInputTokens":300000,"maxElapsedMs":300000}`.
 These settings control Tela preparation costs and do not enlarge a model's context window. Defaults
 and exact behavior are documented in [the efficiency contract](docs/token-efficiency.md#continuation-and-preparation).
-
-#### Terminal Work preview
-
-After connecting a profile in Tela, the installed `chatgpt-tela work` command opens the official
-Codex terminal UI. Profile selection is optional (`--slot 1` by default). For source development,
-`bun run cli work --slot 1` uses the same terminal adapter
-on that profile's existing Tela-routed app-server. Use `--thread <id>` to resume a specific
-conversation and `/model` in the terminal to choose a live Web or Native model. Optional
-`--model <id>` and `--cwd <path>` apply only to this invocation. No second task engine,
-background service, custom provider, or configuration file is installed by this command.
-The official CLI handles folder trust, approvals, model selection and active-turn controls;
-trust decisions explicitly accepted there follow the official CLI's normal persistence rules.
-
-This is a preview, not full Work parity. Native usage limits still apply to Native turns.
-Web compaction requires the optional verified Tela engine preview described below; terminal
-attachment alone does not enable it. Same-thread Web → Native → Web switching with exact recall
-has passed a controlled terminal test after Native usage reset. The installed terminal also
-completed an explicitly selected Web turn on a disposable read-only thread without Native
-generation. These checks do not prove terminal submission while Native usage is fully exhausted,
-write-denial enforcement after resume, or attachment to an already active turn.
-Explicit read-only and full-access selections are normalized to
-Native named permission profiles for clients that opt into that public API. Cold read-only
-resume is verified; existing legacy selections and custom workspace-write policies are not
-silently migrated. The preview is not ready for unattended task execution. A running
-service/profile from an earlier build must be updated
-through normal stop/start before the private terminal-session API becomes available. The official
-CLI can choose its configured default model when resuming; use `/model` or explicit `--model`
-to select Web before sending when Native usage is exhausted. The wrapper never changes your
-saved default model or grants new permissions.
-
-For oversized Web context, derived historical summaries and public Native-history recovery preserve
-the latest request and canonical Native state. Hidden reasoning and encrypted model state cannot be
-reconstructed; incomplete evidence is rejected, and Web-initiated remote compaction remains unsupported.
-See [token efficiency](docs/token-efficiency.md) and
-[context continuity](docs/context-continuity-contract.md) for history and checkpoint limits.
 
 #### Optional Web compaction engine preview
 

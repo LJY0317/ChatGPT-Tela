@@ -65,21 +65,21 @@ describe("unified ChatGPT Tela development MCP", () => {
       ].sort();
       expect(listed.tools.map(tool => tool.name).sort()).toEqual(expected);
       expect(listed.tools.map(tool => tool.name)).not.toContain("future_native_tool_2099");
-      const inspection = listed.tools.find(tool => tool.name === "tela_chat_inspect_native_work");
+      const inspection = listed.tools.find(tool => tool.name === "tela_chat_inspect_native_evidence");
       expect(inspection?.annotations).toMatchObject({
         readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false,
       });
       expect(listed.tools.find(tool => tool.name === "tela_chat_inspect_native_evidence")?.annotations)
         .toMatchObject({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
       const inspected = await client.callTool({
-        name: "tela_chat_inspect_native_work",
+        name: "tela_chat_inspect_native_evidence",
         arguments: { workspace_id: "chatws_fixture",
-          thread_id: "11111111-2222-7333-8444-555555555555", slot: 2, minutes: 15 },
+          thread_id: "11111111-2222-7333-8444-555555555555", minutes: 15 },
       });
       expect(inspected.isError).not.toBe(true);
-      expect(JSON.parse(text(inspected))).toEqual({ capability: "inspect_native_work", ok: true });
-      expect(chatCalls[0]).toMatchObject({ capability: "inspect_native_work",
-        arguments_: { slot: 2, minutes: 15 } });
+      expect(JSON.parse(text(inspected))).toEqual({ capability: "inspect_native_evidence", ok: true });
+      expect(chatCalls[0]).toMatchObject({ capability: "inspect_native_evidence",
+        arguments_: { minutes: 15 } });
 
       const chatResult = await client.callTool({
         name: "tela_chat_read",

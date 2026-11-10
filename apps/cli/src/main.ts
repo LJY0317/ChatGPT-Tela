@@ -13,7 +13,6 @@ import { summarizeWorkIncident } from "./work-incident";
 import { observeDesktopPerformance } from "./desktop-performance";
 import { diagnosePublicIngress } from "@chatgpt-tela/tailscale-ingress";
 import { summarizeRetentionCanary } from "./retention-canary";
-import { workTerminalArguments, runWorkTerminal, connectCodexAppServerWebSocket } from "@chatgpt-tela/codex";
 import { diagnoseDefaultDesktop, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 import {
   probePublicMcp,
@@ -25,7 +24,7 @@ import {
   readEffectiveProductConfig,
 } from "./product-config-selection";
 import { profileSlotFromArguments } from "./profile-selection";
-import { inspectNativeThread, inspectNativeThreadHistoricalEvidence } from "./native-thread-inspection";
+import { inspectNativeThreadHistoricalEvidence } from "./native-thread-inspection";
 import {
   readChatAgentProvidersConfig,
   readChatApprovedRootsConfig,
@@ -898,72 +897,18 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "thread") {
-    if (!["inspect", "evidence"].includes(process.argv[3] ?? "")) {
-      throw new Error("usage: chatgpt-tela thread inspect --thread UUID [--slot N] [--minutes 1-120] | thread evidence --thread UUID [--turn UUID] [--minutes 1-360]");
+    if (process.argv[3] !== "evidence") {
+      throw new Error("usage: chatgpt-tela thread evidence --thread UUID [--turn UUID] [--minutes 1-360]");
     }
     const threadId = option("--thread");
-    if (!threadId) throw new Error("thread inspect requires --thread UUID");
-    if (process.argv[3] === "evidence") {
-      // Historical logs are useful after Native termination, and cannot prove
-      // current profile ownership. Never connect, act, or show content here.
-      console.log(JSON.stringify(inspectNativeThreadHistoricalEvidence({
-        threadId, ...(option("--turn") ? { turnId: option("--turn")! } : {}),
-        diagnosticPaths: diagnosticSourcePaths(productPaths.logsRoot),
-        ...(option("--minutes") ? { minutes: Number(option("--minutes")) } : {}),
-      }), null, 2));
-      return;
-    }
-    const slotNumber = slot();
-    const manifest = readOwnershipManifest(productPaths.installManifest);
-    if (!manifest) throw new Error("thread inspect requires an owned Tela installation");
-    const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
-    const running = await supervisor.current({ service: "codex",
-      descriptorPath: serviceDescriptorPath(productPaths, "codex") });
-    if (!running) throw new Error("thread inspect requires the installed Codex service");
-    const codex = new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
-    const before = (await codex.profiles(AbortSignal.timeout(10_000))).find(item => item.slot === slotNumber);
-    if (!before || before.controlState !== "running" || before.targetSessionState !== "ready") {
-      throw new Error("the selected profile's Native owner is not ready");
-    }
-    const session = await codex.terminalSession(slotNumber, AbortSignal.timeout(10_000));
-    const rpc = await connectCodexAppServerWebSocket(session.endpoint, { signal: AbortSignal.timeout(10_000) });
-    try {
-      const report = await inspectNativeThread({
-        rpc, threadId, slot: slotNumber,
-        diagnosticPaths: diagnosticSourcePaths(productPaths.logsRoot),
-        ...(option("--minutes") ? { minutes: Number(option("--minutes")) } : {}),
-      });
-      // A read from a stale owner must not be presented as current evidence.
-      const after = (await codex.profiles(AbortSignal.timeout(10_000))).find(item => item.slot === slotNumber);
-      const again = await codex.terminalSession(slotNumber, AbortSignal.timeout(10_000));
-      if (!after || after.controlState !== "running" || after.targetSessionState !== "ready"
-        || after.childProcessId !== before.childProcessId
-        || after.responsesRouteFingerprint !== before.responsesRouteFingerprint
-        || again.endpoint !== session.endpoint) {
-        throw new Error("profile Native owner changed during read-only inspection");
-      }
-      console.log(JSON.stringify(report, null, 2));
-    } finally {
-      await rpc.close().catch(() => {});
-    }
-    return;
-  }
-  if (command === "work") {
-    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("work requires an interactive terminal");
-    const manifest = readOwnershipManifest(productPaths.installManifest);
-    if (!manifest) throw new Error("start the Tela profile before opening Work in the terminal");
-    const supervisor = new LocalServiceSupervisor({ installId: manifest.installId });
-    const running = await supervisor.current({ service: "codex", descriptorPath: serviceDescriptorPath(productPaths, "codex") });
-    if (!running) throw new Error("start the Tela profile before opening Work in the terminal");
-    const codex = new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
-    const session = await codex.terminalSession(slot(), AbortSignal.timeout(10_000));
-    const installation = resolveDefaultDesktopInstallation({ environment: process.env });
-    const args = workTerminalArguments({ session,
-      ...(option("--thread") ? { threadId: option("--thread")! } : {}),
-      ...(option("--model") ? { model: option("--model")! } : {}),
-      ...(option("--cwd") ? { cwd: resolve(option("--cwd")!) } : {}),
-    });
-    process.exitCode = await runWorkTerminal({ executable: installation.codexExecutable, arguments: args });
+    if (!threadId) throw new Error("thread evidence requires --thread UUID");
+    // Historical logs are useful after Native termination, and cannot prove
+    // current profile ownership. Never connect, act, or show content here.
+    console.log(JSON.stringify(inspectNativeThreadHistoricalEvidence({
+      threadId, ...(option("--turn") ? { turnId: option("--turn")! } : {}),
+      diagnosticPaths: diagnosticSourcePaths(productPaths.logsRoot),
+      ...(option("--minutes") ? { minutes: Number(option("--minutes")) } : {}),
+    }), null, 2));
     return;
   }
   if (command === "start") {
@@ -1131,7 +1076,6 @@ async function main(): Promise<void> {
     + "  diagnostics incident [--minutes <1-120>]\n"
     + "  diagnostics trace [--minutes <1-120>]\n"
     + "  diagnostics desktop [--seconds <5-60>] (macOS)\n"
-    + "  thread inspect --thread UUID [--slot N] [--minutes <1-120>] (read-only)\n"
     + "  retention-canary [--minutes <1-120>]\n"
     + "  uninstall (--dry-run | --apply) [--remove-data]\n"
     + "  chat roots\n"
@@ -1147,7 +1091,6 @@ async function main(): Promise<void> {
     + "  ingress adopt-existing\n"
     + "  setup [--slot <n>]\n"
     + "  start [--slot <n>] [--expected-desktop-process-id <pid>]\n"
-    + "  work [--slot <n>] [--thread <id>] [--model <id>] [--cwd <path>]\n"
     + "  stop [--slot <n>]\n"
     + "  profiles\n"
     + "  model-canary [--slot <n>]\n"

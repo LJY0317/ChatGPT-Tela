@@ -55,8 +55,6 @@ describe("Tela Chat capability contracts", () => {
     }
     const semantics = (name: string) => catalog.find(item => item.capability === name)?.semantics;
     expect(semantics("exec_command")).toMatchObject({ effect: "arbitrary_execution", replay: "same_operation_id", verification: "process_status" });
-    expect(semantics("inspect_native_work")).toMatchObject({ effect: "read", scope: "service",
-      replay: "observe_again", verification: "bounded_result" });
     expect(semantics("inspect_native_evidence")).toMatchObject({ effect: "read", scope: "service",
       replay: "observe_again", verification: "bounded_result" });
     expect(semantics("write_stdin")).toMatchObject({ effect: "arbitrary_execution", replay: "inspect_before_repeat" });

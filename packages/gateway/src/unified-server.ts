@@ -34,19 +34,6 @@ const agentWriteMode = z.enum(["read_only", "workspace_write"]).optional();
 
 export const UNIFIED_CHAT_TOOL_DEFINITIONS: readonly ChatToolDefinition[] = Object.freeze([
   {
-    name: "tela_chat_inspect_native_work",
-    capability: "inspect_native_work",
-    title: "Inspect one owned Native Work conversation",
-    description: "Read-only owner-checked Native turn status, bounded diagnostic events and current profile Web approval observation for an exact supplied thread UUID. No shell commands, credentials, screenshots, browser clicks, tool approval, or Native turn changes. Host approval cards remain outside Tela's control.",
-    inputSchema: z.object({
-      workspace_id: workspaceId,
-      thread_id: z.string().uuid(),
-      slot: z.number().int().min(1).max(99).optional(),
-      minutes: z.number().int().min(1).max(120).optional(),
-    }),
-    readOnly: true,
-  },
-  {
     name: "tela_chat_inspect_native_evidence",
     capability: "inspect_native_evidence",
     title: "Inspect historical Native work evidence",

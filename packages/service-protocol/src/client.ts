@@ -17,7 +17,6 @@ import {
   type CodexSyntheticRecoveryContract,
   type CodexAccountDisplayContract,
   parseCodexBridgePreviewContract,
-  parseCodexWorkInspectionContract,
   parseCodexModelSelectionCanaryContract,
   parseCodexContextAttachmentCanaryContract,
   parseCodexProfileStatusContract,
@@ -239,16 +238,6 @@ export class CodexServiceClient extends LocalServiceClient {
     ));
     if (session.slot !== slot) throw new Error("terminal session does not match requested profile");
     return session;
-  }
-  async inspectWork(slot: number, threadId: string, minutes = 30, signal?: AbortSignal) {
-    if (!Number.isSafeInteger(slot) || slot < 1 || slot > 99
-      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(threadId)
-      || !Number.isSafeInteger(minutes) || minutes < 1 || minutes > 120) {
-      throw new Error("invalid Native work inspection arguments");
-    }
-    const response = await this.request(`v1/codex/profiles/${slot}/work-inspection`, "POST",
-      { threadId, minutes }, signal);
-    return parseCodexWorkInspectionContract(response, slot, threadId);
   }
 
   async bridgePreview(slot: number, signal?: AbortSignal, surfaceId?: string, threadId?: string): Promise<CodexBridgePreviewContract> {

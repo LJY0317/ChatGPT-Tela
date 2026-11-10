@@ -76,7 +76,7 @@ The configuration file is the secret-free `product-v1.json` described in [produc
 - [Token efficiency](token-efficiency.md) defines instruction reuse, checkpoint/continuation budgets, and avoiding duplicate context transfer without truncating current authority or replaying uncertain work.
 - [Context continuity](context-continuity-contract.md) explains canonical Native history versus bounded Web working context and the recovery boundary for oversized history.
 - [Chat capability discovery](chat-capability-discovery.md) defines runtime capability discovery, execution effects, and why a successful command exit is not task-success evidence.
-- [Cross-profile local continuity](cross-profile-local-thread-continuity.md) records the account and physical-profile isolation boundary. Same-account conversation sync does not grant access to another computer's local files.
+- Same-account conversation sync does not grant access to another computer's local files or authorize cross-profile Native execution.
 
 ## References
 

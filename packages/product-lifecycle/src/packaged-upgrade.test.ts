@@ -473,7 +473,9 @@ test("isolated upgrade preserves optional provider, official config and external
     const provider = join(home, "PluraDesktop", "launcher");
     const official = join(home, ".codex", "config.toml");
     const integration = join(plan.targetBlueprint.paths.configRoot, "optional-provider-fixture.json");
-    for (const path of [provider, official, integration]) {
+    const journal = join(plan.targetBlueprint.paths.serviceState("codex"), "web-delegations", "preserved.json");
+    const question = journal + ".request.ndjson";
+    for (const path of [provider, official, integration, journal, question]) {
       mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, "preserved-independent-fixture");
     }
     runner.loaded.add("plura-fixture.service"); runner.running.add("plura-fixture.service");
@@ -481,7 +483,7 @@ test("isolated upgrade preserves optional provider, official config and external
     const result = await applyPackagedUpgradeFromPayload({ plan, payloadSourcePath: target, services,
       platform: "linux", home, environment: {}, runner });
     expect(result.toVersion).toBe("2.0.0");
-    for (const path of [provider, official, integration]) expect(readFileSync(path, "utf8")).toBe("preserved-independent-fixture");
+    for (const path of [provider, official, integration, journal, question]) expect(readFileSync(path, "utf8")).toBe("preserved-independent-fixture");
     expect(runner.loaded.has("plura-fixture.service")).toBe(true);
     expect(runner.running.has("plura-fixture.service")).toBe(true);
   } finally { rmSync(root, { recursive: true, force: true }); }

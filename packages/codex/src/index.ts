@@ -10,7 +10,6 @@ export * from "./rollout";
 export * from "./source";
 export * from "./tool-codec";
 
-export * from "./work-terminal";
 
 export * from "./web-model-catalog";
 

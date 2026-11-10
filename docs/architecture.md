@@ -1784,19 +1784,9 @@ Neither product may claim the other's installation, registration, profile,
 credentials, or user data for removal. For the standalone/coexistence/removal
 acceptance matrix, see [product lifecycle](product-lifecycle.md#independence-from-original-apps-and-optional-providers).
 
-Cross-profile **original local Work/Codex thread sharing** is an explicit
-separate long-term research goal, not equivalent to single-profile Native/Web
-model switching or copying a task summary. With the owner's updated acceptance
-that a NEW destination conversation is acceptable, the **near-term product
-priority is one-click, exactly-one-conversation checkpoint handoff** from its
-verified source profile to a new Native Codex thread in a separate target
-profile. Its actual two-account Native proof, bounded source limitations and
-remaining end-user UI gates are documented in
-[one-chat checkpoint handoff](one-chat-checkpoint-handoff.md). The older
-original-thread shared-writer authorization research is preserved separately
-in [cross-profile local thread continuity](cross-profile-local-thread-continuity.md).
-No profile-to-profile authorization or original-thread continuity is inferred
-from parallel logins, local storage access, approval UI, or a matching thread ID.
+The app-owned adapter grants no cross-profile Native thread ownership. Former
+external-engine handoff prototypes have been removed; parallel logins and matching
+thread IDs do not authorize transfer or shared writers.
 
 Desktop process ownership and Web model readiness are separate states. Readiness requires
 an effective startup catalog and visible Web model rows. Inventory checks verify these

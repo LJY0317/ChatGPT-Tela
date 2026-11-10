@@ -3,7 +3,6 @@ import {
   restoreWorkProfiles,
   startCodexService,
   startCodexServiceHttpServer,
-  createCodexWorkInspector,
 } from "@chatgpt-tela/codex-service";
 import { approvalDelayMilliseconds, consumeSavedChatAcceptance, readProductConfigIfPresent, readProductPreferences, setWorkProfileConnection } from "@chatgpt-tela/product-config";
 import { resolveProductPaths } from "@chatgpt-tela/product-lifecycle";
@@ -59,7 +58,6 @@ async function main(): Promise<void> {
   const http = await startCodexServiceHttpServer({
     service,
     startupComplete: () => !restoring,
-    inspectWork: createCodexWorkInspector({ service, logsRoot: paths.logsRoot }),
   });
   writeServiceRuntimeDescriptor(descriptorPath, {
     version: 1,

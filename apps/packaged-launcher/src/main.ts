@@ -14,7 +14,6 @@ import {
 import { parsePackagedLifecycleCommand, runPackagedLifecycleCommand } from "./lifecycle";
 import { LIFECYCLE_WORKER_ENV, runIndependentLifecycleProcess } from "./lifecycle-process";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
-import { runPackagedWorkCommand } from "./work";
 import { readConfigurationInput, runPackagedBootstrapCommand } from "./bootstrap";
 import { runPackagedDesktopProviderCommand } from "./desktop-provider";
 import { runPackagedChatCommand } from "./chat";
@@ -223,10 +222,6 @@ async function main(): Promise<void> {
       ...(apply ? { executingBinaryPath: process.execPath } : {}),
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    return;
-  }
-  if (args[0] === "work") {
-    process.exitCode = await runPackagedWorkCommand(args);
     return;
   }
   const launch = args.length === 1 && args[0] === "menu-bar"
