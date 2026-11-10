@@ -176,6 +176,7 @@ test("Chat-only MCP isolates two explicit device installations and never falls b
       const client = new Client({ name: "local", version: "0.0.1" }, { capabilities: {} });
       await client.connect(clientTransport);
       clients.push(client);
+      expect(client.getInstructions()?.slice(0, 512)).toContain("do not discover or call Tela Chat or DevSpace work tools");
       expect((await client.listTools()).tools.map(x => x.name).sort()).toEqual([
         "chatgpt_tela_chat_capability_call", "chatgpt_tela_chat_capability_inventory"
       ]);

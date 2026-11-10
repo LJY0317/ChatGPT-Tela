@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { CHATGPT_TELA_WORK_TOOL_ROUTING } from "./public-server";
 import {
   registerTurnBridgeTools,
   type TurnBridgeBackend,
@@ -232,7 +233,7 @@ export function createUnifiedDevelopmentMcpServer(input: {
     version: CHATGPT_TELA_UNIFIED_DEVELOPMENT_MCP_SERVER_VERSION,
   }, {
     capabilities: { tools: { listChanged: false } },
-    instructions: "Development unified ChatGPT Tela MCP. Route Web workspace work through Tela Chat tools and exact active Native Codex turns through Codex tools. These backends have separate authority: a failure of either must never switch the request to the other backend. Continue with another suitable capability only within the request's authorized backend. Git writes in an opened Chat workspace can use apply_patch or exec_command under that tool's authorization. Tela Codex control tools require the current active Native turn capability.",
+    instructions: CHATGPT_TELA_WORK_TOOL_ROUTING + " Development unified ChatGPT Tela MCP. These backends have separate authority: a failure of either must never switch the request to the other backend. Git writes in an opened Chat workspace can use apply_patch or exec_command under that tool's authorization. Tela Codex control tools require the current active Native turn capability.",
   });
 
   const registerChatTool = server.registerTool.bind(server) as unknown as (

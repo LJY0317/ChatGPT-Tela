@@ -31,9 +31,12 @@ export interface PublicChatBackend {
 
 const CHAT_INVENTORY_QUERY_INSTRUCTIONS = "Inventory is read-only. Query matches one case-insensitive literal substring of capability names or descriptions, not natural-language search. Omit it or use an empty string for all capabilities; [] means no matches, not that tools are unavailable.";
 
+export const CHATGPT_TELA_WORK_TOOL_ROUTING = "For ChatGPT Work/Codex Native-model work, use only the host's Native work tools; do not discover or call Tela Chat or DevSpace work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or DevSpace work tools. Choose from the actual execution route, not tool availability. This is model guidance, not a server-enforced model check.";
+
 export const CHATGPT_TELA_PUBLIC_INSTRUCTIONS = [
+  CHATGPT_TELA_WORK_TOOL_ROUTING,
   "Use ChatGPT Tela when the request needs the user's connected local workspace or the exact active Native Codex turn; do not invoke it for ordinary conversation or knowledge work that needs neither.",
-  "Tela Chat and Tela Codex are independent backends behind one Plugin connection. Choose the backend from the actual request route: Web work uses Tela Chat inventory/call and Native Codex turns use exact-turn Codex inventory/call. A failure of one does not authorize automatic fallback or transfer ownership to the other.",
+  "Tela Chat and Tela Codex are independent backends behind one Plugin connection. Web work uses Tela Chat inventory/call; Native work stays with the host. Explicit host-control capabilities retain their exact-turn authority. A failure of one does not authorize automatic fallback or transfer ownership to the other.",
   "For local work on the Tela Chat route, use the Tela Chat capability inventory first when the exact capability or schema is not already known. Open a workspace once and reuse its workspace_id. Batch only independent already-known reads. For commands that may mutate state or outlive one response, provide operation_id; after an uncertain response, inspect process_status before starting the command again.",
   CHAT_INVENTORY_QUERY_INSTRUCTIONS,
   "After related edits, use an available change-review capability when it helps verify the final workspace state. Prefer direct workspace capabilities for routine work and delegate to a Tela Chat agent only when separate context or specialization materially helps.",
@@ -61,7 +64,7 @@ export function createPublicMcpServer(input: {
   }, {
     capabilities: { tools: { listChanged: false } },
     instructions: input.codex ? CHATGPT_TELA_PUBLIC_INSTRUCTIONS
-      : "Local Tela Chat tools operate through this computer's existing Tela Chat service. Open a local approved workspace before file operations. No Native Codex tools or remote-device routing are available. " + CHAT_INVENTORY_QUERY_INSTRUCTIONS,
+      : CHATGPT_TELA_WORK_TOOL_ROUTING + " Local Tela Chat tools operate through this computer's existing Tela Chat service. Open a local approved workspace before file operations. No Native Codex tools or remote-device routing are available. " + CHAT_INVENTORY_QUERY_INSTRUCTIONS,
   });
 
   const rawRegisterTool = server.registerTool.bind(server) as unknown as (

@@ -54,8 +54,8 @@ describe("unified ChatGPT Tela development MCP", () => {
     try {
       await client.connect(transport as unknown as Transport);
       const instructions = client.getInstructions() ?? "";
-      expect(instructions).toContain("Web workspace work through Tela Chat");
-      expect(instructions).toContain("exact active Native Codex turns through Codex");
+      expect(instructions.slice(0, 512)).toContain("use only the host's Native work tools");
+      expect(instructions).toContain("Ordinary Chat and Web-backed Work/Codex use Tela Chat or DevSpace");
       expect(instructions).toContain("must never switch the request to the other backend");
       const listed = await client.listTools();
       const expected = [
