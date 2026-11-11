@@ -14,12 +14,9 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import {
   PACKAGED_PRODUCT_MANIFEST,
   parsePackagedProductManifest,
-  parsePackagedNativeEngine,
   type PackagedProductManifest,
   type PackagedProductManifestService,
-  type PackagedNativeEngine,
 } from "./packaged-manifest";
-import { nativeEngineFileSha256, nativeEngineHelperName, verifyNativeEngineArtifact } from "./native-engine";
 import { packagedPayloadFingerprint } from "./packaged-payload";
 import type { TelaServiceId } from "./layout";
 
@@ -49,7 +46,6 @@ export interface PackagedPayloadBuildInput {
   readonly workspaceFilesSourcePath?: string;
   readonly chatProcessStore?: PackagedProductManifest["chatProcessStore"];
   readonly lifecycle?: PackagedProductManifest["lifecycle"];
-  readonly nativeEngine?: Omit<PackagedNativeEngine, "executable"> & { readonly executableSourcePath: string };
   readonly finalizeStagedPayload?: (input: {
     readonly outputPath: string;
     readonly manifest: PackagedProductManifest;
@@ -234,19 +230,6 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
 <key>LSMinimumSystemVersion</key><string>13.0</string></dict></plist>\n`);
   }
 
-  let nativeEngine: PackagedNativeEngine | undefined;
-  if (input.nativeEngine) {
-    const { executableSourcePath, ...metadata } = input.nativeEngine;
-    const source = realRegularFile(executableSourcePath, "Native engine source");
-    const executable = `native-engine/codex${metadata.platform === "win32" ? ".exe" : ""}`;
-    const helperName = nativeEngineHelperName(metadata.platform);
-    const helperSource = realRegularFile(join(dirname(source), helperName), "Native engine helper source");
-    copyFile(source, join(outputPath, ...executable.split("/")));
-    copyFile(helperSource, join(outputPath, "native-engine", helperName));
-    nativeEngine = parsePackagedNativeEngine({ ...metadata, executable });
-    verifyNativeEngineArtifact({ payloadRoot: outputPath, engine: nativeEngine });
-  }
-
   let workspaceFiles: PackagedProductManifest["workspaceFiles"];
   if (input.workspaceFilesSourcePath) {
     const executable = `helpers/tela-workspace-files${process.platform === "win32" ? ".exe" : ""}`;
@@ -254,7 +237,7 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
     workspaceFiles = { executable, protocolVersion: 2 };
   }
 
-  let manifest = parsePackagedProductManifest({
+  const manifest = parsePackagedProductManifest({
     version: 1,
     product: "chatgpt-tela",
     productVersion: oneLine(input.productVersion, "product version"),
@@ -265,7 +248,6 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
       ...(setupEntrypoint ? { setupEntrypoint } : {}),
     },
     ...(menuBarRelative ? { menuBar: { executable: menuBarRelative, ...(maintenanceExecutable ? { maintenanceExecutable } : {}) } } : {}),
-    ...(nativeEngine ? { nativeEngine } : {}),
     ...(workspaceFiles ? { workspaceFiles } : {}),
     ...(input.chatProcessStore ? { chatProcessStore: input.chatProcessStore } : {}),
     ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
@@ -273,15 +255,7 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
   });
   writeFileSync(join(outputPath, PACKAGED_PRODUCT_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
   input.finalizeStagedPayload?.({ outputPath, manifest });
-  // OS code signing may change executable bytes; compute the receipt fingerprint from the final artifact.
-  if (manifest.nativeEngine) {
-    manifest = parsePackagedProductManifest({ ...manifest, nativeEngine: {
-      ...manifest.nativeEngine,
-      sha256: nativeEngineFileSha256(join(outputPath, ...manifest.nativeEngine.executable.split("/"))),
-    } });
-    writeFileSync(join(outputPath, PACKAGED_PRODUCT_MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    verifyNativeEngineArtifact({ payloadRoot: outputPath, engine: manifest.nativeEngine! });
-  }
+  // Fingerprint the final signed artifact.
   return Object.freeze({
     outputPath,
     manifest,

@@ -43,7 +43,6 @@ export function assembleMacApplication(input: {
     move("third-party-notices", "Contents/Resources/ThirdPartyNotices");
   }
   if (previous.menuBar.maintenanceExecutable) move("ui/Tela Maintenance.app", "Contents/Helpers/Tela Maintenance.app");
-  if (previous.nativeEngine) move("native-engine", "Contents/Helpers/native-engine");
   if (previous.workspaceFiles) move("helpers", "Contents/Helpers/helpers");
   // The product executable is now part of this app; remove its duplicate menu bundle.
   rmSync(join(root, "ui"), { recursive: true });
@@ -60,7 +59,6 @@ export function assembleMacApplication(input: {
       entrypoint: `Contents/Resources/${previous.profileRuntime.entrypoint}`,
       ...(previous.profileRuntime.setupEntrypoint ? { setupEntrypoint: `Contents/Resources/${previous.profileRuntime.setupEntrypoint}` } : {}),
     },
-    ...(previous.nativeEngine ? { nativeEngine: { ...previous.nativeEngine, executable: `Contents/Helpers/${previous.nativeEngine.executable}` } } : {}),
     ...(previous.workspaceFiles ? { workspaceFiles: { ...previous.workspaceFiles, executable: `Contents/Helpers/${previous.workspaceFiles.executable}` } } : {}),
   });
   writeFileSync(join(contents, "Resources", PACKAGED_PRODUCT_MANIFEST), JSON.stringify(manifest, null, 2) + "\n");

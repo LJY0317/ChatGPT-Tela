@@ -35,7 +35,6 @@
     "canary": "bun run canary:build && electron build/canary/main.cjs",
     "canary:preflight:build": "bun build apps/canary-preflight/src/main.ts --target=node --format=cjs --external electron --outfile=build/canary-preflight/main.cjs",
     "canary:preflight": "bun run canary:preflight:build && electron build/canary-preflight/main.cjs",
-    "package:native-helper-test": "bun run packages/product-lifecycle/src/fixtures/native-engine-helper-package.ts",
     "codex:cleanup-test": "bun run packages/codex-service/src/fixtures/cleanup-after-abort.ts",
     "codex:unexpected-exit-test": "bun run packages/codex-service/src/fixtures/unexpected-child-exit.ts",
     "menu-bar:test": "bun run apps/menu-bar-macos/build.ts --test",

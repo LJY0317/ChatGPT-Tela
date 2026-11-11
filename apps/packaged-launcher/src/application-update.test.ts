@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
@@ -5,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   applyPackagedInstallFromPayload, macApplicationUpdatePath, packagedProductManifestPath,
-  nativeEngineFileSha256, nativeEngineHelperName, PackagedServiceShutdownNotStartedError,
+  PackagedServiceShutdownNotStartedError,
   planPackagedInstallFromPayload, readMacApplicationUpdate,
   readOwnershipManifest, prepareOwnedDirectory, type TelaServiceId,
 } from "@chatgpt-tela/product-lifecycle";
@@ -28,14 +29,14 @@ async function fixture(root: string, application = true, nativeEngine = false) {
   if (nativeEngine) {
     mkdirSync(dirname(join(source, nativePath)), { recursive: true });
     writeFileSync(join(source, nativePath), "fixture native executable", { mode: 0o755 });
-    writeFileSync(join(dirname(join(source, nativePath)), nativeEngineHelperName("darwin")), "fixture native helper", { mode: 0o755 });
+    writeFileSync(join(dirname(join(source, nativePath)), "codex-code-mode-host"), "fixture native helper", { mode: 0o755 });
   }
   const manifest = { version: 1, product: "chatgpt-tela", productVersion: "1.0.0",
     launcher: { executable: path("Contents/MacOS/chatgpt-tela") }, menuBar: { executable: path("Contents/MacOS/chatgpt-tela-menu-bar") },
     profileRuntime: { executable: path("Contents/Frameworks/Electron.app/Contents/MacOS/Electron"), entrypoint: path("Contents/Resources/runtime.js") },
     services: Object.fromEntries(["gateway", "chat", "codex"].map(id => [id, { executable: path(`Contents/Helpers/${id}`), arguments: [] }])),
     ...(nativeEngine ? { nativeEngine: { executable: nativePath, version: "0.159.0",
-      sha256: nativeEngineFileSha256(join(source, nativePath)), platform: "darwin" as const, architecture: process.arch,
+      sha256: createHash("sha256").update(readFileSync(join(source, nativePath))).digest("hex"), platform: "darwin" as const, architecture: process.arch,
       upstreamCommit: "a".repeat(40), patchSha256: "b".repeat(64), capabilities: ["model-local-compaction-v1"] } } : {}),
   };
   const files = [manifest.launcher.executable, manifest.menuBar.executable, manifest.profileRuntime.executable,

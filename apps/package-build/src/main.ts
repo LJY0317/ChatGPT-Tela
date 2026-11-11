@@ -6,10 +6,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
-  realpathSync,
   rmSync,
-  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -17,7 +14,6 @@ import { fileURLToPath } from "node:url";
 import {
   buildPackagedPayload,
   CURRENT_PACKAGED_LIFECYCLE,
-  parsePackagedNativeEngine,
   CURRENT_CHAT_PROCESS_STORE_COMPATIBILITY,
   type PackagedProductManifest,
 } from "@chatgpt-tela/product-lifecycle";
@@ -36,14 +32,6 @@ function requiredOption(name: string): string {
   const value = option(name);
   if (!value) throw new Error(`${name} is required`);
   return value;
-}
-
-function realRegularFile(path: string, field: string): string {
-  const absolute = resolve(path);
-  if (!existsSync(absolute)) throw new Error(`${field} is missing: ${absolute}`);
-  const stat = lstatSync(absolute);
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${field} must be a real regular file`);
-  return realpathSync(absolute);
 }
 
 function runBun(arguments_: readonly string[]): void {
@@ -106,11 +94,6 @@ function macCodesign(outputPath: string, identity: string, manifest: PackagedPro
   if (existsSync(maintenanceApp)) sign(maintenanceApp);
   const workspaceFiles = join(outputPath, "helpers", "tela-workspace-files");
   if (existsSync(workspaceFiles)) sign(workspaceFiles);
-  const nativeEngine = join(outputPath, "native-engine", "codex");
-  if (existsSync(nativeEngine)) {
-    sign(nativeEngine);
-    sign(join(outputPath, "native-engine", "codex-code-mode-host"));
-  }
   sign(join(outputPath, "electron", "Electron.app"), ["--deep"]);
 }
 
@@ -122,13 +105,6 @@ async function main(): Promise<void> {
   const appOptions = macApp ? { buildVersion: requiredOption("--build-number"), feedURL: requiredOption("--update-feed-url"), publicKey: requiredOption("--update-public-key") } : undefined;
   const macCodesignIdentity = macApp ? option("--mac-codesign-identity") ?? "-" : undefined;
   const workspaceFilesSourcePath = option("--workspace-files");
-  const nativeEnginePath = option("--native-engine");
-  const nativeEngineMetadataPath = option("--native-engine-metadata");
-  if (Boolean(nativeEnginePath) !== Boolean(nativeEngineMetadataPath)) throw new Error("Native engine requires both --native-engine and --native-engine-metadata");
-  const nativeEngineMetadata = nativeEngineMetadataPath
-    ? parsePackagedNativeEngine(JSON.parse(readFileSync(realRegularFile(nativeEngineMetadataPath, "Native engine metadata"), "utf8")))
-    : undefined;
-
   const electronBundle = electronDistribution();
 
   const temporary = mkdtempSync(join(tmpdir(), "chatgpt-tela-package-build-"));
@@ -156,10 +132,6 @@ async function main(): Promise<void> {
       copyFileSync(join(electronBundle, name), join(notices, name === "LICENSE" ? "Electron.txt" : name));
     }
     if (menuBar) copyFileSync(join(temporary, "Sparkle-LICENSE.txt"), join(notices, "Sparkle.txt"));
-    if (nativeEngineMetadata) {
-      for (const name of ["Codex-LICENSE.txt", "Codex-NOTICE.txt"]) copyFileSync(join(repoRoot, "release/licenses", name), join(notices, name));
-      writeFileSync(join(notices, "Codex-build.txt"), `This is a modified OpenAI Codex build included by ChatGPT Tela.\nVersion: ${nativeEngineMetadata.version}\nUpstream commit: ${nativeEngineMetadata.upstreamCommit}\nTela patch SHA-256: ${nativeEngineMetadata.patchSha256}\nCapabilities: ${nativeEngineMetadata.capabilities.join(", ")}\nUpstream: https://github.com/openai/codex\n`);
-    }
     let built = buildPackagedPayload({
       outputPath,
       noticesSourcePath: notices,
@@ -180,10 +152,6 @@ async function main(): Promise<void> {
       },
       ...(menuBar ? { menuBarSourcePath: menuBar, menuBarFrameworkSourcePath: join(temporary, "Sparkle.framework"), maintenanceUISourcePath: join(temporary, "chatgpt-tela-maintenance") } : {}),
       ...(workspaceFilesSourcePath ? { workspaceFilesSourcePath } : {}),
-      ...(nativeEngineMetadata && nativeEnginePath ? { nativeEngine: {
-        ...nativeEngineMetadata,
-        executableSourcePath: realRegularFile(nativeEnginePath, "Native engine executable"),
-      } } : {}),
       ...(macCodesignIdentity
         ? { finalizeStagedPayload: ({ outputPath: staged, manifest }) => macCodesign(staged, macCodesignIdentity, manifest) }
         : {}),
@@ -202,7 +170,6 @@ async function main(): Promise<void> {
       launcher: built.manifest.launcher,
       profileRuntime: built.manifest.profileRuntime,
       menuBar: built.manifest.menuBar,
-      nativeEngine: built.manifest.nativeEngine,
       workspaceFiles: built.manifest.workspaceFiles,
     }, null, 2));
   } finally {
