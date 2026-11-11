@@ -8,7 +8,7 @@ import { appOwnedProviderSelectionFromConfig, startCodexService } from "./contro
 import { startCodexServiceHttpServer } from "./http-server";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "../../product-lifecycle/src/index";
 import { appOwnedDesktopCatalogPath, readPreparedAppOwnedDesktopCatalog } from "../../development-runtime/src/app-owned-desktop-catalog";
-import { editOfficialCodexProviderFile, TELA_APP_OWNED_PROVIDER_ID } from "@chatgpt-tela/default-desktop-target";
+import { editOfficialCodexProviderFile, TELA_DEFAULT_DESKTOP_PROVIDER_ID } from "@chatgpt-tela/default-desktop-target";
 import { writeServiceRuntimeDescriptor } from "../../service-protocol/src/index";
 import { CodexServiceClient } from "../../service-protocol/src/client";
 import { ownedServiceShutdown } from "../../../apps/packaged-launcher/src/service-shutdown";
@@ -110,7 +110,7 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     await expect(update.prepare("codex")).rejects.toThrow();
     await expect(update.wait("codex")).rejects.toThrow();
     await expect(service.waitForShutdownReadiness()).rejects.toThrow();
-    await expect(service.stopProfile(1)).rejects.toThrow("may still be using the selected Tela provider");
+    await expect(service.stopProfile(1)).rejects.toThrow("may still be using the Tela route");
     providerSelection = "unselected";
     writeFileSync(state, JSON.stringify({ busy: false, desktopRunning: false }));
     expect(await service.shutdownReadiness()).toBe("ready");
@@ -157,6 +157,10 @@ test("provider selection parser distinguishes independent, selected and ambiguou
   expect(appOwnedProviderSelectionFromConfig('profiles = []\n')).toBe("unknown");
   expect(appOwnedProviderSelectionFromConfig('model_provider = [\n')).toBe("unknown");
   expect(appOwnedProviderSelectionFromConfig(undefined)).toBe("unselected");
+  const url = "http://127.0.0.1:18744/owned/v1";
+  expect(appOwnedProviderSelectionFromConfig(`openai_base_url = "${url}"`, [url])).toBe("selected");
+  expect(appOwnedProviderSelectionFromConfig('openai_base_url = "https://other.example/v1"', [url])).toBe("unselected");
+  expect(appOwnedProviderSelectionFromConfig(`[profiles.work]\nopenai_base_url = "${url}"`, [url])).toBe("unknown");
 });
 
 test("app-owned primary keeps managed optional profiles in the inventory", async () => {
@@ -619,10 +623,9 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       installId: install.installId, baseUrl: endpoint.slice(0, -1), catalogPath: catalogFile, result: "detailed" }))
       .toMatchObject({ changed: true, catalogStatus: "installed" });
     expect(readFileSync(configPath, "utf8")).toContain(originalConfig);
-    // This explicit selection is a separate user action; registration preserves
-    // the existing Native provider choice until this point.
+    // The user chooses a Web model; the built-in provider identity is unchanged.
     writeFileSync(configPath, readFileSync(configPath, "utf8")
-      .replace(originalConfig, `model = ${JSON.stringify(webModel)}\nmodel_provider = ${JSON.stringify(TELA_APP_OWNED_PROVIDER_ID)}\n`));
+      .replace(originalConfig, `model = ${JSON.stringify(webModel)}\nmodel_provider = ${JSON.stringify(TELA_DEFAULT_DESKTOP_PROVIDER_ID)}\n`));
     engine = Bun.spawn([officialEngine!, "app-server", "--stdio"], {
       cwd: root, env: { PATH: process.env.PATH!, HOME: root, CODEX_HOME: home,
         OPENAI_API_KEY: "isolated-fixture-only", TMPDIR: root },
@@ -670,12 +673,10 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       engine.stdin.write(JSON.stringify({ method: "initialized" }) + "\n");
       const catalog = await rpc("model/list", { includeHidden: true });
       const effective = await rpc("config/read", { includeLayers: true });
-      expect(effective.config).toMatchObject({ model_provider: TELA_APP_OWNED_PROVIDER_ID, model_catalog_json: catalogFile });
-      expect(effective.config.model_providers[TELA_APP_OWNED_PROVIDER_ID]).toMatchObject({
-        base_url: endpoint.slice(0, -1),
-      });
+      expect(effective.config).toMatchObject({ model_provider: TELA_DEFAULT_DESKTOP_PROVIDER_ID, model_catalog_json: catalogFile });
+      expect(effective.config.openai_base_url).toBe(endpoint.slice(0, -1));
       expect(catalog.data.map((entry: any) => entry.model)).toEqual(expect.arrayContaining([webModel, nativeModel]));
-      const thread = await rpc("thread/start", { model: webModel, modelProvider: TELA_APP_OWNED_PROVIDER_ID,
+      const thread = await rpc("thread/start", { model: webModel, modelProvider: TELA_DEFAULT_DESKTOP_PROVIDER_ID,
         cwd: root, approvalPolicy: "never", sandbox: "danger-full-access", historyMode: "paginated",
         ephemeral: false, baseInstructions: "Run only the isolated fixture tasks." });
       const threadId = thread.thread.id;
@@ -684,6 +685,9 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       expect((await notification("turn/completed")).params.turn.status).toBe("completed");
       expect(webRequests).toHaveLength(1);
       expect(nativeRequests).toHaveLength(0);
+      const resumedForNative = await rpc("thread/resume", { threadId });
+      expect(resumedForNative.thread.id).toBe(threadId);
+      expect(resumedForNative.thread.modelProvider).toBe("openai");
       await rpc("turn/start", { threadId, model: nativeModel, effort: "medium",
         input: [{ type: "text", text: "Execute the original Native fixture tool." }] });
       const nativeCompletion = await notification("turn/completed");
@@ -712,7 +716,7 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       await reading;
     }
     writeFileSync(configPath, readFileSync(configPath, "utf8").replace(
-      `model = ${JSON.stringify(webModel)}\nmodel_provider = ${JSON.stringify(TELA_APP_OWNED_PROVIDER_ID)}\n`, originalConfig));
+      `model = ${JSON.stringify(webModel)}\nmodel_provider = ${JSON.stringify(TELA_DEFAULT_DESKTOP_PROVIDER_ID)}\n`, originalConfig));
     expect(editOfficialCodexProviderFile({ configPath, action: "restore", mode: "apply",
       installId: install.installId, baseUrl: endpoint.slice(0, -1), catalogPath: catalogFile, result: "detailed" }))
       .toMatchObject({ changed: true, catalogStatus: "removed" });

@@ -135,8 +135,11 @@ function restoreOwnedDesktopProviderForSlot(input: ProductUninstallOptions, path
   const selectedByUser = () => {
     if (!existsSync(configPath)) return false;
     const parsed = Bun.TOML.parse(readFileSync(configPath, "utf8")) as Record<string, any>;
-    return parsed.model_provider === "chatgpt_tela_local"
-      || Object.values(parsed.profiles ?? {}).some((profile: any) => profile?.model_provider === "chatgpt_tela_local");
+    return (registered && parsed.openai_base_url === `http://127.0.0.1:${registered.port}/${registered.capability}/v1`)
+      || (!registered && readFileSync(configPath, "utf8").includes(`# ChatGPT Tela route begin: ${installId}`))
+      || parsed.model_provider === "chatgpt_tela_local"
+      || Object.values(parsed.profiles ?? {}).some((profile: any) => profile?.model_provider === "chatgpt_tela_local"
+        || registered && profile?.openai_base_url === `http://127.0.0.1:${registered.port}/${registered.capability}/v1`);
   };
   try {
     const withoutOwnedRoute = () => {
@@ -144,7 +147,7 @@ function restoreOwnedDesktopProviderForSlot(input: ProductUninstallOptions, path
       // is still an uninstall dependency, but its URL cannot be re-proven.
       if (existsSync(configPath) && lstatSync(configPath).isFile()
         && !lstatSync(configPath).isSymbolicLink()
-        && readFileSync(configPath, "utf8").includes(`# ChatGPT Tela provider begin: ${installId}`)) {
+        && ["provider", "route"].some(kind => readFileSync(configPath, "utf8").includes(`# ChatGPT Tela ${kind} begin: ${installId}`))) {
         return { status: "preserved" as const,
           selected: selectedByUser(),
           reason: "Owned Desktop provider marker remains but install-owned Responses configuration is missing" };
@@ -164,7 +167,7 @@ function restoreOwnedDesktopProviderForSlot(input: ProductUninstallOptions, path
       && readOwnershipMarker(catalogResource)?.resourceId === catalogResource.id
       ? join(catalogResource.path, "models.json") : undefined;
     const result = editOfficialCodexProviderFile({
-      configPath, action: "restore", mode: input.mode, restoreSelected: true,
+      configPath, action: "restore", mode: input.mode,
       installId, baseUrl: `http://127.0.0.1:${ingress.port}/${ingress.capability}/v1`,
       ...(catalogPath ? { catalogPath } : {}), result: "detailed",
     });

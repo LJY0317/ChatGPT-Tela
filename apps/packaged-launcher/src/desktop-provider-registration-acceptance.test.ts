@@ -76,25 +76,24 @@ test("cold installed producer -> explicit packaged provider registration -> exac
     expect(parsed.model_catalog_json).toBe(catalogPath);
     expect(parsed.model_provider).toBe("openai");
     expect(parsed.model).toBe("original-model");
-    expect(parsed.model_providers.chatgpt_tela_local.base_url).toBe(`http://127.0.0.1:${providerPort}/${capability}/v1`);
+    expect(parsed.openai_base_url).toBe(`http://127.0.0.1:${providerPort}/${capability}/v1`);
     expect(JSON.parse(readFileSync(catalogPath, "utf8")).models.map((row: { slug: string }) => row.slug))
       .toContain(chatGptWebModelId(family.key));
     if (officialEngine) {
-      // The user explicitly chooses the newly registered provider in this
-      // disposable HOME. Registration itself never changes their selection.
-      writeFileSync(configPath, registered.replace('model_provider = "openai"',
-        'model_provider = "chatgpt_tela_local"'));
       const fixture = join(import.meta.dir, "../../../packages/development-runtime/src/fixtures/standard-engine-tool-roundtrip.ts");
       for (const selectedModel of [chatGptWebModelId(family.key), nativeModel]) {
-        const proof = Bun.spawnSync([process.execPath, fixture, "--engine", officialEngine,
-          "--catalog", catalogPath, "--first-party-auth", "--configured-home", codexHome,
+        const proof = Bun.spawn([process.execPath, fixture, "--engine", officialEngine,
+          "--catalog", catalogPath, "--first-party-auth", "--builtin-provider", "--configured-home", codexHome,
           "--configured-model", selectedModel, "--expected-native-model", nativeModel,
-          "--provider-port", String(providerPort)], { cwd: root, env: { ...engineEnvironment, TMPDIR: tmpdir() } });
-        expect(new TextDecoder().decode(proof.stderr)).toBe("");
-        expect(proof.exitCode).toBe(0);
-        const report = JSON.parse(new TextDecoder().decode(proof.stdout).trim().split("\n").at(-1)!);
+          "--provider-port", String(providerPort)], { cwd: root, env: { ...engineEnvironment, TMPDIR: tmpdir() }, stdout: "pipe", stderr: "pipe" });
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(proof.stdout).text(), new Response(proof.stderr).text(), proof.exited,
+        ]);
+        expect(stderr).toBe("");
+        expect(exitCode).toBe(0);
+        const report = JSON.parse(stdout.trim().split("\n").at(-1)!);
         expect(report).toMatchObject({ productionConfigConsumed: true, nativeModelVisible: true,
-          toolCallIdMatched: true, hostToolResultSeen: 1, finalAnswerAccepted: true });
+          providerId: "openai", threadProvider: "openai", toolCallIdMatched: true, hostToolResultSeen: 1, finalAnswerAccepted: true });
       }
       writeFileSync(configPath, registered);
     }
@@ -105,4 +104,4 @@ test("cold installed producer -> explicit packaged provider registration -> exac
     expect(readFileSync(configPath, "utf8")).toBe(original);
     expect(readFileSync(catalogPath, "utf8")).toContain(nativeModel);
   } finally { rmSync(root, { recursive: true, force: true }); }
-});
+}, 60_000);

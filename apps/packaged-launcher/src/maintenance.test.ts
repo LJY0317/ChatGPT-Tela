@@ -118,8 +118,7 @@ test("maintenance reports a selected modified provider as failed and preserves t
     writeFileSync(configPath, 'model_provider = "openai"\n');
     editOfficialCodexProviderFile({ configPath, action: "register", mode: "apply", installId: owner.installId,
       baseUrl: `http://127.0.0.1:18744/${capability}/v1` });
-    const selected = readFileSync(configPath, "utf8").replace('model_provider = "openai"',
-      'model_provider = "chatgpt_tela_local"').replace('supports_websockets = false', 'supports_websockets = true');
+    const selected = readFileSync(configPath, "utf8").replace("# ChatGPT Tela route end:", "# edited route end:");
     writeFileSync(configPath, selected);
     const review = await runMaintenanceCommand(["maintenance", "review", "uninstall"], options) as any;
     const applied = await runMaintenanceCommand(["maintenance", "apply", "uninstall", "--review-token", review.reviewToken], options) as any;

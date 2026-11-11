@@ -23,7 +23,8 @@ test("isolated official config: dry-run, register, idempotent register, restore 
     expect(editOfficialCodexProviderFile({ ...args, action: "register", mode: "apply" })).toBe(false);
     const added = readFileSync(path, "utf8");
     expect((Bun.TOML.parse(added) as any).model_provider).toBe("openai");
-    expect(added).toContain('[model_providers.chatgpt_tela_local]');
+    expect((Bun.TOML.parse(added) as any).openai_base_url).toBe(args.baseUrl);
+    expect(added).not.toContain('[model_providers.chatgpt_tela_local]');
     expect(lstatSync(path).mode & 0o777).toBe(0o640);
     expect(editOfficialCodexProviderFile({ ...args, action: "restore", mode: "dry-run" })).toBe(true);
     expect(readFileSync(path, "utf8")).toBe(added);

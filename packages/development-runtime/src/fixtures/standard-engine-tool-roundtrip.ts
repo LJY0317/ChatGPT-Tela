@@ -46,7 +46,7 @@ if (firstPartyAuth) writeFileSync(join(home, "auth.json"), JSON.stringify({
   auth_mode: "apikey", OPENAI_API_KEY: "synthetic-fixture-key", tokens: null,
 }));
 const model = configuredModel ?? (firstPartyAuth ? "gpt-6-sol" : chatGptWebModelId(chatGptWebFamilyKey("Official Tool Roundtrip Fixture")));
-const providerId = builtinProvider ? "openai" : firstPartyAuth ? "chatgpt_tela_local" : "fixture";
+const providerId = firstPartyAuth || builtinProvider ? "openai" : "fixture";
 const original = JSON.parse(readFileSync(catalogPath, "utf8")) as { models: Record<string, unknown>[] };
 const template = original.models[0]!;
 assert(template?.slug, "a public model catalog template is required");
@@ -234,7 +234,7 @@ const providerConfig = [
 if (!configuredHome) writeFileSync(join(home, "config.toml"), firstPartyAuth && !builtinProvider
   ? editAppOwnedDesktopProviderConfig(providerConfig, "register", {
     installId: "a7f1e18d-6020-4f0c-9684-c4370a8dd58f",
-    baseUrl: `${server.url}${"a".repeat(48)}/v1`,
+    baseUrl: `${server.url}${"a".repeat(48)}/v1`, catalogPath: modelCatalog,
   }).content
   : providerConfig);
 const child = Bun.spawn([engine, "app-server", "--stdio"], {

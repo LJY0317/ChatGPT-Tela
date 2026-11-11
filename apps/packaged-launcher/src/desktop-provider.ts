@@ -2,7 +2,7 @@ import { join, resolve } from "node:path";
 import {
   editOfficialCodexProviderFile,
   officialCodexConfigPath,
-  TELA_APP_OWNED_PROVIDER_ID,
+  TELA_DEFAULT_DESKTOP_PROVIDER_ID,
 } from "@chatgpt-tela/default-desktop-target";
 import { readProductConfig, writeProductConfig } from "@chatgpt-tela/product-config";
 import { appOwnedDesktopCatalogPath, readPreparedAppOwnedDesktopCatalog } from "@chatgpt-tela/development-runtime/app-owned-desktop-catalog";
@@ -75,8 +75,8 @@ export async function runPackagedDesktopProviderCommand(
     changed: result.changed,
     catalogStatus: result.catalogStatus,
     mode: mode.slice(2),
-    providerId: TELA_APP_OWNED_PROVIDER_ID,
-    selection: `Registration does not change model_provider or the chosen model. Catalog: ${result.catalogStatus}. `
-      + "Select the provider explicitly in user-level Codex settings and normally restart Desktop to apply it.",
+    providerId: TELA_DEFAULT_DESKTOP_PROVIDER_ID,
+    selection: `Built-in openai route ${action === "register" ? "registration" : "restoration"} ${mode === "--apply" ? "applied" : "planned"}. Catalog: ${result.catalogStatus}. `
+      + "Normally restart Desktop to load routing changes. Native requests also require the local Tela service.",
   });
 }

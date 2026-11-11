@@ -7,7 +7,7 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
-import { resolveDefaultDesktopInstallation, TELA_APP_OWNED_PROVIDER_ID } from "@chatgpt-tela/default-desktop-target";
+import { resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 import {
   connectCodexTurnBridge,
   type RemoteTurnBridge,
@@ -64,22 +64,24 @@ export interface CodexServiceConfig {
 export type AppOwnedProviderSelection = "selected" | "unselected" | "unknown";
 
 /** Only the user-level default is authoritative; a named profile may be active independently. */
-export function appOwnedProviderSelectionFromConfig(content: string | undefined): AppOwnedProviderSelection {
+export function appOwnedProviderSelectionFromConfig(content: string | undefined, ownedBaseUrls: readonly string[] = []): AppOwnedProviderSelection {
   if (content === undefined) return "unselected";
   try {
     const config = Bun.TOML.parse(content) as Record<string, unknown>;
-    if (config.model_provider === TELA_APP_OWNED_PROVIDER_ID) return "selected";
+    if (config.model_provider === "chatgpt_tela_local"
+      || (config.model_provider ?? "openai") === "openai" && ownedBaseUrls.includes(String(config.openai_base_url))) return "selected";
     if (config.model_provider !== undefined && typeof config.model_provider !== "string") return "unknown";
     const profiles = config.profiles;
     if (profiles === undefined) return "unselected";
     if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) return "unknown";
     // The official Desktop's active named profile is not exposed by the
-    // process adapter. Only a named profile that selects Tela makes this
-    // effective provider unknown; unrelated named profiles remain independent.
+    // process adapter. Only a named profile that routes through Tela makes this
+    // effective route unknown; unrelated named profiles remain independent.
     for (const profile of Object.values(profiles)) {
       if (!profile || typeof profile !== "object" || Array.isArray(profile)) return "unknown";
       const provider = (profile as Record<string, unknown>).model_provider;
-      if (provider === TELA_APP_OWNED_PROVIDER_ID) return "unknown";
+      if (provider === "chatgpt_tela_local" || (provider ?? config.model_provider ?? "openai") === "openai"
+        && ownedBaseUrls.includes(String((profile as Record<string, unknown>).openai_base_url ?? config.openai_base_url))) return "unknown";
       if (provider !== undefined && typeof provider !== "string") return "unknown";
     }
     return "unselected";
@@ -88,10 +90,10 @@ export function appOwnedProviderSelectionFromConfig(content: string | undefined)
   }
 }
 
-function readAppOwnedProviderSelection(environment?: Readonly<Record<string, string | undefined>>): AppOwnedProviderSelection {
+function readAppOwnedProviderSelection(ownedBaseUrls: readonly string[], environment?: Readonly<Record<string, string | undefined>>): AppOwnedProviderSelection {
   try {
     const installation = resolveDefaultDesktopInstallation(environment ? { environment } : {});
-    return appOwnedProviderSelectionFromConfig(readFileSync(join(installation.codexHome, "config.toml"), "utf8"));
+    return appOwnedProviderSelectionFromConfig(readFileSync(join(installation.codexHome, "config.toml"), "utf8"), ownedBaseUrls);
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT" ? "unselected" : "unknown";
   }
@@ -410,7 +412,8 @@ export async function startCodexService(input: {
       multiProfile: new MultiProfileNativeTargetAdapter({ launcherCli: input.config.multiProfile.launcherCli }),
     } : {}),
   });
-  const providerSelection = input.appOwnedProviderSelection ?? (() => readAppOwnedProviderSelection(input.environment));
+  const providerSelection = input.appOwnedProviderSelection ?? (() => readAppOwnedProviderSelection((input.config.appOwnedResponses ?? []).map(route =>
+    `http://127.0.0.1:${route.port}/${route.capability}/v1`), input.environment));
   const routedBridge = new RoutedCodexTurnBridge();
   const owned = new Map<number, OwnedProfile>();
   const appOwnedIngress = (slot: number) => input.config.appOwnedResponses?.find(profile => profile.slot === slot);
@@ -535,7 +538,7 @@ export async function startCodexService(input: {
         ? { targetId: profile.target.id, state: "independent" }
         : await targets.session(profile.target.id);
       if (await appOwnedDesktopBlocksShutdown(profile, undefined, session)) {
-        throw new Error("Official Desktop may still be using the selected Tela provider; finish its Native work before stopping the provider");
+        throw new Error("Official Desktop may still be using the Tela route; finish its Native work before stopping the service");
       }
       const ownsTargetRoute = profile.mode === "managed" && ownsNativeTargetSession(profile.target, session, profile);
       if (ownsTargetRoute && profile.target.adapterKind === "multi-profile") {

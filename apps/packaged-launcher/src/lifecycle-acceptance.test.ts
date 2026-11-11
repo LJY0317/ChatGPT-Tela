@@ -215,7 +215,8 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
       .toMatchObject({ changed: true, selection: expect.stringContaining("Catalog: installed") });
     const registered = readFileSync(codexConfig, "utf8");
     expect(registered).toContain(`model_catalog_json = ${JSON.stringify(catalogFile)}`);
-    expect(registered).toContain("[model_providers.chatgpt_tela_local]");
+    expect(registered).toContain("openai_base_url = ");
+    expect(registered).not.toContain("[model_providers.chatgpt_tela_local]");
     expect(registered).toContain('model = "user-native-model"');
     expect((Bun.TOML.parse(registered) as Record<string, unknown>).model_provider).toBe("openai");
     expect(await runPackagedDesktopProviderCommand(["desktop-provider", "restore", "--dry-run"], providerOptions))
@@ -303,7 +304,7 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     await expect(runPackagedDesktopProviderCommand(["desktop-provider", "register", "--dry-run", "--slot", "2"], providerOptions)).rejects.toThrow("--config-file");
     const selectedProvider = ["desktop-provider", "register", "--apply", "--slot", "2", "--config-file", selectedConfig];
     await runPackagedDesktopProviderCommand(selectedProvider, providerOptions);
-    expect((Bun.TOML.parse(readFileSync(selectedConfig, "utf8")) as any).model_providers.chatgpt_tela_local.base_url)
+    expect((Bun.TOML.parse(readFileSync(selectedConfig, "utf8")) as any).openai_base_url)
       .toBe(`http://127.0.0.1:${selectedRoutes[1].port}/${selectedRoutes[1].capability}/v1`);
     expect(readFileSync(codexConfig, "utf8")).toBe(originalDefaultConfig);
     expect(await runPackagedDesktopProviderCommand(selectedProvider, providerOptions)).toMatchObject({ changed: false });

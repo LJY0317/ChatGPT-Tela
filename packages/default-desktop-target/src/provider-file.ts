@@ -8,7 +8,6 @@ type ProviderFileEdit = AppOwnedProviderRegistration & {
   readonly configPath: string;
   readonly action: "register" | "restore";
   readonly mode: "dry-run" | "apply";
-  readonly restoreSelected?: boolean;
 };
 type DetailedProviderFileEdit = ProviderFileEdit & { readonly result: "detailed" };
 
@@ -29,9 +28,7 @@ export function editOfficialCodexProviderFile(input: ProviderFileEdit & { readon
   const stat = lstatSync(input.configPath);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("official Codex config must be a regular file");
   const current = readFileSync(input.configPath, "utf8");
-  const result = editAppOwnedDesktopProviderConfig(current, input.action, input, {
-    restoreSelected: input.restoreSelected === true,
-  });
+  const result = editAppOwnedDesktopProviderConfig(current, input.action, input);
   if (input.mode === "apply" && result.changed) {
     if (readFileSync(input.configPath, "utf8") !== current || lstatSync(input.configPath).ino !== stat.ino) {
       throw new Error("official Codex config changed while preparing provider registration");

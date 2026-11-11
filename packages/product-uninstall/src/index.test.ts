@@ -78,7 +78,7 @@ for (const slot of [1, 2]) test(`owned Desktop provider ${slot} register, re-reg
     expect(editOfficialCodexProviderFile({ ...registration, action: "register", mode: "apply" })).toBe(true);
     expect(editOfficialCodexProviderFile({ ...registration, action: "register", mode: "apply" })).toBe(false);
     const registered = readFileSync(configPath, "utf8");
-    const selected = registered.replace('model_provider = "openai"', 'model_provider = "chatgpt_tela_local"');
+    const selected = registered;
     writeFileSync(configPath, selected, { mode: 0o640 });
     expect((await runProductUninstall({ mode: "dry-run", ...options })).providerRestore)
       .toMatchObject({ status: "planned" });
@@ -125,7 +125,7 @@ test("uninstall detaches and removes the install-owned startup catalog after res
     }));
     const registration = { configPath, installId, baseUrl: `http://127.0.0.1:18744/${capability}/v1`, catalogPath };
     expect(editOfficialCodexProviderFile({ ...registration, action: "register", mode: "apply" })).toBe(true);
-    const selected = readFileSync(configPath, "utf8").replace('model_provider = "openai"', 'model_provider = "chatgpt_tela_local"');
+    const selected = readFileSync(configPath, "utf8");
     writeFileSync(configPath, selected);
     const dry = await runProductUninstall({ mode: "dry-run", removeData: true, ...fixture.options });
     expect(dry.providerRestore).toMatchObject({ status: "planned", catalogStatus: "removed" });
@@ -170,7 +170,7 @@ test("uninstall preserves a catalog newly referenced by user edits during the re
     }));
     editOfficialCodexProviderFile({ configPath, installId,
       baseUrl: `http://127.0.0.1:18744/${capability}/v1`, catalogPath, action: "register", mode: "apply" });
-    const edited = readFileSync(configPath, "utf8").replace("supports_websockets = false", "supports_websockets = true");
+    const edited = readFileSync(configPath, "utf8").replace(/openai_base_url = "[^"\n]+"/, 'openai_base_url = "https://user.example/v1"');
     let editedAfterPlan = false;
     const paths = { ...fixture.paths, serviceState(service: Parameters<typeof fixture.paths.serviceState>[0]) {
       // The initial provider plan has already read the original config;
@@ -199,7 +199,7 @@ test("uninstall preserves edited external provider and installed resources with 
     const owner = { configPath, installId,
       baseUrl: `http://127.0.0.1:18744/${capability}/v1` };
     editOfficialCodexProviderFile({ ...owner, action: "register", mode: "apply" });
-    writeFileSync(configPath, readFileSync(configPath, "utf8").replace("supports_websockets = false", "supports_websockets = true"));
+    writeFileSync(configPath, readFileSync(configPath, "utf8").replace(/openai_base_url = "[^"\n]+"/, 'openai_base_url = "https://user.example/v1"'));
     mkdirSync(paths.configRoot, { recursive: true });
     writeFileSync(join(paths.configRoot, "product-v1.json"), JSON.stringify({ version: 1,
       publicMcpAbi: "stable", exposure: { kind: "existing-https", publicUrl: "https://example.test/mcp",
