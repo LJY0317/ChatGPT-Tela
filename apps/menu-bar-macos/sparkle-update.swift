@@ -107,7 +107,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
           if let error = failure as NSError?, error.domain == "TelaUpdateBusy", !arguments.contains("--interrupt-work") {
             self.preparationWindow?.orderOut(nil)
             let alert = NSAlert()
-            alert.messageText = "Stop tasks and update?"
+            alert.messageText = "Stop Tela tasks and update?"
             alert.informativeText = error.localizedDescription + " Running tasks will be interrupted. Conversations and saved files are kept."
             alert.addButton(withTitle: "Stop Tasks and Update")
             alert.addButton(withTitle: "Later")
@@ -164,7 +164,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     if let service = value?["blockedService"] as? String,
       let name = ["chat": "Tela Chat", "codex": "Work / Codex", "gateway": "Tela Gateway"][service] {
       throw NSError(domain: "TelaUpdateBusy", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "\(name) has running or unsettled tasks."])
+        userInfo: [NSLocalizedDescriptionKey: "\(name) is not ready for this update. Finish active work and try again; ChatGPT may need to be closed."])
     }
     guard outcome.0 == 0, let value,
       value["ready"] as? Bool == true || value["prepared"] as? Bool == true else {

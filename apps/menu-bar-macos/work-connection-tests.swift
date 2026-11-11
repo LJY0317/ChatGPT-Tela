@@ -118,13 +118,13 @@ precondition(signedOutWeb.connected && signedOutWeb.needsWebSignIn && TelaWebPre
 precondition(signedOutWeb.connectionLabel == "Web sign-in required")
 precondition(!TelaProfilePresentation(profile: signedOutWeb, inventoryError: nil, localProgress: nil).busy)
 var readyWeb = preparingWeb; readyWeb.webState = "ready"; readyWeb.webModelsReady = true
-precondition(readyWeb.connectionLabel == "Connected" && TelaWebPresentation(profile: readyWeb).status == "Not verified" && TelaWebPresentation(profile: readyWeb).buttonTitle == "Verify…")
+precondition(readyWeb.connectionLabel == "Connected" && TelaWebPresentation(profile: readyWeb).status == "Connected" && TelaWebPresentation(profile: readyWeb).menuButtonTitle == nil)
 var observedLogout = readyWeb; observedLogout.webSignIn = "signed-out"
 precondition(TelaWebPresentation(profile: observedLogout).status == "Sign-in required")
-precondition(TelaWebPresentation(profile: observedLogout).buttonTitle == "Sign in…")
+precondition(TelaWebPresentation(profile: observedLogout).menuButtonTitle == "Sign in…")
 var unavailableLogin = readyWeb; unavailableLogin.webSignIn = "unavailable"
-precondition(TelaWebPresentation(profile: unavailableLogin).status == "Not verified")
-precondition(TelaWebPresentation(profile: unavailableLogin).buttonTitle == "Verify…")
+precondition(TelaWebPresentation(profile: unavailableLogin).status == "Connected")
+precondition(TelaWebPresentation(profile: unavailableLogin).menuButtonTitle == nil)
 var restoredLogin = observedLogout; restoredLogin.webSignIn = "signed-in"
 precondition(TelaWebPresentation(profile: restoredLogin).status == "Verified")
 precondition(TelaWebConnectionPresentation(profile: readyWeb, wantedTargets: []).status == "Ready")

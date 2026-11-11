@@ -111,6 +111,8 @@ struct TelaWebPresentation {
   let action: Action
   let buttonTitle: String?
 
+  var menuButtonTitle: String? { ["Connected", "Verified"].contains(status) ? nil : buttonTitle }
+
   init(profile: TelaWorkProfile, account: TelaAccountDisplay? = nil) {
     let result: (String, Action, String?)
     if !profile.connected {
@@ -121,13 +123,14 @@ struct TelaWebPresentation {
       result = ("Checking…", .none, nil)
     } else if profile.needsWebSignIn || profile.webSignIn == "signed-out" || account?.web.state == "signed-out" {
       result = ("Sign-in required", .account, "Sign in…")
-    } else if profile.webSignIn == "unavailable" || account?.web.state == "unavailable" {
-      result = ("Not verified", .account, "Verify…")
     } else if account?.comparison == "different" {
       result = ("Different account", .account, "Manage…")
     } else if profile.webSignIn == "signed-in" || account?.web.state == "signed-in" {
       result = ("Verified", profile.webState == "failed" ? .reconnect : .account,
         profile.webState == "failed" ? "Try again" : "Manage…")
+    } else if profile.webState == "ready" && profile.webModelsReady != false {
+      // Readiness is positive connection evidence; missing account metadata is not a login failure.
+      result = ("Connected", .account, "Manage…")
     } else {
       result = ("Not verified", .account, "Verify…")
     }
