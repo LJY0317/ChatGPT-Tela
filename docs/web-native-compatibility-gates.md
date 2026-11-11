@@ -6,7 +6,13 @@ replaceable Web provider session. This document tracks requirements without
 depending on downstream local patch sets or copying an external runtime.
 
 Official Desktop-owned Native execution + Tela Web Responses is the current
-locally installed architecture. Bounded installed trials accepted Native app
+locally installed architecture. Keep the built-in `openai` provider identity;
+registration owns only the existing `openai_base_url` and model catalog settings.
+Installed build `2026111103` passed real account-backed Web/Tela Chat README reads
+and same-conversation Native `gpt-6.1-sol` command execution on both macOS profiles.
+The retired private-provider candidate is historical, not a setup instruction.
+See [current setup and acceptance](official-desktop-provider.md).
+Bounded installed trials accepted Native app
 enumeration and basic built-in-browser create/read/close. A later same-chat trial
 accepted a Native file read through its original command tool followed by an
 actual Web-model read through Tela Chat. These establish those observed paths,
@@ -87,7 +93,8 @@ visible and that a later provider `/models` failure does not remove the
 already-admitted Native model. It does not prove live official Desktop picker
 refresh within the same running session.
 
-For an eventual installed Desktop acceptance, opt into the app-owned route
+For additional restart/recovery acceptance beyond basic switching, opt into the
+app-owned route
 explicitly on a disposable profile and record the Desktop PID and fixed
 Responses URL before starting. In one disposable thread, select a visible Web
 model and confirm its actual family/effort and completed turn; switch to a
@@ -96,9 +103,9 @@ completed turn. Stop and restart only Tela's app-owned child, verify the
 Desktop PID and provider URL remain unchanged, and collect the exact
 previously unobserved Web operation without another model submission. Confirm
 the account binding, internal MCP unmount on stop, and that the managed path
-remains available. Desktop picker, real account/browser tool effects and the
-installed lifecycle still require owner-observed acceptance; do not change
-the installed default based on the isolated fixture.
+remains available. Basic Desktop picker and account-backed tool effects are accepted above;
+this broader unobserved-result/restart scenario remains separate. Do not infer
+its acceptance from isolated fixtures or the basic switching trial.
 
 Native models using their original tools and Web models using Tela Chat are the
 minimum target. Web-to-original-Native tool execution is a separate capability,
@@ -161,20 +168,20 @@ accepted Web operation. Do not infer these contracts from request IDs.
 The app-owned shutdown controller verifies the child Web activity separately
 from official Desktop Native activity. Its default Desktop adapter observes
 process presence, **not** active Native turns. When the Desktop is running,
-shutdown/stop/update stays blocked if user-level `config.toml` selects the
-Tela provider at the root or might select it through a named profile, or if
-configuration is unreadable/ambiguous. A valid configuration using unrelated
-providers does not block maintenance merely because Desktop is running.
+shutdown/stop/update observes whether user-level `config.toml` routes through
+an owned Tela base URL at the root or a named profile; retired-provider selections
+are recognized only for safe cleanup. Unreadable configuration stays ambiguous.
+The `openai` provider name alone does not mean Tela is selected or block maintenance.
 This selection check does not establish session overrides or the provider
 chosen by an already-running Desktop; it is a conservative maintenance gate,
 not proof of Native idleness. An absent config is treated as unselected.
 
-**GO for a separately opted-in pure-provider installation candidate** means
-the app-owned Responses route can be configured and registered without
-replacing the default Native provider or depending on optional Plura.
+**GO for the opted-in built-in-provider route** means the app-owned Responses
+route can be registered while preserving `openai`, without optional Plura.
 **NO-GO for full Native replacement** remains: original Native history,
-exact Desktop turn activity/cancellation and installed Desktop/account
-acceptance are unproven. Synthetic Web/Goal and official-engine fixtures
+exact Desktop turn activity/cancellation and broader history compatibility
+remain unproven. Basic installed Desktop/account switching is accepted above.
+Synthetic Web/Goal and official-engine fixtures
 do not authorize a live install, provider switch or source migration.
 
 ## Accepted, owned operation

@@ -88,5 +88,14 @@ Isolated tests exercise the packaged configuration transaction, per-profile
 separation, uninstall and the official engine's Responses/tool contract while
 keeping the `openai` conversation identity. Synthetic authorization and model
 responses are not real account-backed inference or production Desktop UI
-acceptance. Verify actual Web model selection, existing OpenAI conversation resume
-and return to Native tools in the current Desktop before consumer rollout.
+acceptance by themselves. On macOS, installed build `2026111103` additionally
+passed actual account-backed tests on both profiles: a Web model read the project
+README through Tela Chat, then the same `openai` conversation switched to
+`gpt-6.1-sol` and completed an original Native `pwd` command. Registration,
+installation and these basic model transitions are accepted for this build.
+Do not repeat provider-switching experiments or restore the retired provider to
+continue old chats. Preserve useful old results and transfer unfinished work to
+a supported `openai` conversation. Failures in current supported conversations
+remain defects to investigate, regardless of their age. Arbitrarily long history,
+Web-to-Native tool invocation within one Web turn, other operating systems and
+future Desktop versions are separate verification scopes.

@@ -1,5 +1,7 @@
 {
   "schemaVersion": 1,
+  "status": "historical-superseded; not current installation or provider-selection instructions",
+  "currentContract": "official-desktop-provider.md",
   "candidateBranch": "agent/app-owned-assembly-acceptance-20261107",
   "baseline": "ecdf887b",
   "scope": "Isolated app-owned integration candidate; no consumer installation or provider selection change",
