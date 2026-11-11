@@ -138,6 +138,29 @@ it does **not** constitute acceptance of production Desktop UI selection,
 Web model catalog admission, startup/restart behavior or user permissions.
 The app-owned route must remain opt-in until those are separately verified.
 
+## Keeping the built-in provider identity
+
+A Native model and its provider identity are distinct. A conversation using a
+Native model can still be stored under `chatgpt_tela_local`. Changing the user's
+default back to `openai` does not migrate those conversations; Desktop may refuse
+to resume them with a provider mismatch. Do not rewrite conversation records to
+hide that boundary.
+
+The official `openai_base_url` setting offers a supported routing alternative
+that keeps `model_provider = "openai"`. The existing composite Responses ingress
+can distinguish Native model IDs from Tela Web IDs without a second production
+router. An isolated official 0.167 trial accepted a Tela Web ID, an original host
+command/result roundtrip and a final answer while retaining the `openai` thread
+provider. It used synthetic authorization and no real model or browser, so current
+Desktop Web selection, account-backed Native forwarding and existing-chat resume
+still require live acceptance before consumer registration changes.
+
+This alternative still routes Native inference through the local service; keeping
+the provider ID does not make Native requests independent of Tela availability.
+It also does not migrate earlier `chatgpt_tela_local` conversations. Registration,
+restoration and uninstall must own and restore only their exact base-URL setting,
+without overwriting another router or copying account credentials.
+
 ## Updates and restoration
 
 On macOS, Sparkle owns app download, verification, replacement and relaunch.

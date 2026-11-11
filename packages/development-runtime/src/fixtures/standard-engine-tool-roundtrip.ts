@@ -28,6 +28,7 @@ const mcpDisabled = process.argv.includes("--mcp-disabled");
 const pluginEnabled = process.argv.includes("--plugin-enabled");
 const pluginDisabled = process.argv.includes("--plugin-disabled");
 const firstPartyAuth = process.argv.includes("--first-party-auth");
+const builtinProvider = process.argv.includes("--builtin-provider");
 const pluginFixture = pluginEnabled || pluginDisabled;
 const mcpActive = mcpEnabled || pluginEnabled;
 const mcpConfigured = mcpEnabled || mcpDisabled || pluginFixture;
@@ -45,7 +46,7 @@ if (firstPartyAuth) writeFileSync(join(home, "auth.json"), JSON.stringify({
   auth_mode: "apikey", OPENAI_API_KEY: "synthetic-fixture-key", tokens: null,
 }));
 const model = configuredModel ?? (firstPartyAuth ? "gpt-6-sol" : chatGptWebModelId(chatGptWebFamilyKey("Official Tool Roundtrip Fixture")));
-const providerId = firstPartyAuth ? "chatgpt_tela_local" : "fixture";
+const providerId = builtinProvider ? "openai" : firstPartyAuth ? "chatgpt_tela_local" : "fixture";
 const original = JSON.parse(readFileSync(catalogPath, "utf8")) as { models: Record<string, unknown>[] };
 const template = original.models[0]!;
 assert(template?.slug, "a public model catalog template is required");
@@ -89,6 +90,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: Number(option("--provide
     missingFirstPartyAuth++;
     return Response.json({ error: { message: "Fixture requires synthetic first-party authorization" } }, { status: 401 });
   }
+  if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
   const body = await request.json() as any;
   assert.equal(body.model, model);
   assert.equal(body.stream, true);
@@ -209,9 +211,9 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: Number(option("--provide
 
 const providerConfig = [
   `model = ${JSON.stringify(model)}`, `model_provider = "${providerId}"`,
-  ...(!firstPartyAuth ? [`model_catalog_json = ${JSON.stringify(modelCatalog)}`] : []),
+  ...(!firstPartyAuth || builtinProvider ? [`model_catalog_json = ${JSON.stringify(modelCatalog)}`] : []),
   'model_reasoning_effort = "medium"',
-  ...(!firstPartyAuth ? [
+  ...(builtinProvider ? [`openai_base_url = "${server.url}v1"`] : !firstPartyAuth ? [
     `[model_providers.${providerId}]`, 'name = "OpenAI"', `base_url = "${server.url}v1"`,
     'wire_api = "responses"', 'requires_openai_auth = false',
   ] : []),
@@ -229,7 +231,7 @@ const providerConfig = [
     `enabled = ${pluginEnabled}`,
   ] : []),
 ].join("\n");
-if (!configuredHome) writeFileSync(join(home, "config.toml"), firstPartyAuth
+if (!configuredHome) writeFileSync(join(home, "config.toml"), firstPartyAuth && !builtinProvider
   ? editAppOwnedDesktopProviderConfig(providerConfig, "register", {
     installId: "a7f1e18d-6020-4f0c-9684-c4370a8dd58f",
     baseUrl: `${server.url}${"a".repeat(48)}/v1`,
@@ -293,6 +295,7 @@ try {
   const started = await rpc("thread/start", { model, modelProvider: providerId, cwd: root,
     approvalPolicy: "never", sandbox: "danger-full-access", historyMode: "paginated",
     ephemeral: false, baseInstructions: "Execute only the supplied synthetic printf tool call." });
+  assert.equal(started.thread.modelProvider, providerId);
   const launched = await rpc("turn/start", { threadId: started.thread.id, model,
     effort: imageEffort ? "high" : "medium",
     input: imageEffort ? [
@@ -332,7 +335,8 @@ try {
   if (interrupt) assert(providerRequestClosed, "the blocked provider response must close on interrupt");
   if (imageEffort) { assert.equal(imageMatched, 2); assert.equal(effortMatched, 2); }
   const proof = { engineVersion: execFileSync(engine, ["--version"], { encoding: "utf8" }).trim(),
-    publicAppServer: true, syntheticProvider: true, firstPartyAuth, responseUsage: null, requestCount,
+    publicAppServer: true, syntheticProvider: true, firstPartyAuth, providerId,
+    threadProvider: started.thread.modelProvider, builtinProvider, responseUsage: null, requestCount,
     productionConfigConsumed: Boolean(configuredHome), nativeModelVisible: Boolean(expectedNativeModel),
     toolInspection: inspectTools, modelToolMode: defaultToolMode ? null : "direct",
     declaration,
