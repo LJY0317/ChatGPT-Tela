@@ -5,13 +5,14 @@ compaction and final-result provenance must remain independent of the
 replaceable Web provider session. This document tracks requirements without
 depending on downstream local patch sets or copying an external runtime.
 
-Official app-owned engine + Tela Web Responses provider is **conditionally
-adopted**, not accepted as an installed replacement. Isolated official 0.166
-fixtures established catalog seeding, normal tool transport, standard
-compaction-v2 and selected cancellation/image inputs; they do not establish
-Desktop picker refresh, live Web-to-original-Native-tool execution, image/typed
-tool result return, or usage-free automatic compression. `usage: null` stays
-unknown; official `ModelInfo` has no fork-only `compaction_mode` selector.
+Official Desktop-owned Native execution + Tela Web Responses is the current
+locally installed architecture. Bounded installed trials accepted Native app
+enumeration and basic built-in-browser create/read/close. A later same-chat trial
+accepted a Native file read through its original command tool followed by an
+actual Web-model read through Tela Chat. These establish those observed paths,
+not arbitrary Web-to-original-Native-tool execution, all image/typed tool results,
+or usage-free automatic compression. `usage: null` stays unknown; official
+`ModelInfo` has no fork-only `compaction_mode` selector.
 Keep canonical Native authority and one summary/checkpoint source; do not
 recreate a broker, provider-specific engine or retry protocol. See
 `token-efficiency.md` for the existing compaction evidence.
@@ -36,12 +37,10 @@ completed. Native app enumeration succeeded, while browser discovery reported
 an unavailable browser access host. This accepts the model-switch/app-inventory
 path, not browser control or Web invocation of original Native tools.
 
-In that managed-profile observation, the browser service failed before connecting
-because its official host binding was absent. The Native tool process descended
-from the optional launcher's separate backend, not from the Desktop process.
-App enumeration is therefore insufficient to accept Native browser parity.
-Do not copy private host capabilities into another process or weaken peer
-authorization. A supported Desktop-owned integration remains a release gate.
+The earlier browser failure belonged to the retired external managed backend.
+Its missing host binding must not be repaired by copying private capabilities
+or weakening peer authorization. Current browser acceptance uses the official
+Desktop-owned path; advanced interactions remain separate acceptance gates.
 
 ## App-owned provider cutover
 
