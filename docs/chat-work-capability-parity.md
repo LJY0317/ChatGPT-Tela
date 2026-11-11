@@ -7,7 +7,7 @@ result schemas, broker policies, logical checkpoint persistence and matched perf
 
 ## Goal and execution policy
 
-Use Tela Chat first for ordinary repository development. DevSpace is a peer technical option. Use exact-current-turn Native tools when useful. If a chosen tool or provider cannot complete the task, continue the same goal through another available capability. Reliable Native-tool use by Web models remains a product goal, not a prerequisite for productive Chat work.
+Native-model Work/Codex uses only the host's Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or DevSpace. Preserve that routing boundary when diagnosing failures; tool availability alone does not authorize a fallback across it. Reliable Native-tool use by Web models remains a separate product goal, not a prerequisite for productive Chat work.
 
 ## Split semantic work from physical execution
 
@@ -19,7 +19,7 @@ The **physical context** binds a specific owner-approved workspace and checkout 
 
 Describe capabilities by effects and proof, not tool-name equivalence. Example intents are workspace read/patch, command run/observe, Git review, worktree lifecycle, agent delegation, browser observation, file import/export and exact Native tool invocation. Each descriptor declares: runtime-discovered provider/version, read/write/destructive effect class, authority owner and resource scope, argument/result schema, replay semantics, authoritative verification recipe, current maturity and measured cost.
 
-This catalogue advertises available routes. A task may move between Chat and Native capabilities when one route cannot complete it; use the selected capability as documented. Preserve Tela's existing four-function public Gateway ABI and peer-service failure boundaries. Add descriptor fields through versioned compatible Chat capability discovery when implemented, not by hardcoding external models, Native tools or DOM selectors.
+This catalogue describes capabilities, not permission to switch between Chat and Native work tools after a failure. The active execution route determines which work tools may be used. Preserve Tela's existing four-function public Gateway ABI and peer-service failure boundaries. Add descriptor fields through versioned compatible Chat capability discovery when implemented, not by hardcoding external models, Native tools or DOM selectors.
 
 ## Model-aware presentation without model-based privilege
 

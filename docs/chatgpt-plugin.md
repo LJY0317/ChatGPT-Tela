@@ -57,8 +57,9 @@ The stable public MCP surface exposes exactly:
     chatgpt_tela_codex_tool_inventory
     chatgpt_tela_codex_tool_call
 
-The first pair routes ordinary local workspace work to Tela Chat. The second pair is reserved for the exact
-active Native Codex turn and routes only through Tela Codex.
+The first pair routes ordinary Chat and Web-backed workspace work to Tela Chat. Native-model
+Work/Codex uses its host work tools directly, rather than either public MCP pair. The second pair
+requires exact host-granted Native authority; tool availability is not such a grant.
 
 ## Model guidance
 

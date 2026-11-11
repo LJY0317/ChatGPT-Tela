@@ -1,10 +1,10 @@
 # Architecture
 
-## Tela Chat-first dogfooding and work-runtime parity (2026-10-16)
+## Tool routing and work-runtime parity
 
 Material refactors and branch integrations must follow the [selective integration and nonregression review contract](refactoring-guardrails.md). Treat current `main` as the semantic baseline; do not reintroduce obsolete whole-branch trees or parallel ownership/retry paths. Report code growth, tests, lifecycle and context-cost deltas before acceptance.
 
-For ordinary Tela repository development, use Tela Chat from the outset; DevSpace is also available. Exact-turn Native tools remain available for Native-authority tasks, and reliable Web-model Native-tool execution remains a long-term product goal. This changes local operator workflow, not the consumer Work/Codex default or backend authority. Separate technical tool failures from post-acceptance observation failures.
+Native-model Work/Codex uses the host's Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or DevSpace. A tool failure does not authorize crossing this routing boundary. Reliable Web-model execution of original Native tools remains a separate capability goal. See [the current routing policy and its acceptance limits](web-delegation.md). Separate technical tool failures from post-acceptance observation failures.
 
 The target is measured Chat work quality at least comparable to Work/Codex, not equality of tool names. See [the semantic capability and parity contract](chat-work-capability-parity.md): durable logical work record, independently proven physical session/workspace/turn bindings, runtime-discovered semantic capability descriptors with effect/authority/proof/replay semantics, bounded typed result artifacts, event-driven orchestration and matched outcome/resource benchmarks. This is an unimplemented design/acceptance roadmap unless subsequent source/test/installed evidence proves a specific gate. Keep Tela Chat and Tela Codex peer failure/authority domains and the frozen public Gateway schema.
 
