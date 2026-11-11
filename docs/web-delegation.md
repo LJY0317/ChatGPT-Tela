@@ -26,3 +26,16 @@ model self-report. Before applying them, identify every actual local/cloud tool
 source and verify that ordinary Chat and the separate Web worker remain usable.
 Disabling a local MCP server alone does not suppress account-connected app tools;
 do not uninstall or disable an account plugin to approximate this separation.
+
+A bounded Desktop trial applied those host controls to the exact connected app
+IDs and local plugin server. A fresh Native chat reported no DevSpace or local
+Tela work-tool guidance; a separate Web turn still performed the requested local
+file read. An obsolete plugin skill was excluded through plugin activation policy,
+and a fresh official skills listing no longer returned it. These observations
+validate that local setup, not universal enforcement: the Native visibility
+observation is a model report, and existing chat context can retain old tool names.
+
+This host policy is currently local configuration, not an automatic consumer
+installation feature. A consumer integration must resolve the installed sources
+through supported host metadata and preserve independent Chat/Web connections;
+do not ship personal app IDs or infer a model's identity from its own claims.
