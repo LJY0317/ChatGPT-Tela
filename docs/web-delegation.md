@@ -6,13 +6,29 @@ Native task execution, conversation identity, and its conversation lifecycle.
 The former source-only `web-delegate` CLI, managed-job capacity API and automatic
 archive/delete worker have been removed. They depended on an external Native
 terminal that the app-owned architecture does not expose. No replacement
-scheduler or private desktop connection is installed. Automatic delegation and
-conversation cleanup require a supported host contract before they can return.
+scheduler or private desktop connection is installed.
 
-Existing conversations and private request/result journals are not deleted or
-automatically adopted. Use the app's conversation controls to manage them.
-Web responses and tools on the current provider route remain independent of
-this removed management layer.
+Official app-server APIs can inspect stored conversations and archive them through
+`thread/archive`. An explicitly selected, settled conversation can therefore be
+archived without a model call or restoring the retired engine. This is manual
+conversation management, not automatic retention. A separate inspection process's
+`notLoaded` status does not prove that the Desktop has no active work.
+
+Automatic retention needs a maintained creation record tying a Tela-created task
+to its exact host/profile and conversation, plus current activity and result
+settlement from that task's owner. A title, selected Web model, incoming Responses
+thread ID, or obsolete job journal alone does not establish that ownership. Ordinary
+user-created Web conversations must remain outside automatic management. Preserve
+result collection and manual archive/restore decisions separately from task
+execution; do not fabricate collection or archive timestamps from other activity.
+
+The former 24-hour collected-result, 7-day uncollected-result and 30-day archived
+delete policy is not currently scheduled. Restoring it requires the lifecycle
+inputs above; do not restore the old external engine, scan titles to adopt chats,
+or treat successful manual archiving as acceptance of automatic cleanup.
+Existing conversations and private request/result journals are preserved. Use the
+app's conversation controls to manage them. Web responses and tools on the current
+provider route remain independent of this removed management layer.
 
 MCP initialization instructions direct ChatGPT Native-model work to the host's
 Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or
