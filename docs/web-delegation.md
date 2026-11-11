@@ -36,6 +36,11 @@ validate that local setup, not universal enforcement: the Native visibility
 observation is a model report, and existing chat context can retain old tool names.
 
 This host policy is currently local configuration, not an automatic consumer
-installation feature. A consumer integration must resolve the installed sources
-through supported host metadata and preserve independent Chat/Web connections;
-do not ship personal app IDs or infer a model's identity from its own claims.
+installation feature. It filters the host, not an individual selected model;
+Web tool access in the trial used its separate ChatGPT connection. Ordinary
+Chat with a device-local plugin has not been accepted under this policy.
+A consumer integration must resolve the installed sources through supported
+host metadata and preserve independent Chat/Web connections; do not ship
+personal app IDs or infer a model's identity from its own claims. The current
+product config does not record ownership of arbitrary account app identities,
+so provider registration must not automatically disable third-party apps.
