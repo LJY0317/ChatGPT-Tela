@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineNativeTurnAuthority, observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import {
-  AppServerCompactionHistorySource, AppServerNativeHandoffSource,
-  NativeHistoryBootstrapRequired, NATIVE_WEB_HANDOFF_PROMPT,
+  AppServerCompactionHistorySource,
+  NativeHistoryBootstrapRequired,
 } from "@chatgpt-tela/codex";
 import { createHash } from "node:crypto";
 import { FileContextCheckpointCache } from "./context-cache";
@@ -77,7 +77,6 @@ test("foreign turn or thread cannot select retained, current or cached Native-to
   const options = {
     compactionHistory: forbidden,
     compactionAnchor: forbidden,
-    nativeWebHandoff: forbidden,
   };
   const cases = [
     input({ currentTurnId: "foreign-turn",
@@ -116,153 +115,12 @@ test("a proven retained Web page skips every cold Native read and carries exactl
     options: {
       compactionHistory: async () => { calls++; throw Error("Unexpected historical download"); },
       compactionAnchor: async () => { calls++; throw Error("Unexpected anchor read"); },
-      nativeWebHandoff: async () => { calls++; throw Error("Unexpected Native model handoff"); },
     },
   }));
   expect(out.mode).toBe("retained");
   expect(out.checkpointReused).toBe(true);
   expect(out.visibleHistory).toBe("Existing source-bound Web history");
   expect(calls).toBe(0);
-});
-
-test("first cold recovery accepts the exact user-owned handoff before any heavy Legacy page", async () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-continuity-handoff-"));
-  try {
-    let anchors = 0, sources = 0, summaries = 0;
-    const out = await resolveNativeContextContinuity(input({
-      options: {
-        historyCheckpointCache: new FileContextCheckpointCache({ directory: root }),
-        compactionHistory: async () => { sources++; throw Error("73MB read forbidden"); },
-        compactionAnchor: async () => { anchors++; throw new NativeHistoryBootstrapRequired(); },
-        nativeWebHandoff: async () => { summaries++; return {
-          threadId: "task-1", currentTurnId: "web-current",
-          handoffTurnId: "owned-native-summary-turn", handoffItemId: "final",
-          answerDigest: "a".repeat(64),
-          summary: "Small read-only Native task summary",
-          limitations: "Older command outputs remain unverified",
-        }; },
-        verifyNativeWebHandoff: async () => ({
-          threadId: "task-1", currentTurnId: "web-current",
-          handoffTurnId: "owned-native-summary-turn", handoffItemId: "final",
-          answerDigest: "a".repeat(64),
-          summary: "Small read-only Native task summary",
-          limitations: "Older command outputs remain unverified",
-        }),
-      },
-    }));
-    expect(out.mode).toBe("explicit-handoff");
-    expect(out.visibleHistory).toContain("Older command outputs remain unverified");
-    expect(summaries).toBe(1);
-    expect(anchors).toBe(0);
-    expect(sources).toBe(0);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
-test("a fresh Native final-answer handoff must be reverified before Web use or cache write", async () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-handoff-current-source-proof-"));
-  try {
-    const cache = new FileContextCheckpointCache({ directory: root });
-    const handoff = {
-      threadId: "task-1", currentTurnId: "web-current",
-      handoffTurnId: "native-summary", handoffItemId: "final-item",
-      answerDigest: "b".repeat(64), summary: "Native summary requires revalidation",
-      limitations: "Original tool evidence has not been re-read",
-    };
-    let reads = 0;
-    // Null denotes a missing verifier; undefined denotes a verifier that
-    // could not find the source. Both must reject rather than accepting a
-    // provider-supplied summary without an exact public Native source.
-    const scenarios = [
-      null,
-      undefined,
-      { ...handoff, threadId: "different-thread" },
-      { ...handoff, currentTurnId: "different-turn" },
-      { ...handoff, handoffItemId: "different-item" },
-      { ...handoff, answerDigest: "c".repeat(64) },
-      { ...handoff, summary: "Different unverified summary" },
-      { ...handoff, limitations: "Changed evidence limits" },
-    ];
-    for (const verified of scenarios) {
-      await expect(resolveNativeContextContinuity(input({
-        options: {
-          historyCheckpointCache: cache,
-          nativeWebHandoff: async () => { reads++; return handoff; },
-          ...(verified === null ? {} : {
-            verifyNativeWebHandoff: async () => verified,
-          }),
-          compactionHistory: async () => { throw Error("No unbounded history read"); },
-        },
-      }))).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
-      expect(await cache.list("task-1")).toHaveLength(0);
-    }
-    expect(reads).toBe(scenarios.length);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
-test("Paginated public Native handoff is re-proven before a cold Web checkpoint is admitted", async () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-public-manual-proof-"));
-  try {
-    const methods: Array<{ method: string; params: Record<string, unknown> }> = [];
-    let closed = 0;
-    const answer = JSON.stringify({
-      type: "tela_native_web_handoff_v1",
-      summary: "Bounded verified summary of the preceding Native work",
-      limitations: "Historical tool evidence is not reconstructed",
-    });
-    const rpc = {
-      async request(method: string, params: Record<string, unknown>) {
-        methods.push({ method, params });
-        if (method === "thread/read") {
-          if (params.includeTurns !== false) throw Error("Unbounded history read forbidden");
-          return { thread: { id: "task-1", historyMode: "paginated",
-            status: { type: "active" } } };
-        }
-        if (method === "thread/turns/list") {
-          if (params.itemsView === "notLoaded" && params.limit === 1) {
-            return { data: [
-              { id: "web-current", status: "inProgress",
-                itemsView: "notLoaded", items: [] },
-            ], nextCursor: null };
-          }
-          if (params.itemsView !== "summary" || Number(params.limit) > 8) {
-            throw Error("Only bounded public summaries are permitted");
-          }
-          return { data: [
-            { id: "web-current", status: "inProgress", itemsView: "summary", items: [] },
-            { id: "native-summary", status: "completed", itemsView: "summary", items: [
-              { id: "native-request", type: "userMessage",
-                content: [{ type: "text", text: NATIVE_WEB_HANDOFF_PROMPT }] },
-              { id: "native-final", type: "agentMessage",
-                phase: "finalAnswer", text: answer },
-            ] },
-          ], nextCursor: null };
-        }
-        throw Error("No Native fork, tools, or model execution permitted");
-      },
-      async close() { closed++; },
-    };
-    const provider = new AppServerNativeHandoffSource(async () => rpc);
-    const cache = new FileContextCheckpointCache({ directory: root });
-    const result = await resolveNativeContextContinuity(input({
-      options: {
-        historyCheckpointCache: cache,
-        nativeWebHandoff: (thread, turn, signal) => provider.latest(thread, turn, signal),
-        verifyNativeWebHandoff: (thread, turn, sourceTurn, digest, signal) =>
-          provider.verifyRecent(thread, turn, sourceTurn, digest, signal),
-        compactionHistory: async () => { throw Error("Legacy replay forbidden"); },
-      },
-    }));
-    expect(result.mode).toBe("explicit-handoff");
-    expect(result.visibleHistory).toContain("Bounded verified summary");
-    expect(await cache.list("task-1")).toHaveLength(1);
-    expect(methods.map(entry => entry.method)).toEqual([
-      "thread/read", "thread/turns/list", "thread/read",
-      "thread/turns/list",
-      "thread/read", "thread/turns/list", "thread/read",
-      "thread/turns/list",
-    ]);
-    expect(closed).toBe(2);
-  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("a full source gets one verified checkpoint, then a restart retrieves it without replay", async () => {
@@ -314,59 +172,6 @@ test("an opaque compaction without an authenticated historical provider is never
    .rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
  expect(nativeOpaqueCompaction({input:[{type:'compaction',encrypted_content:'opaque'}]}).count)
    .toBe(1);
-});
-
-test("real public-adapter wiring refuses a cold Legacy handoff before any hidden paging or model call", async () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-legacy-integration-fixture-"));
-  try {
-    const calls: string[] = [];
-    let closed = 0;
-    const connect = async () => ({
-      async request(method: string, params: unknown) {
-        calls.push(method);
-        if (method !== "thread/read"
-          || (params as { includeTurns?: boolean }).includeTurns !== false) {
-          throw Error("No Legacy pagination, fork or secondary model call is permitted");
-        }
-        return { thread: {
-          id: "task-1", status: { type: "active" }, historyMode: "legacy",
-        } };
-      },
-      async close() { closed++; },
-    });
-    const publicHistory = new AppServerCompactionHistorySource(connect);
-    const publicHandoff = new AppServerNativeHandoffSource(connect);
-    await expect(resolveNativeContextContinuity(input({
-      options: {
-        historyCheckpointCache: new FileContextCheckpointCache({ directory: root }),
-        compactionAnchor: (thread, current, signal) =>
-          publicHistory.latestAnchor(thread, current, signal),
-        compactionHistory: (thread, current) => publicHistory.project(thread, current),
-        nativeWebHandoff: (thread, current, signal) =>
-          publicHandoff.latest(thread, current, signal),
-      },
-    }))).rejects.toMatchObject({
-      code: "native_history_bootstrap_required",
-      recoveryReason: "unindexed_history",
-    });
-    expect(calls).toEqual(["thread/read"]);
-    expect(closed).toBe(1);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-test("an explicitly requested Native handoff needs no legacy transcript projector",async()=>{
- const answer={
-   threadId:"task-1",currentTurnId:"web-current",
-   handoffTurnId:"user-approved-native-summary",handoffItemId:"native-final",
-   answerDigest:"1".repeat(64),
-   summary:"Work reached a safe checkpoint without full-history transport",
-   limitations:"Past file and tool evidence requires authorized readback",
- };
- const out=await resolveNativeContextContinuity(input({
-   options:{nativeWebHandoff:async()=>answer,verifyNativeWebHandoff:async()=>answer},
- }));
- expect(out.mode).toBe("explicit-handoff");
- expect(out.visibleHistory).toContain(answer.summary);
- expect(out.visibleHistory).toContain(answer.limitations);
 });
 
 test("source acquisition neither consumes nor resets an earlier preparation budget",async()=>{
@@ -432,8 +237,6 @@ test("oversized indexed source reaches the common planner without an early whole
   try {
     const result = await resolveNativeContextContinuity(input({ effort: "medium", options: {
       historyCheckpointCache: new FileContextCheckpointCache({ directory: join(root, "cache") }),
-      nativeWebHandoff: async () => undefined,
-      verifyNativeWebHandoff: async () => undefined,
       visiblePrefix: { accountNamespace: "fixture", journal: new FileNativeVisiblePrefixStageJournal({
         directory: join(root, "ledger"), initializationPath: join(root, "init"),
       }), read: async () => ({ kind: "native-visible-prefix", threadId: "task-1", currentTurnId: "web-current",
@@ -443,10 +246,8 @@ test("oversized indexed source reaches the common planner without an early whole
     } }));
     expect(result.visibleHistory).toBe(content);
     expect(result.checkpointProduced).toBe(false);
-    expect(rows.find(row => row.stage === "native_history_cache_probed")).toMatchObject({ candidate_count: 0, history_candidate_count: 0 });
-    expect(rows.find(row => row.stage === "native_handoff_cache_probed")).toMatchObject({ outcome: "absent" });
     expect(rows.filter(row => row.stage === "native_context_source_probed").map(row => [row.phase, row.outcome]))
-      .toEqual([["handoff", "absent"], ["visible_prefix", "available"]]);
+      .toEqual([["visible_prefix", "available"]]);
     expect(rows.some(row => row.stage === "native_context_source_rejected")).toBe(false);
     expect(JSON.stringify(rows)).not.toContain("private historical body");
     expect(sends).toBe(0);

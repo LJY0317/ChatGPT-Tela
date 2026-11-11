@@ -1,5 +1,9 @@
 # Official Desktop routing with the built-in OpenAI provider
 
+Installed profiles use only the app-owned Responses runtime. A profile without an
+explicit Responses route must complete the current setup; it cannot fall back to
+the retired external Native engine or its history-handoff runtime.
+
 Tela keeps `model_provider = "openai"`. Its existing composite Responses ingress
 forwards Native model requests to OpenAI and sends Tela Web model requests to the
 browser runtime. The official Desktop continues to own conversations and tool

@@ -19,7 +19,6 @@ export * from "./native-engine";
 export * from "./chat-process-storage";
 export * from "./packaged-launch-admission";
 export * from "./transition-owner";
-export * from "./native-backend-owner";
 export * from "./recovery-artifact";
 export * from "./service-shutdown";
 export * from "./packaged-menu-bar";

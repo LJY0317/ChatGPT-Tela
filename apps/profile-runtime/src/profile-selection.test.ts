@@ -6,7 +6,7 @@ import { loadProductProfileRuntimeConfig } from "@chatgpt-tela/development-runti
 import { parseProductConfig, readProductConfig, writeProductConfig } from "@chatgpt-tela/product-config";
 import { selectAppOwnedProfileIngress } from "./profile-selection";
 
-test("install-owned configuration opts into a stable app-owned endpoint without changing managed defaults", () => {
+test("installed profiles require an app-owned endpoint without an external Native fallback", () => {
   const home = mkdtempSync(join(tmpdir(), "tela-app-owned-config-"));
   const path = join(home, "product-v1.json");
   try {
@@ -25,7 +25,8 @@ test("install-owned configuration opts into a stable app-owned endpoint without 
       exposure: { kind: "existing-https", publicUrl: "https://example.invalid/mcp", localPort: 18743,
         authentication: "none", allowUnauthenticatedPublicEndpoint: true },
     } as const;
-    expect(selectAppOwnedProfileIngress(profile, parseProductConfig(base))).toBeUndefined();
+    expect(() => selectAppOwnedProfileIngress(profile, parseProductConfig(base))).toThrow("Configure the app-owned Responses route");
+    expect(() => selectAppOwnedProfileIngress(profile, undefined)).toThrow("Configure the app-owned Responses route");
     expect(profile.nativeTarget).toEqual({ kind: "default-desktop", targetId: "default" });
     const input = { ...base, appOwnedResponses: [{ slot: 1, port: 18744, capability: "a".repeat(48) }] };
     writeProductConfig(parseProductConfig(input), path);

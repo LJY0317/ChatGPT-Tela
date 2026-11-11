@@ -1,26 +1,35 @@
+import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
+import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
+import {
+  readDefaultDesktopNativeCatalog,
+  resolveDefaultDesktopInstallation,
+} from "@chatgpt-tela/default-desktop-target";
+import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
+import { connectCodexTurnBridge } from "@chatgpt-tela/mcp";
+import {
+  createOwnershipManifest,
+  resolveProductPaths,
+  writeOwnershipManifest,
+} from "@chatgpt-tela/product-lifecycle";
+import { MultiProfileControlClient, type MultiProfileControlRunner } from "@chatgpt-tela/setup";
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
+import {
+  startAppOwnedProfileBridge,
+  startProfileBridgePreviewServer,
+} from "../../../apps/profile-runtime/src/bridge-preview-server";
+import { appOwnedDesktopCatalogPath, publishAppOwnedDesktopCatalog } from "./app-owned-desktop-catalog";
+import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
 import {
   loadProductProfileRuntimeConfig,
   prepareProductWebDiscovery,
   productPublicMcpIdentity,
-  startProductProfileRuntime,
   startAppOwnedProductResponsesRuntime,
 } from "./product-profile";
-import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
-import { MultiProfileControlClient, type MultiProfileControlRunner } from "@chatgpt-tela/setup";
-import { connectCodexTurnBridge } from "@chatgpt-tela/mcp";
-import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
-import { appOwnedDesktopCatalogPath, publishAppOwnedDesktopCatalog } from "./app-owned-desktop-catalog";
-import { readDefaultDesktopNativeCatalog, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
-import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
-import { startAppOwnedProfileBridge, startProfileBridgePreviewServer } from "../../../apps/profile-runtime/src/bridge-preview-server";
 import { startDevelopmentRuntime } from "./runtime";
-import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
 
 function common(root: string): Record<string, string> {
   return {
@@ -59,9 +68,6 @@ describe("product profile native-target selection", () => {
       expect(loadProductProfileRuntimeConfig({
         ...common(root), CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT: "2",
       }).acceptanceSavedChat).toBe(false);
-      await expect(startProductProfileRuntime(loadProductProfileRuntimeConfig({
-        ...common(root), CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT: "1",
-      }))).rejects.toThrow("Native-first runtime");
       for (const value of ["0", "-1", "100", "1,2", "01", "all", "true"]) {
         expect(() => loadProductProfileRuntimeConfig({
           ...common(root), CHATGPT_TELA_ACCEPTANCE_SAVED_CHAT_SLOT: value,

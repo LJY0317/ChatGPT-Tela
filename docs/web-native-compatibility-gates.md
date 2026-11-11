@@ -69,10 +69,8 @@ Cold-start catalog gap: in the same isolated fixture, official 0.167
 `/models` endpoint or expose its Web family. Even fetching that endpoint
 after startup does not refresh the already-running official model list.
 Separately, the official `debug models` command returns the original Native
-catalog in an empty isolated home. The existing managed launch already
-combines that catalog with dynamic Web family discovery and writes a temporary
-`model_catalog_json` before starting the engine
-(`readDefaultDesktopNativeCatalog` and `startDefaultDesktopTargetRuntime`).
+catalog in an empty isolated home through `readDefaultDesktopNativeCatalog`.
+The retired external-engine launcher is not a supported catalog setup path.
 The installed app-owned profile runtime now prepares an installation-owned
 Native+Web catalog after current account-bound discovery, and the packaged
 provider registration editor can explicitly install its owned top-level

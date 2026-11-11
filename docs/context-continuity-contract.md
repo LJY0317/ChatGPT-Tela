@@ -203,19 +203,17 @@ request ID, metadata and revocation gates. A changed socket/owner, ambiguous ACK
 turn revokes it. Readable authenticated current input needs no old-history read; it does not attest
 historical execution or grant replay authority.
 
-Public history/anchor/handoff paging requires proven indexed historyMode=paginated and matching
+Public history/anchor paging requires proven indexed historyMode=paginated and matching
 owner/environment before and after bounded reads. Never use thread/read(includeTurns:true), Legacy
 resume/fork or a small public page size to trigger unbounded server-side reconstruction. Opaque
 Native state cannot become invented plaintext or an allegedly complete suffix. Unindexed Legacy
 history requires supported bounded Native source/continuation; a handoff prompt does not make Legacy
 paging safe. Preserve typed nonretryable HTTP and already-started SSE recovery behavior.
 
-Prefer retained context and completed readable checkpoints, then already-authorized source-verified
-manual handoffs or original-source bootstrap. Manual handoff verification retains the exact completed
-source turn, bounded indexed evidence, expected sole final answer and unacted current-turn gates;
-visible tools/plans/file changes or ambiguous source refuse it. Public summary evidence cannot attest
-that every hidden tool was prohibited. Automatic Native inference forks remain unshipped/denied
-without the separate [execution-provenance contract](native-execution-provenance-gate.md). Do not
+Prefer retained context and completed readable checkpoints from the current supplied input.
+The retired Native handoff prompt, answer verifier and derived handoff cache are not supported
+recovery paths. Omitted history still requires a readable source; a summary cannot establish
+Native execution authority. See [the current continuity boundary](native-web-continuity.md).
 
 Cache loss affects reuse, never authority. Reuse compatible durable completed receipts first. Loss of
 all usable source/checkpoints remains recovery, not guaranteed constant-cost successful cold start.
@@ -253,36 +251,11 @@ polishing/ACK and bounded auxiliary-surface counts. Retain meaning checks for ob
 constraints, decisions, unfinished work and readback refs. These fixtures prove structural/cost gates,
 not lossless model understanding or real-account success.
 
-### Cold original-source recovery versus maintained steady state (2026-10-17 audit)
+### First Native-to-Web transition
 
-The synthetic cold fixture with 411 indexed items and approximately 468,190
-source logical tokens (1,872,757 UTF-8 bytes) required 9 staged summary calls
-and approximately 873,988 combined model-input tokens by the existing
-hierarchical compressor. The default 8-call/791,240-input preparation budget
-refused it **before any model send** (0 new calls). This is distinct from the
-bounded, post-initialization rolling lifecycle and must not be reported as a
-successful cold recovery. The historical 461,623/490,590-token incident remains
-unproven without verified original source and current Native authority.
-
-A compatible completed stage/working checkpoint costs 0 new summarization
-calls. Otherwise, for a **verified paginated Native thread**, the owner may
-request the exact `NATIVE_WEB_HANDOFF_PROMPT` in a separate normal Native turn,
-receive one bounded final JSON summary with limitations, and choose Web on the
-immediately following turn. See `docs/native-web-continuity.md`. That is one
-user-authorized Native handoff call and one new Web task seed; it is not a
-background Web summary or an automatic fork. Web account charges/semantics
-remain unmeasured. For Legacy/unindexed or missing evidence, this procedure is
-not supported on the Web route: continue the same user goal in Native or
-another available tool. If Web continuation is still needed, provide a newly
-supported verified source; retrying the same unsupported Web preparation does
-not change its source requirements.
-
-A model-call budget refusal for **optional maintained checkpoint work** now
-defers that work when a physically owned retained Web page already admits its
-proven exact delta. A pending/uncertain send, changed owner, source mismatch or
-hard capacity refusal is never downgraded to optional maintenance. Journal
-publication retains a last published head for every known active account/task/
-route scope within the existing fixed 32-entry capacity; an additional distinct
-scope refuses publication rather than silently evicting another task's sole
-recovery pointer. Previously completed stage claims remain subject to the
-unchanged execution journal retention/reconciliation rules.
+Use the same supplied-input and retained-session rules described in
+[native-web-continuity.md](native-web-continuity.md). Do not restore the retired
+Native handoff runtime or hierarchical fragment/merge compressor to revive an
+old conversation. Normal long conversations remain supported work; when their
+readable context is unavailable, report that limit without sending an automatic
+Native fallback or treating a partial summary as complete history.

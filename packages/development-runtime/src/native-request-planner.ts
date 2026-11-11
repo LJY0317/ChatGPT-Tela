@@ -1139,13 +1139,12 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       preparationBudget,
       ...(preparation ? { preparation } : {}),
     }) : { mode: "current-input", inlineHistoryAssets: [], checkpointReused: false,
-      checkpointProduced: false, manualHandoff: false };
+      checkpointProduced: false };
     const visibleHistory = continuity.visibleHistory;
     const inlineHistoryAssets = continuity.inlineHistoryAssets;
     const historyReferences = continuity.historyReferences;
     const historyCheckpointReused = continuity.checkpointReused;
     const historyCheckpointProduced = continuity.checkpointProduced;
-    const historyManualHandoff = continuity.manualHandoff;
     stage("logical_projection");
     const projection = continuity.mode === "retained" && provenRetainedProjection
       ? provenRetainedProjection
@@ -1156,7 +1155,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // Only a dedicated producer can reduce a fresh canonical prefix. Reuse the calibrated Web
     // transport budget; Native context limits and canonical history remain untouched.
     const hotCandidate = opaqueFingerprint && visibleHistory
-      && (historyCheckpointReused || historyCheckpointProduced || historyManualHandoff
+      && (historyCheckpointReused || historyCheckpointProduced
         || continuity.mode === "visible-prefix")
       ? Object.freeze({ opaqueFingerprint, history: { visibleHistory, inlineHistoryAssets,
         ...(historyReferences ? { historyReferences } : {}) } }) : undefined;
@@ -1240,7 +1239,6 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
           retained_input_head_fingerprint: diagnosticFingerprint(committed.inputHeadRevisionId),
           history_checkpoint_reused: historyCheckpointReused,
           history_checkpoint_produced: historyCheckpointProduced,
-          history_manual_handoff: historyManualHandoff,
           continuity_source: continuity.mode,
           ...(pressure ? {
             epoch_input_estimate: pressure.estimatedEpochInputTokens,
@@ -1514,7 +1512,6 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         visible_compaction_history: visibleHistory !== undefined,
         history_checkpoint_reused: historyCheckpointReused,
         history_checkpoint_produced: historyCheckpointProduced,
-        history_manual_handoff: historyManualHandoff,
         continuity_source: continuity.mode,
         retained_delta: false,
         request_checkpoint_reused: requestCheckpointFromCache && physicalContext.segments.some(s => s.type === "checkpoint"),

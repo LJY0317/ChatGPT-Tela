@@ -8,7 +8,6 @@ import {
   type NativeCompactionHistoryProjection,
   type NativeHistoricalImageCandidate,
   type NativeReadableHistoryAnchor,
-  type NativeWebHandoff,
   type NativeVisibleHistorySnapshot,
 } from "@chatgpt-tela/codex";
 import type {
@@ -20,7 +19,6 @@ import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { chatGptWebCheckpointSourceTokenLimit, type ChatGptWebEffort } from "@chatgpt-tela/chatgpt";
 import type { ContextCheckpointCache } from "./context-cache";
 import { readNativeHistoryCheckpoint, maybeProduceNativeHistoryCheckpoint } from "./native-history-checkpoint";
-import { manualHandoffText, recentManualHandoff, storeManualHandoff } from "./native-manual-handoff-cache";
 import type { NativeRequestCheckpointProducer } from "./native-request-planner";
 import type { NativeVisiblePrefixStageJournal } from "./native-visible-prefix-checkpoint";
 
@@ -44,20 +42,14 @@ export interface NativeContinuitySources {
   readonly compactionHistory?: (threadId: string, turnId: string) => Promise<NativeHistorySource>;
   readonly compactionAnchor?: (threadId: string, turnId: string, signal?: AbortSignal) =>
     Promise<NativeReadableHistoryAnchor>;
-  readonly nativeWebHandoff?: (threadId: string, turnId: string, signal?: AbortSignal) =>
-    Promise<NativeWebHandoff | undefined>;
-  readonly verifyNativeWebHandoff?: (
-    threadId: string, currentTurnId: string, handoffTurnId: string,
-    answerDigest: string, signal?: AbortSignal,
-  ) => Promise<NativeWebHandoff | undefined>;
   readonly historyCheckpointCache?: ContextCheckpointCache;
   readonly checkpointProducer?: NativeRequestCheckpointProducer;
 }
 
 /** This is provider-facing context provenance, NOT Native task/permission authority. */
 export type NativeContinuityMode =
-  | "current-input" | "retained" | "readable-checkpoint" | "cached-handoff"
-  | "explicit-handoff" | "bounded-source" | "produced-checkpoint"
+  | "current-input" | "retained" | "readable-checkpoint"
+  | "bounded-source" | "produced-checkpoint"
   | "visible-prefix";
 
 export interface NativeContinuityDecision {
@@ -67,7 +59,6 @@ export interface NativeContinuityDecision {
   readonly historyReferences?: readonly NativeEvidenceReference[];
   readonly checkpointReused: boolean;
   readonly checkpointProduced: boolean;
-  readonly manualHandoff: boolean;
 }
 
 export type NativeRetainedHistory = Pick<NativeContinuityDecision,
@@ -105,17 +96,15 @@ function resolved(mode: NativeContinuityMode, visibleHistory?: string,
     ...(visibleHistory !== undefined ? { visibleHistory } : {}),
     inlineHistoryAssets,
     ...(historyReferences !== undefined ? { historyReferences } : {}),
-    checkpointReused: mode === "retained" || mode === "readable-checkpoint"
-      || mode === "cached-handoff",
+    checkpointReused: mode === "retained" || mode === "readable-checkpoint",
     checkpointProduced: mode === "produced-checkpoint",
-    manualHandoff: mode === "explicit-handoff",
   });
 }
 
 /**
  * One cold/hot continuity decision for a Native-owned turn. The order is
- * deliberate: proven retained Web state, verified source checkpoint, explicit
- * user handoff, finally indexed Native-visible history with explicit unread originals when readback exists. Unavailable
+ * deliberate: proven retained Web state, verified source checkpoint, then
+ * indexed Native-visible history with explicit unread originals when readback exists. Unavailable
  * original evidence is never silently converted to a complete history.
  *
  * Local readable `context_compaction + user summary` is already on the Native
@@ -144,7 +133,7 @@ export async function resolveNativeContextContinuity(input: {
   const options = { ...input.options, ...(input.options.checkpointProducer
     ? { checkpointProducer: preparationBudget.producer(input.options.checkpointProducer) } : {}) };
   const signal = preparation?.signal;
-  const probe = async <T>(phase: "anchor" | "handoff" | "handoff_verification" | "history" | "visible_prefix", read: () => Promise<T>): Promise<T> => {
+  const probe = async <T>(phase: "anchor" | "history" | "visible_prefix", read: () => Promise<T>): Promise<T> => {
     try {
       const result = await read();
       emitDiagnosticEvent("chatgpt_tela_codex", "native_context_source_probed", {
@@ -184,98 +173,14 @@ export async function resolveNativeContextContinuity(input: {
     input.retainedHistory.inlineHistoryAssets, input.retainedHistory.historyReferences);
 
   const cache = options.historyCheckpointCache;
-  const fingerprint = opaque.fingerprint;
   emitDiagnosticEvent("chatgpt_tela_codex", "native_context_recovery_sources", {
-    cache_available: !!cache, handoff_available: !!options.nativeWebHandoff,
-    verifier_available: !!options.verifyNativeWebHandoff,
+    cache_available: !!cache,
     visible_prefix_available: !!options.visiblePrefix,
     anchor_available: !!options.compactionAnchor, history_available: !!options.compactionHistory,
   });
-  let manualAttempted = false;
-  const manual = async (): Promise<NativeContinuityDecision | undefined> => {
-    if (manualAttempted) return undefined;
-    manualAttempted = true;
-    if (fingerprint && cache && options.verifyNativeWebHandoff) {
-      const hint = await recentManualHandoff(cache, threadId, fingerprint);
-      emitDiagnosticEvent("chatgpt_tela_codex", "native_handoff_cache_probed", {
-        outcome: hint ? "candidate" : "absent",
-      });
-      if (hint) {
-        const verified = await options.verifyNativeWebHandoff(
-          threadId, currentTurnId, hint.handoffTurnId, hint.answerDigest, signal,
-        );
-        signal?.throwIfAborted();
-        const matches = !!verified && verified.threadId === threadId
-          && verified.currentTurnId === currentTurnId
-          && verified.handoffTurnId === hint.handoffTurnId
-          && verified.handoffItemId === hint.handoffItemId
-          && verified.answerDigest === hint.answerDigest
-          && verified.summary === hint.summary
-          && verified.limitations === hint.limitations;
-        emitDiagnosticEvent("chatgpt_tela_codex", "native_handoff_cache_verified", {
-          outcome: matches ? "verified" : verified ? "mismatch" : "source_absent",
-        });
-        if (matches) {
-          return resolved("cached-handoff", manualHandoffText(verified));
-        }
-      }
-    }
-    const handoff = await probe("handoff", async () => options.nativeWebHandoff?.(threadId, currentTurnId, signal));
-    if (!handoff) return undefined;
-    if (handoff.threadId !== threadId || handoff.currentTurnId !== currentTurnId
-      || !handoff.handoffTurnId || !handoff.handoffItemId
-      || !/^[a-f0-9]{64}$/.test(handoff.answerDigest)
-      || !handoff.summary.trim() || !handoff.limitations.trim()) {
-      throw new Error("Native manual handoff is not owned by the exact active turn");
-    }
-    signal?.throwIfAborted();
-    // Fresh handoffs are candidates, not current Native source proof.
-    // Recheck the same bounded public final answer independently before
-    // Web can use it or persist any derived checkpoint.
-    if (!options.verifyNativeWebHandoff) {
-      throw new NativeHistoryBootstrapRequired();
-    }
-    const verified = await probe("handoff_verification", () => options.verifyNativeWebHandoff!(
-      threadId, currentTurnId, handoff.handoffTurnId, handoff.answerDigest, signal,
-    ));
-    signal?.throwIfAborted();
-    if (!verified || verified.threadId !== threadId
-      || verified.currentTurnId !== currentTurnId
-      || verified.handoffTurnId !== handoff.handoffTurnId
-      || verified.handoffItemId !== handoff.handoffItemId
-      || verified.answerDigest !== handoff.answerDigest
-      || verified.summary !== handoff.summary
-      || verified.limitations !== handoff.limitations) {
-      throw new NativeHistoryBootstrapRequired();
-    }
-    const text = manualHandoffText(verified);
-    if (cache && fingerprint) {
-      await storeManualHandoff(cache, verified, fingerprint);
-      signal?.throwIfAborted();
-    }
-    return resolved("explicit-handoff", text);
-  };
-
-  // If no original-source checkpoint even has a candidate key, a user-authored
-  // public handoff is cheaper and safer than a giant Legacy full-item probe.
-  if (cache && options.nativeWebHandoff) {
-    const candidates = await cache.list(threadId);
-    const historyCandidates = candidates.filter(candidate => candidate.checkpoint.revisionId
-      .startsWith("native_visible_history_v1_")).length;
-    emitDiagnosticEvent("chatgpt_tela_codex", "native_history_cache_probed", {
-      candidate_count: candidates.length,
-      history_candidate_count: historyCandidates,
-    });
-    if (historyCandidates === 0) {
-      const early = await manual();
-      if (early) return early;
-    }
-  }
   // The installed path uses this explicit source contract. A UI compaction
   // marker is not guaranteed to exist, so it cannot be the bootstrap authority.
   if (options.visiblePrefix) {
-    const handoff = await manual();
-    if (handoff) return handoff;
     const sourceAdapter = options.visiblePrefix;
     const source = await probe("visible_prefix", () => sourceAdapter.read(threadId, currentTurnId, signal, input.historyBodyBudgetBytes));
     if (source.threadId !== threadId || source.currentTurnId !== currentTurnId) {
@@ -305,11 +210,9 @@ export async function resolveNativeContextContinuity(input: {
     const checkpoint = await readNativeHistoryCheckpoint(cache, anchor);
     if (checkpoint) return resolved("readable-checkpoint", checkpoint);
   }
-  const handoff = await manual();
-  if (handoff) return handoff;
   if (anchorLimit) throw anchorLimit;
   if (!options.compactionHistory) {
-    // A verified readable handoff or checkpoint needs no replay provider.
+    // A verified readable checkpoint needs no replay provider.
     // Without either, opaque Native state is not model-visible text.
     throw new NativeHistoryBootstrapRequired();
   }

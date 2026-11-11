@@ -142,8 +142,6 @@ export interface ElectronDevelopmentRuntimeOptions {
   readonly checkpointProvider?: WebContextCheckpointProvider;
   readonly compactionHistory?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["compactionHistory"];
   readonly compactionAnchor?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["compactionAnchor"];
-  readonly nativeWebHandoff?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["nativeWebHandoff"];
-  readonly verifyNativeWebHandoff?: NonNullable<Parameters<typeof createNativeRequestDevelopmentWebTurnPlanner>[0]>["verifyNativeWebHandoff"];
   readonly chatGptUrl?: string;
   readonly responses?: {
     readonly hostname?: string;
@@ -277,8 +275,6 @@ export async function startElectronDevelopmentRuntime(
     ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),
     ...(input.compactionHistory ? { compactionHistory: input.compactionHistory } : {}),
     ...(input.compactionAnchor ? { compactionAnchor: input.compactionAnchor } : {}),
-    ...(input.nativeWebHandoff ? { nativeWebHandoff: input.nativeWebHandoff } : {}),
-    ...(input.verifyNativeWebHandoff ? { verifyNativeWebHandoff: input.verifyNativeWebHandoff } : {}),
     ...(historyCheckpointCache ? { historyCheckpointCache } : {}),
     summarize: async request => {
       const result = await runOwnedContextCheckpoint({
@@ -311,8 +307,6 @@ export async function startElectronDevelopmentRuntime(
       ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),
       ...(input.compactionHistory ? { compactionHistory: input.compactionHistory } : {}),
       ...(input.compactionAnchor ? { compactionAnchor: input.compactionAnchor } : {}),
-      ...(input.nativeWebHandoff ? { nativeWebHandoff: input.nativeWebHandoff } : {}),
-      ...(input.verifyNativeWebHandoff ? { verifyNativeWebHandoff: input.verifyNativeWebHandoff } : {}),
       ...(checkpointCache ? { checkpointCache } : {}),
       ...(historyCheckpointCache ? { historyCheckpointCache } : {}),
       ...(input.context?.budgetTokens !== undefined ? { budgetTokens: input.context.budgetTokens } : {}),

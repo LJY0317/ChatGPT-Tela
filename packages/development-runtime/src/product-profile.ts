@@ -1,35 +1,21 @@
-import { checkpointPreparationPolicy, type CheckpointPreparationPolicy } from "./checkpoint-preparation-budget";
-import { verifyWebModelReadiness } from "./web-model-readiness";
-import { existsSync } from "node:fs";
-import { resolveOwnedNativeEngine, acquireNativeBackendOwnership, type ProductPaths } from "@chatgpt-tela/product-lifecycle";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
-import {
-  connectCodexAppServerWebSocket,
-  countLoadedAppServerActiveTurns,
-  appServerCurrentTurnSource,
-  appServerCompactionHistorySource,
-  type CanonicalCurrentTurnSource,
-} from "@chatgpt-tela/codex";
-import {
-  createDefaultDesktopResponsesRoute,
-  resolveDefaultDesktopInstallation,
-  readDefaultDesktopNativeCatalog,
-  startDefaultDesktopTargetRuntime,
-  TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
-  type DefaultDesktopTargetRuntime,
-} from "@chatgpt-tela/default-desktop-target";
+import { CHATGPT_TEMPORARY_CHAT_URL, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { chatGptWebModelId, CHATGPT_TEMPORARY_CHAT_URL, ChatGptContextCheckpointProvider } from "@chatgpt-tela/chatgpt";
+import {
+  readDefaultDesktopNativeCatalog,
+  resolveDefaultDesktopInstallation,
+  TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
+} from "@chatgpt-tela/default-desktop-target";
 import {
   CHATGPT_TELA_DISPLAY_NAME,
   startCodexBridgeMcpHttpServer,
   type CodexBridgeMcpHttpServer,
 } from "@chatgpt-tela/mcp";
-import { ActiveTurnRegistry } from "@chatgpt-tela/runtime";
-import {
-  MultiProfileControlClient,
-} from "@chatgpt-tela/setup";
+import { type ProductPaths } from "@chatgpt-tela/product-lifecycle";
+import { MultiProfileControlClient } from "@chatgpt-tela/setup";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+import { publishAppOwnedDesktopCatalog } from "./app-owned-desktop-catalog";
 import {
   assertChatGptTelaAccountBinding,
   bindChatGptTelaAccount,
@@ -37,23 +23,15 @@ import {
   resolveChatGptTelaBrowserProfile,
   type ChatGptTelaBrowserProfile,
 } from "./browser-profile";
-import { FileContextCheckpointCache } from "./context-cache";
-import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
+import {
+  checkpointPreparationPolicy,
+  type CheckpointPreparationPolicy,
+} from "./checkpoint-preparation-budget";
+import { createDefaultProfileCompositeProviderRouter } from "./composite-provider-router";
 import { ConnectorProbeState } from "./connector-probe-state";
-import {
-  createDefaultProfileCompositeProviderRouter,
-  type DefaultProfileCompositeProviderRouter,
-} from "./composite-provider-router";
-import {
-  startElectronDevelopmentRuntime,
-  type ElectronDevelopmentRuntime,
-  type ElectronDevelopmentRuntimeOptions,
-} from "./electron";
+import { startElectronDevelopmentRuntime, type ElectronDevelopmentRuntime } from "./electron";
 import type { NativeCodexFetch } from "./native-passthrough";
-import { augmentCodexAppServerModelList } from "./app-server-model-list";
-import { augmentNativeCodexModelCatalog } from "./web-model-catalog";
-import { publishAppOwnedDesktopCatalog } from "./app-owned-desktop-catalog";
-import { handleModelListOverlayRequest, startModelListOverlayServer, type ModelListOverlayServer } from "./model-list-overlay-server";
+import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
 
 export const PRODUCT_RESPONSES_ENV_KEY = "CHATGPT_TELA_PRODUCT_RESPONSES_TOKEN";
 export const PRODUCT_UI_ENV_KEY = "CHATGPT_TELA_PRODUCT_UI_TOKEN";
@@ -100,34 +78,6 @@ export interface ProductProfileRuntimeConfig {
   readonly checkpointPreparationPolicy?: CheckpointPreparationPolicy;
 }
 
-export interface ProductProfileRoutedTarget {
-  readonly target: { readonly id: string };
-  readonly session: {
-    readonly targetId: string;
-    readonly state: string;
-    readonly endpoint: string;
-    readonly responsesRouteFingerprint: string;
-    readonly modelListOverlayFingerprint?: string;
-    readonly desktopProcessId?: number;
-  };
-  readonly currentTurnSource: CanonicalCurrentTurnSource;
-}
-
-export interface ProductProfileRuntime {
-  readonly config: ProductProfileRuntimeConfig;
-  readonly runtime: ElectronDevelopmentRuntime;
-  readonly internalMcp: CodexBridgeMcpHttpServer;
-  readonly routedTarget: ProductProfileRoutedTarget;
-  stop(): Promise<void>;
-}
-
-/**
- * App-owned Responses ingress with an install-owned fixed port and capability.
- * The independent default Desktop keeps its explicit provider configuration;
- * additional managed targets use Plura's public routed-launch and model overlay.
- * Tela never owns or quits those Native/Desktop processes, and rebinding the
- * same callback on restart does not replace their existing Plura session.
- */
 type AccountSurface = Awaited<ReturnType<ElectronDevelopmentRuntime["openProfileSetupSurface"]>>;
 
 export async function startAppOwnedProductResponsesRuntime(input: {
@@ -416,29 +366,6 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   }
 }
 
-class LateBoundCurrentTurnSource implements CanonicalCurrentTurnSource {
-  get readHistoryPage() { return this.#source?.readHistoryPage?.bind(this.#source); }
-  get readHistoryIndex() { return this.#source?.readHistoryIndex?.bind(this.#source); }
-  async watchTurn(threadId: string, turnId: string, signal?: AbortSignal) {
-    if (!this.#source) throw new Error("Native turn source is not bound");
-    if (!this.#source.watchTurn) throw new Error("product Native turn lifecycle is unavailable");
-    const watch = await this.#source.watchTurn(threadId, turnId, signal);
-    if (!watch) throw new Error("product Native turn lifecycle is unavailable");
-    return watch;
-  }
-  #source: CanonicalCurrentTurnSource | undefined;
-
-  bind(source: CanonicalCurrentTurnSource): void {
-    if (this.#source) throw new Error("product current-turn source is already bound");
-    this.#source = source;
-  }
-
-  currentTurn(threadId: string) {
-    if (!this.#source) throw new Error("product current-turn source is not bound yet");
-    return this.#source.currentTurn(threadId);
-  }
-}
-
 function required(env: Readonly<Record<string, string | undefined>>, key: string): string {
   const value = env[key]?.trim();
   if (!value) throw new Error(`product profile runtime requires ${key}`);
@@ -608,238 +535,4 @@ export async function prepareProductWebDiscovery(input: {
   input.stage("fresh_readiness_proof_complete");
   connectorProbeState.clear();
   return { families: proof.families, accountFingerprint: observedAccountFingerprint };
-}
-
-export async function startProductProfileRuntime(
-  config: ProductProfileRuntimeConfig,
-  options: {
-    readonly electron?: ElectronDevelopmentRuntimeOptions["electron"];
-    readonly multiProfileClient?: MultiProfileControlClient;
-    readonly defaultDesktopTargetStarter?: typeof startDefaultDesktopTargetRuntime;
-    readonly defaultDesktopNativeFetch?: NativeCodexFetch;
-    readonly modelFamilyDiscovery?: ElectronDevelopmentRuntimeOptions["modelFamilyDiscovery"];
-    readonly signal?: AbortSignal;
-    readonly onStartupStage?: (stage: string) => void;
-  } = {},
-): Promise<ProductProfileRuntime> {
-  if (config.nativeTarget.kind !== "default-desktop") throw Error("Plura Desktop uses the app-owned Responses provider, not an external Native session");
-  if (config.acceptanceSavedChat) {
-    throw new Error("saved-chat acceptance requires the Native-first runtime's owner-bound account browser");
-  }
-  const startupStage = (
-    stage: string,
-    fields: Readonly<Record<string, string | number | boolean>> = {},
-  ): void => {
-    emitDiagnosticEvent("chatgpt_tela_profile_startup", stage, fields);
-    options.onStartupStage?.(stage);
-  };
-  const publicIdentity = productPublicMcpIdentity(config.publicMcpAbi);
-  const turns = new ActiveTurnRegistry({ routeId: config.routeId });
-  const source = new LateBoundCurrentTurnSource();
-  let runtime: ElectronDevelopmentRuntime | undefined;
-  let internalMcp: CodexBridgeMcpHttpServer | undefined;
-  let routedTarget: ProductProfileRoutedTarget | undefined;
-  let defaultDesktopTarget: DefaultDesktopTargetRuntime | undefined;
-  let modelListOverlay: ModelListOverlayServer | undefined;
-  const nativeEngine = resolveOwnedNativeEngine();
-  let startupFamilies: readonly import("@chatgpt-tela/chatgpt").ChatGptWebModelFamily[] | undefined;
-  const compositeRouter: DefaultProfileCompositeProviderRouter = createDefaultProfileCompositeProviderRouter({
-        runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
-        localCompaction: nativeEngine?.localCompaction === true,
-        ...(options.defaultDesktopNativeFetch ? { fetchUpstream: options.defaultDesktopNativeFetch } : {}),
-        async discoverWebModelFamilies(signal) {
-          if (startupFamilies) {
-            const families = startupFamilies;
-            startupFamilies = undefined;
-            return families;
-          }
-          if (!runtime) throw new Error("Web model discovery ran before the browser runtime was ready");
-          return runtime.discoverChatGptWebModelFamilies(signal);
-        },
-      });
-  const nativePreparationController = new AbortController();
-  const nativePreparationSignal = options.signal
-    ? AbortSignal.any([options.signal, nativePreparationController.signal])
-    : nativePreparationController.signal;
-  let defaultInstallation: ReturnType<typeof resolveDefaultDesktopInstallation> | undefined;
-  let nativeCatalog: Promise<unknown> | undefined;
-  try {
-    if (config.nativeTarget.kind === "default-desktop") {
-      const officialInstallation = resolveDefaultDesktopInstallation({ environment: process.env });
-      defaultInstallation = nativeEngine
-        ? { ...officialInstallation, codexExecutable: nativeEngine.executable } : officialInstallation;
-      const nativeCatalogStartedAt = Date.now();
-      nativeCatalog = readDefaultDesktopNativeCatalog({
-        installation: defaultInstallation, signal: nativePreparationSignal,
-      }).then(catalog => {
-        emitDiagnosticEvent("chatgpt_tela_profile_startup", "native_catalog_prepared", {
-          elapsed_ms: Date.now() - nativeCatalogStartedAt,
-        });
-        return catalog;
-      });
-      // Browser proofs may fail first. Keep the preparation failure observed until its consumer.
-      void nativeCatalog.catch(() => {});
-    }
-    startupStage("browser_runtime_starting");
-    runtime = await startElectronDevelopmentRuntime({
-      profileSlot: config.slot,
-      profileId: config.browserProfile.profileId,
-      chatGptUrl: CHATGPT_TEMPORARY_CHAT_URL,
-      connectorName: publicIdentity.connectorName,
-      approvalAutomationMode: config.approvalAutomationMode,
-      approvalAutomationDelayMs: config.approvalAutomationDelayMs,
-      currentTurnSource: source,
-      compactionHistory: async (threadId, turnId) => {
-        if (!routedTarget) throw new Error("Native compaction history target is not ready");
-        return appServerCompactionHistorySource(routedTarget.session.endpoint).project(threadId, turnId);
-      },
-      turns,
-      mcp: { kind: "external", abi: publicIdentity.webContract },
-      context: {
-        ...(config.checkpointPreparationPolicy ? { checkpointPreparationPolicy: config.checkpointPreparationPolicy } : {}),
-        checkpointCache: new FileContextCheckpointCache({
-          directory: resolve(config.browserProfile.userDataDir, "context-checkpoints"),
-        }),
-      },
-      checkpointProvider: new ChatGptContextCheckpointProvider(),
-      ...(config.webTurnTimeoutMs !== undefined ? { webTurnTimeoutMs: config.webTurnTimeoutMs } : {}),
-      responses: {
-        port: 0,
-        runtimeToken: config.responsesToken,
-      authentication: {
-        kind: "header" as const,
-        name: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
-      },
-      requestRouter: request => compositeRouter.route(request),
-      },
-      ...(options.modelFamilyDiscovery ? { modelFamilyDiscovery: options.modelFamilyDiscovery } : {}),
-      electron: {
-        ...(options.electron ?? {}),
-        userDataDir: config.browserProfile.userDataDir,
-      },
-    });
-    startupStage("browser_runtime_ready");
-    internalMcp = await startCodexBridgeMcpHttpServer({
-      turns,
-      port: 0,
-      authentication: { kind: "bearer", token: config.internalMcpToken },
-    });
-    startupStage("internal_mcp_ready");
-    const webDiscovery = await prepareProductWebDiscovery({
-      runtime, browserProfile: config.browserProfile, connectorName: publicIdentity.connectorName,
-      signal: nativePreparationSignal,
-      stage: startupStage,
-    });
-    const { families } = webDiscovery;
-    startupFamilies = families;
-    await compositeRouter.refreshWebModelFamilies(nativePreparationSignal);
-    {
-      startupStage("native_backend_preparing");
-      const installation = defaultInstallation!;
-      const route = createDefaultDesktopResponsesRoute({
-        baseUrl: runtime.responses.baseUrl,
-        envKey: PRODUCT_RESPONSES_ENV_KEY,
-        credential: config.responsesToken,
-      });
-      const startDefault = options.defaultDesktopTargetStarter ?? startDefaultDesktopTargetRuntime;
-      defaultDesktopTarget = await startDefault({
-        installation,
-        acquireBackendOwnership: () => acquireNativeBackendOwnership({ nativeHome: installation.codexHome }),
-        ...(nativeCatalog ? { nativeCatalog } : {}),
-        beforeDesktopLaunch: async () => {
-          nativePreparationSignal.throwIfAborted();
-          startupStage("native_target_starting");
-        },
-        route,
-        credential: config.responsesToken,
-        // Route authentication belongs to this target, not to the turn launching Tela.
-        environment: { ...process.env, OPENAI_ORGANIZATION: config.responsesToken },
-        augmentNativeCatalog: catalog => augmentNativeCodexModelCatalog(catalog, compositeRouter.cachedWebModelFamilies, { localCompaction: nativeEngine?.localCompaction === true }),
-        augmentModelList: result => augmentCodexAppServerModelList(
-          result,
-          compositeRouter.cachedWebModelFamilies,
-        ),
-      });
-      startupStage("native_target_ready");
-      const currentTurnSource = appServerCurrentTurnSource(defaultDesktopTarget.proxyEndpoint, {
-        // The default Desktop profile must not accidentally opt into a
-        // Legacy includeTurns:true snapshot before admitting Web authority.
-        preferBoundedTurnProof: true,
-        liveTurnProof: defaultDesktopTarget.liveTurnProof,
-      });
-      routedTarget = Object.freeze({
-        target: Object.freeze({ id: "default" }),
-        session: Object.freeze({
-          targetId: "default",
-          state: "ready",
-          endpoint: defaultDesktopTarget.proxyEndpoint,
-          responsesRouteFingerprint: defaultDesktopTarget.responsesRouteFingerprint,
-          desktopProcessId: defaultDesktopTarget.desktopPid,
-        }),
-        currentTurnSource,
-      });
-    }
-    if (!routedTarget.session.endpoint) throw new Error("Native target has no model catalog endpoint");
-    const readinessSignal = options.signal
-      ? AbortSignal.any([options.signal, AbortSignal.timeout(15_000)])
-      : AbortSignal.timeout(15_000);
-    const catalogRpc = await connectCodexAppServerWebSocket(routedTarget.session.endpoint, { signal: readinessSignal });
-    try {
-      await verifyWebModelReadiness(catalogRpc, families, readinessSignal);
-    } finally { await catalogRpc.close(); }
-    startupStage("model_catalog_verified");
-    source.bind(routedTarget.currentTurnSource);
-    startupStage("profile_runtime_ready");
-  } catch (error) {
-    nativePreparationController.abort();
-    const cleanup: Promise<unknown>[] = [];
-    if (nativeCatalog) cleanup.push(nativeCatalog.catch(() => undefined));
-    if (defaultDesktopTarget) cleanup.push(defaultDesktopTarget.stop().catch(() => undefined));
-    if (modelListOverlay) cleanup.push(modelListOverlay.close().catch(() => undefined));
-    if (internalMcp) cleanup.push(internalMcp.stop());
-    if (runtime) cleanup.push(runtime.stop());
-    await Promise.allSettled(cleanup);
-    throw error;
-  }
-
-  let stopping: Promise<void> | undefined;
-  let targetStopped = false;
-  let mcpClosed = false;
-  let runtimeClosed = false;
-  let overlayClosed = false;
-  return Object.freeze({
-    config,
-    runtime,
-    internalMcp,
-    routedTarget,
-    stop() {
-      if (stopping) return stopping;
-      stopping = (async () => {
-        if (turns.size > 0) throw new Error("Native/Web profile has an active turn; finish it before shutdown");
-        if (!targetStopped && routedTarget?.session.endpoint
-          && await countLoadedAppServerActiveTurns(routedTarget.session.endpoint, options.signal ? { signal: options.signal } : {}) > 0) {
-          throw new Error("Native profile has an active turn; finish it before shutdown");
-        }
-        if (!targetStopped && config.nativeTarget.kind === "default-desktop") {
-          await defaultDesktopTarget!.stop();
-          targetStopped = true;
-        }
-        // If route ownership was lost, preserve the now-unrelated target but still tear down this
-        // child's Responses/browser/MCP resources. Stale product providers must not become immortal.
-        const results = await Promise.allSettled([
-          ...(mcpClosed ? [] : [(async () => { await internalMcp!.stop(); mcpClosed = true; })()]),
-          ...(runtimeClosed ? [] : [(async () => { await runtime!.stop(); runtimeClosed = true; })()]),
-          ...(modelListOverlay && !overlayClosed ? [(async () => { await modelListOverlay.close(); overlayClosed = true; })()] : []),
-        ]);
-        const failures = results
-          .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-          .map(result => result.reason);
-        if (failures.length > 0) throw new AggregateError(failures, "product profile runtime cleanup was incomplete");
-          })().catch(error => {
-        stopping = undefined;
-        throw error;
-      });
-      return stopping;
-    },
-  });
 }
