@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
-import { encodeNativeToolInvocation, extractNativeToolResults, parseNativeTurnClaim, parseNativeTurnReplayIdentity } from "@chatgpt-tela/codex";
+import { NativeHistoryBootstrapRequired, encodeNativeToolInvocation, extractNativeToolResults, parseNativeTurnClaim, parseNativeTurnReplayIdentity } from "@chatgpt-tela/codex";
 import { NativeToolInventory, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticContext, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, startTurnDiagnosticSummary, withDiagnosticContext, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
 import type { TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import { selectChatGptWebModel, type WebConversationProvider } from "@chatgpt-tela/chatgpt";
@@ -223,6 +223,7 @@ export function createSuppliedRequestGateway(input: {
               : AbortSignal.any([controller.signal, AbortSignal.timeout(input.webTurnTimeoutMs)]);
             let plan: DevelopmentWebTurnPlan | undefined;
             let acquired = false;
+            let plannerStage = "not_started";
             try {
               // Register this operation before the durable lookup. Concurrent
               // requests join one outcome; a recovered final never resubmits.
@@ -233,7 +234,9 @@ export function createSuppliedRequestGateway(input: {
                   return { type: "final", answer: saved.answer, delivery: { capability } } as const;
                 }
               }
-              plan = await planner.planSuppliedRequest(identity, body, { signal, onProgress: publish });
+              plan = await planner.planSuppliedRequest(identity, body, { signal, onProgress: publish,
+                onPlannerStage: stage => { plannerStage = stage; },
+              });
               const chatTools = {
                 ...(owned.advertisedGoals.length ? { nativeGoalControl: capability } : {}) };
               assertWebMessageFitsComposer({ ...plan, chatTools });
@@ -297,6 +300,8 @@ export function createSuppliedRequestGateway(input: {
               withDiagnosticContext(failureContext, () => emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_failed", {
                 native_authority: false,
                 boundary: !plan ? "planning" : acquired ? "browser" : "acquisition",
+                ...(!plan ? { planner_stage: plannerStage } : {}),
+                ...(error instanceof NativeHistoryBootstrapRequired ? { recovery_reason: error.recoveryReason } : {}),
                 ...diagnosticFailureFields(error),
               }));
               if (error !== null && (typeof error === "object" || typeof error === "function")) {
@@ -304,9 +309,13 @@ export function createSuppliedRequestGateway(input: {
                   value: { context: failureContext, finish: () => diagnostics?.finish() } satisfies SuppliedFailureDiagnostics }); }
                 catch { /* Preserve the original provider failure. */ }
               }
-              if (!plan) capturePrivateDiagnosticValue("web_preparation_failure", {
-                phase: "provider_input", request: body,
-                error: error instanceof Error ? { name: error.name, message: error.message } : { name: "unknown" },
+              if (!plan) withDiagnosticContext(failureContext, () => {
+                // Keep the small error independently: a large body must not discard its cause.
+                capturePrivateDiagnosticValue("web_preparation_failure", {
+                  phase: "provider_input", plannerStage, error,
+                  ...(error instanceof NativeHistoryBootstrapRequired ? { recoveryReason: error.recoveryReason } : {}),
+                });
+                capturePrivateDiagnosticValue("web_context", { phase: "provider_input", request: body });
               });
               plan?.settle?.({ status: "failed" });
               // Preserve accepted/uncertain browser evidence; expiry remains owned by the existing registry.

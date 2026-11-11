@@ -131,7 +131,7 @@ export class NativeProgressStream {
     const supplied = error !== null && (typeof error === "object" || typeof error === "function")
       ? (error as { [SUPPLIED_FAILURE_DIAGNOSTICS]?: SuppliedFailureDiagnostics })[SUPPLIED_FAILURE_DIAGNOSTICS] : undefined;
     if (supplied) { this.#diagnostics = supplied.context; this.#finishDiagnostics = supplied.finish; }
-    const failure = nativeFailure(supplied ? new Error("Supplied Web response failed") : error);
+    const failure = nativeFailure(error, Boolean(supplied));
     if (failure.recoveryReason) emitDiagnosticEvent("chatgpt_tela_work", "native_context_recovery_streamed", {
       reason_class: failure.recoveryReason, transport_phase: "sse_after_progress",
     });

@@ -175,7 +175,7 @@ export async function handleNativeResponsesHttp(
     const supplied = error !== null && (typeof error === "object" || typeof error === "function")
       ? (error as { [SUPPLIED_FAILURE_DIAGNOSTICS]?: SuppliedFailureDiagnostics })[SUPPLIED_FAILURE_DIAGNOSTICS] : undefined;
     return new Response(withDiagnosticContext(supplied?.context ?? diagnosticContext(), () => observedBody({
-      chunks: [JSON.stringify({ error: nativeFailure(supplied ? new Error("Supplied Web response failed") : error).error })], outcome: "failed", signal: request.signal,
+      chunks: [JSON.stringify({ error: nativeFailure(error, Boolean(supplied)).error })], outcome: "failed", signal: request.signal,
       ...(supplied ? { onClosed: supplied.finish } : {}),
     })), { status: 400, headers: { "content-type": "application/json" } });
   }

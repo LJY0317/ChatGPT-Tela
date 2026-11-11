@@ -27,7 +27,7 @@ const TERMINAL_FAILURES = {
 } as const;
 
 /** One public failure projection for HTTP, late SSE failure and retired replays. */
-export function nativeFailure(error: unknown) {
+export function nativeFailure(error: unknown, hideUnknownDetails = false) {
   const diagnostics = privateDiagnosticFailureGuidance();
   const fit = webContextFitRecovery(error), handoff = nativeHandoffRecovery(error), projection = nativeProjectionRecovery(error);
   const recovery = fit ?? handoff ?? projection ?? webContinuityRecovery(error) ?? nativeHistoryRecovery(error);
@@ -47,5 +47,6 @@ export function nativeFailure(error: unknown) {
   };
   return { error: { type: "invalid_request_error", retryable: false, diagnostics,
     ...(code === "tela_web_model_unavailable" ? { code } : {}),
-    message: error instanceof Error ? error.message : String(error) } };
+    message: hideUnknownDetails ? "Supplied Web response failed"
+      : error instanceof Error ? error.message : String(error) } };
 }

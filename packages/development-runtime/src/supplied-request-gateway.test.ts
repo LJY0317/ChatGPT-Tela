@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { zstdCompressSync } from "node:zlib";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BROWSER_DOCUMENT_LIFETIME, type BrowserHost, type BrowserSurfaceLease, type BrowserSurfaceCapability } from "@chatgpt-tela/browser-host";
 import { chatGptWebFamilyKey, chatGptWebModelId, type WebConversationProvider, type WebTurnRequest } from "@chatgpt-tela/chatgpt";
 import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
-import { listDiagnosticIncidents, readDiagnosticIncident } from "@chatgpt-tela/core";
+import { listDiagnosticIncidents, readDiagnosticIncident, setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { handleNativeResponsesHttp } from "@chatgpt-tela/responses";
 import { createProfileTurnBridge, createSuppliedRequestGateway } from "./supplied-request-gateway";
@@ -365,6 +365,15 @@ test("opaque input cannot acquire Native history or a browser through supplied i
     await expect(f.gateway.handle(request("turn-1", [
       { type: "compaction", encrypted_content: "opaque" }, ...firstInput,
     ]))).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+    const response = await handleNativeResponsesHttp(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request("turn-1", [
+        { type: "compaction", encrypted_content: "opaque" }, ...firstInput,
+      ])),
+    }), f.gateway);
+    expect(response.status).toBe(400);
+    const failure = await response.json() as any;
+    expect(failure.error.code).toBe("tela_native_history_checkpoint_required");
+    expect(failure.error.retryable).toBe(false);
     expect(nativeReads).toBe(0);
     expect(f.acquisitions).toBe(0);
   } finally { await f.gateway.close(); }
@@ -505,4 +514,34 @@ test("shutdown protects accepted work and unreceived answers without retaining s
     expect(failed.gateway.shutdownReadiness()).toBe("ready");
     failed.gateway.prepareShutdown();
   } finally { await failed.gateway.close(); }
+});
+
+
+test("oversized supplied planning failure retains a small correlated private cause", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-large-planning-failure-"));
+  const file = join(root, "events.jsonl"), center = join(root, "diagnostics");
+  const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  setPrivateDiagnosticCapture(center, "until-disabled");
+  const f = fixture();
+  try {
+    const largeInput = [{ type: "compaction", encrypted_content: "opaque" },
+      ...Array.from({ length: 24 }, () => ({ type: "message", role: "user", content: "PRIVATE_SOURCE".repeat(2000) })), ...firstInput];
+    await expect(f.gateway.handle(request("large-planning", largeInput))).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+    const events = readFileSync(file, "utf8");
+    expect(events).toContain('"planner_stage":"native_continuity"');
+    expect(events).toContain('"recovery_reason":"source_unavailable"');
+    expect(events).toContain('"stage":"private_capture_recorded"');
+    expect(events).not.toContain("PRIVATE_SOURCE");
+    const captured = readdirSync(join(center, "private")).filter(name => name.endsWith(".json") && !name.endsWith(".meta.json"))
+      .map(name => readFileSync(join(center, "private", name), "utf8"));
+    expect(captured.some(text => text.includes('"phase":"web_preparation_failure"')
+      && text.includes('"recoveryReason":"source_unavailable"') && !text.includes("PRIVATE_SOURCE"))).toBe(true);
+    expect(f.acquisitions).toBe(0);
+  } finally {
+    await f.gateway.close();
+    if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+    else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

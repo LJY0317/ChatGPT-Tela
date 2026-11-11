@@ -983,3 +983,15 @@ test("delivery timeout ends HTTP/SSE once, with the shared natural error and no 
     } finally { await gateway.close(); }
   }
 });
+
+
+test("supplied failure privacy keeps typed recovery while hiding unknown exception text", async () => {
+  const { nativeFailure } = await import("./native-failure");
+  const error = Object.assign(new Error("PRIVATE source transcript"), {
+    code: "native_history_bootstrap_required", recoveryReason: "source_unavailable",
+  });
+  const known = nativeFailure(error, true);
+  expect(known.error).toMatchObject({ code: "tela_native_history_checkpoint_required", retryable: false });
+  expect(JSON.stringify(known)).not.toContain("PRIVATE source transcript");
+  expect(nativeFailure(new Error("PRIVATE unexpected failure"), true).error.message).toBe("Supplied Web response failed");
+});
