@@ -329,9 +329,13 @@ describe("Native Responses HTTP transport", () => {
         code: "tela_native_checkpoint_response_rejected", retryable: false,
         recovery: { kind: "explicit_native_handoff", requires_new_native_turn: true },
       });
-      if (recoveryReason === "source_budget") expect(expected.error).toMatchObject({
-        code: "tela_native_context_checkpoint_required", type: "invalid_request_error", retryable: false,
-      });
+      if (recoveryReason === "source_budget") {
+        expect(expected.error).toMatchObject({
+          code: "tela_native_context_checkpoint_required", type: "invalid_request_error", retryable: false,
+        });
+        expect(expected.error.message).not.toContain("NATIVE_WEB_HANDOFF_PROMPT");
+        expect(expected.error.message).toContain("does not automatically inherit the omitted history");
+      }
       if (recoveryReason === "checkpoint_closed") {
         expect(expected.error).toMatchObject({code: "tela_native_checkpoint_operation_closed", retryable: false,
           recovery: {kind: "explicit_native_handoff", requires_new_native_turn: true}});
@@ -550,6 +554,8 @@ describe("Native Responses HTTP transport", () => {
       code:"tela_native_history_checkpoint_required",
     });
     expect(result.error.message).toContain("verified readable checkpoint");
+    expect(result.error.message).toContain("Repeating the same Web request will not recover");
+    expect(result.error.message).toContain("does not automatically inherit the omitted history");
     expect(result.error.retryable).toBe(false);
     expect(result.error.recovery).toEqual({
       kind:"explicit_native_handoff",
