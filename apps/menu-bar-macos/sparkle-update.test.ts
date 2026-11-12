@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
-(process.platform === "darwin" ? test : test.skip)("Sparkle postponement preserves work and AppKit modal termination runs preparation after completion", async () => {
+(process.platform === "darwin" ? test : test.skip)("Sparkle postponement completes once and loses its install callback when the UI exits", async () => {
   const bundleId = `org.chatgpt-tela.disposable.${crypto.randomUUID()}`;
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-delegate-"));
   const app = join(root, "Probe.app"), mac = join(app, "Contents/MacOS");
@@ -27,7 +27,11 @@ import { spawnSync } from "node:child_process";
 </dict></plist>`);
     writeFileSync(join(mac, "chatgpt-tela"), `#!/bin/sh
 case "$2" in
-wait) printf entered > "$TELA_IDLE_FIXTURE/wait-entered"; IFS= read -r release < "$TELA_IDLE_FIXTURE/release.fifo"; printf '{"ready":true}\\n' ;;
+wait) printf entered > "$TELA_IDLE_FIXTURE/wait-entered"
+  if [ "$TELA_IDLE_FIXTURE_UI_EXIT" = 1 ]; then
+    IFS= read -r release; printf closed > "$TELA_IDLE_FIXTURE/wait-settled"
+  else IFS= read -r release < "$TELA_IDLE_FIXTURE/release.fifo"; fi
+  printf '{"ready":true}\\n' ;;
 prepare) printf prepared > "$TELA_IDLE_FIXTURE/prepared"; printf '{"prepared":true}\\n' ;;
 *) printf '{"ready":true}\\n' ;;
 esac
@@ -41,6 +45,13 @@ import Sparkle
   func applicationDidFinishLaunching(_ note: Notification) {
     let root = ProcessInfo.processInfo.environment["TELA_IDLE_FIXTURE"]!
     tela = TelaSparkleUpdater()
+    if ProcessInfo.processInfo.environment["TELA_IDLE_FIXTURE_RECOVERED"] == "1" {
+      precondition(tela.preparationStatus == nil)
+      precondition(tela.applicationShouldTerminate(NSApp) == .terminateNow)
+      try! Data("fresh".utf8).write(to: URL(fileURLWithPath: root + "/recovered"))
+      NSApp.terminate(nil)
+      return
+    }
     source = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
     // Only a synthetic version is needed; no feed, archive or update is fetched.
     let item = SUAppcastItem(dictionary: ["enclosure": ["sparkle:version": "2", "url": "http://127.0.0.1/unused.zip", "length": "1", "type": "application/octet-stream"]])!
@@ -82,6 +93,33 @@ import Sparkle
     expect(await child.exited).toBe(0);
     expect(existsSync(join(root, "resumed"))).toBe(true);
     expect(existsSync(join(root, "prepared"))).toBe(true);
+
+    // The same real AppKit/Sparkle delegate, now losing its UI process before
+    // readiness. Only this disposable app is killed; its observer owns stdin.
+    clearTimeout(deadline);
+    for (const name of ["started", "wait-entered", "resumed", "prepared"]) rmSync(join(root, name));
+    const whenCreated = (name: string) => new Promise<void>(resolve => {
+      observer = watch(root, () => {
+        if (existsSync(join(root, name))) { observer?.close(); resolve(); }
+      });
+      if (existsSync(join(root, name))) { observer.close(); resolve(); }
+    });
+    const waiting = whenCreated("wait-entered");
+    const env = { ...process.env, CFFIXED_USER_HOME: root, TELA_IDLE_FIXTURE: root };
+    child = Bun.spawn([join(mac, "probe")], { env: { ...env, TELA_IDLE_FIXTURE_UI_EXIT: "1" }, stdout: "ignore", stderr: "ignore" });
+    const timeout = new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => reject(Error("disposable UI recovery timed out")), 20_000);
+    });
+    await Promise.race([waiting, timeout, child.exited.then(code => { throw Error(`UI exited before wait (${code})`); })]);
+    const settled = whenCreated("wait-settled");
+    child.kill("SIGKILL");
+    expect(await child.exited).not.toBe(0);
+    await Promise.race([settled, timeout]);
+    child = Bun.spawn([join(mac, "probe")], { env: { ...env, TELA_IDLE_FIXTURE_RECOVERED: "1" }, stdout: "ignore", stderr: "ignore" });
+    expect(await Promise.race([child.exited, timeout])).toBe(0);
+    expect(existsSync(join(root, "recovered"))).toBe(true);
+    expect(existsSync(join(root, "resumed"))).toBe(false);
+    expect(existsSync(join(root, "prepared"))).toBe(false);
   } finally {
     clearTimeout(deadline); observer?.close();
     if (child && child.exitCode === null) { child.kill(); await child.exited; }
