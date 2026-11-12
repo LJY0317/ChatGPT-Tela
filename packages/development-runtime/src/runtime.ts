@@ -158,6 +158,7 @@ export type DevelopmentMcpRuntime =
     };
 
 export interface DevelopmentRuntimeOptions {
+  readonly suppliedHistory?: import("./supplied-history").SuppliedHistorySource;
   readonly profileSlot?: number;
   readonly routeId?: string;
   readonly completedResults?: Parameters<typeof createSuppliedRequestGateway>[0]["completedResults"];
@@ -205,6 +206,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
     const gateway = createSuppliedRequestGateway({ browserHost: input.browserHost, provider,
       planner: planner as SuppliedRequestWebTurnPlanner,
       ...(input.completedResults ? { completedResults: input.completedResults } : {}),
+      ...(input.suppliedHistory ? { suppliedHistory: input.suppliedHistory } : {}),
       ...(input.routeId ? { routeId: input.routeId } : {}),
       ...(input.profileSlot !== undefined ? { profileSlot: input.profileSlot } : {}),
       ...(input.browserSurfaceTarget !== undefined ? { browserSurfaceTarget: input.browserSurfaceTarget } : {}),

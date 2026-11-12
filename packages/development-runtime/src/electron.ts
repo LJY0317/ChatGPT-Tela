@@ -105,6 +105,7 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
 }
 
 export interface ElectronDevelopmentRuntimeOptions {
+  readonly suppliedHistory?: import("./supplied-history").SuppliedHistorySource;
   readonly profileSlot?: number;
   readonly routeId?: string;
   readonly completedResults?: DevelopmentRuntimeOptions["completedResults"];
@@ -296,6 +297,7 @@ export async function startElectronDevelopmentRuntime(
 
   const runtime = await startDevelopmentRuntime({
     ...(input.completedResults ? { completedResults: input.completedResults } : {}),
+      ...(input.suppliedHistory ? { suppliedHistory: input.suppliedHistory } : {}),
     ...(input.profileSlot !== undefined ? { profileSlot: input.profileSlot } : {}),
     ...(input.routeId ? { routeId: input.routeId } : {}),
     ...(input.currentTurnSource ? { currentTurnSource: input.currentTurnSource } : {}),
@@ -303,6 +305,7 @@ export async function startElectronDevelopmentRuntime(
     turns,
     mcp: input.mcp,
     planWebTurn: input.planWebTurn ?? createNativeRequestDevelopmentWebTurnPlanner({
+      ...(input.suppliedHistory ? { suppliedHistory: input.suppliedHistory } : {}),
       ...(localCompactionRouter ? { preparationBudgetFor: localCompactionRouter.preparationBudgetFor } : {}),
       ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),
       ...(input.compactionHistory ? { compactionHistory: input.compactionHistory } : {}),

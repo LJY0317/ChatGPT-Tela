@@ -53,6 +53,7 @@ function request(turn = "turn-1", input: unknown[] = firstInput) {
 }
 
 function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure?: Error; planner?: ReturnType<typeof createNativeRequestDevelopmentWebTurnPlanner>;
+  suppliedHistory?: Parameters<typeof createSuppliedRequestGateway>[0]["suppliedHistory"];
   completedResults?: Parameters<typeof createSuppliedRequestGateway>[0]["completedResults"] } = {}) {
   const submissions: WebTurnRequest[] = [], selections: unknown[] = [], released: string[] = [];
   let acquisitions = 0, closed = false;
@@ -88,6 +89,7 @@ function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure
   const gateway = createSuppliedRequestGateway({ browserHost: host, provider, profileSlot: 2,
     ...(options.completedResults ? { completedResults: options.completedResults } : {}),
     ...(options.planner ? { planner: options.planner } : {}),
+    ...(options.suppliedHistory ? { suppliedHistory: options.suppliedHistory } : {}),
     async prepareForSubmit(_surface, route) { selections.push(route); },
   });
   return { gateway, submissions, selections, released, get acquisitions() { return acquisitions; }, get closed() { return closed; } };
@@ -544,4 +546,46 @@ test("oversized supplied planning failure retains a small correlated private cau
     else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("supplied opaque bootstrap exposes only scoped history, retires its control and reuses warm history without a new read", async () => {
+  let reads = 0, submitted!: () => void, release!: () => void;
+  const wait = new Promise<void>(r => { release = r; });
+  const accepted = new Promise<void>(r => { submitted = r; });
+  const source: NonNullable<Parameters<typeof createSuppliedRequestGateway>[0]["suppliedHistory"]> = {
+    async readSeed(id) {
+      reads++;
+      return { kind: "native-visible-prefix", threadId: id.threadId, currentTurnId: id.turnId,
+        digest: "a".repeat(64), contentDigest: "b".repeat(64), sourceItemCount: 0,
+        content: JSON.stringify({ type: "tela_native_visible_prefix_v1", deferredHistory: { scope: "prior-native-history" }, items: [] }),
+        inlineAssets: [], references: [], localImageCandidates: [] };
+    },
+    async readPage() { return { type: "native_history_index", role: "historical-evidence", data: [{ turnId: "old", status: "completed" }], continuation: null }; },
+  };
+  const f = fixture({ suppliedHistory: source, wait, onSubmit: submitted });
+  const { startCodexBridgeMcpHttpServer, connectCodexTurnBridge } = await import("@chatgpt-tela/mcp");
+  const { DynamicChatBackend } = await import("../../gateway/src/dynamic-chat-backend");
+  const server = await startCodexBridgeMcpHttpServer({ bridge: f.gateway.toolBridge,
+    authentication: { kind: "bearer", token: "h".repeat(48) } });
+  const client = await connectCodexTurnBridge({ endpoint: server.endpointUrl, bearerToken: "h".repeat(48) });
+  const chat = new DynamicChatBackend(() => undefined, client);
+  const input = [{ type: "compaction", encrypted_content: "opaque" }, ...firstInput];
+  try {
+    const pending = f.gateway.handle(request("turn-1", input));
+    await accepted;
+    const control = f.submissions[0]!.chatTools!.nativeHistoryControl!;
+    expect(control).toBeString();
+    expect(await f.gateway.toolBridge.inventory(control)).toEqual([]);
+    expect(await chat.call("read_context_history", { history_control: control }))
+      .toMatchObject({ isError: false, content: expect.stringContaining("historical-evidence") });
+    expect(() => f.gateway.toolBridge.invoke(control, { callId: "work", mode: "structured", wireName: "exec_command", arguments: {} })).toThrow();
+    release();
+    expect(await pending).toMatchObject({ type: "final" });
+    expect(() => f.gateway.toolBridge.invoke(control, { callId: "late", mode: "structured", wireName: "tela_context_history_page", arguments: {} })).toThrow();
+    await f.gateway.handle(request("turn-2", [...input, { type: "message", role: "assistant", content: "A inspected." }, { type: "message", role: "user", content: "Inspect B." }]));
+    expect(reads).toBe(1);
+    expect(f.submissions[1]!.physicalContext.mode).toBe("retained-delta");
+    expect(f.submissions[1]!.chatTools!.nativeHistoryControl).toBeString();
+  } finally { release(); await client.close(); await server.stop(); await f.gateway.close(); }
 });

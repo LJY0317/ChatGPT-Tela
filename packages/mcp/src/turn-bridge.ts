@@ -46,24 +46,8 @@ export class McpTurnBridge implements TurnBridgeBackend {
   invoke(capability: string, invocation: NativeToolInvocation): Promise<NativeToolResult> {
     if (invocation.wireName === CONTEXT_HISTORY_TOOL.wireName) {
       if (!this.turns.readHistoryPage || invocation.mode !== "structured") throw Error("history read is unavailable");
-      const { turn_id, cursor, offset_bytes, page_digest } = invocation.arguments;
-      const anchor = cursor && typeof cursor === "object" && !Array.isArray(cursor)
-        ? cursor as Record<string, unknown> : undefined;
-      if (Object.keys(invocation.arguments).some(key => !["turn_id", "cursor", "offset_bytes", "page_digest"].includes(key))
-        || turn_id !== undefined && (typeof turn_id !== "string" || !turn_id.trim())
-        || offset_bytes !== undefined && (!Number.isSafeInteger(offset_bytes) || (offset_bytes as number) < 0)
-        || page_digest !== undefined && typeof page_digest !== "string"
-        || cursor !== undefined && !(typeof cursor === "string" && cursor.length > 0)
-          && !(anchor?.type === "item" && typeof anchor.itemId === "string" && anchor.itemId.length > 0
-            && Object.keys(anchor).length === 2)) throw Error("invalid history page selection");
-      if (turn_id === undefined && (offset_bytes !== undefined || page_digest !== undefined)) {
-        throw Error("byte ranges require an original turn_id");
-      }
-      return this.turns.readHistoryPage(capability, { ...(turn_id === undefined ? {} : { turnId: turn_id as string }), limit: 4,
-        ...(cursor === undefined ? {} : { cursor: cursor as string | { type: "item"; itemId: string } }),
-        ...(offset_bytes === undefined ? {} : { offsetBytes: offset_bytes as number }),
-        ...(page_digest === undefined ? {} : { pageDigest: page_digest as string }),
-      }).then(content => ({ callId: invocation.callId, content: JSON.stringify(content), isError: false }));
+      const selection = contextHistorySelection(invocation.arguments);
+      return this.turns.readHistoryPage(capability, selection).then(content => ({ callId: invocation.callId, content: JSON.stringify(content), isError: false }));
     }
     const goalControl = this.turns.resolveGoalControl?.(capability);
     const channel = goalControl ?? this.turns.resolve(capability);
@@ -175,4 +159,26 @@ function resultEvidence(result: NativeToolResult, goalTool: boolean): Record<str
     } catch { /* An opaque/non-JSON Goal result is not an empty result. */ }
   }
   return fields;
+}
+
+/** Shared argument projection for the existing read-only history tool. */
+export function contextHistorySelection(arguments_: Readonly<Record<string, unknown>>) {
+  const { turn_id, cursor, offset_bytes, page_digest } = arguments_;
+  const anchor = cursor && typeof cursor === "object" && !Array.isArray(cursor)
+    ? cursor as Record<string, unknown> : undefined;
+  if (Object.keys(arguments_).some(key => !["turn_id", "cursor", "offset_bytes", "page_digest"].includes(key))
+    || turn_id !== undefined && (typeof turn_id !== "string" || !turn_id.trim())
+    || offset_bytes !== undefined && (!Number.isSafeInteger(offset_bytes) || (offset_bytes as number) < 0)
+    || page_digest !== undefined && typeof page_digest !== "string"
+    || cursor !== undefined && !(typeof cursor === "string" && cursor.length > 0)
+      && !(anchor?.type === "item" && typeof anchor.itemId === "string" && anchor.itemId.length > 0
+        && Object.keys(anchor).length === 2)) throw Error("invalid history page selection");
+  if (turn_id === undefined && (offset_bytes !== undefined || page_digest !== undefined)) {
+    throw Error("byte ranges require an original turn_id");
+  }
+  return { ...(turn_id === undefined ? {} : { turnId: turn_id as string }), limit: 4,
+    ...(cursor === undefined ? {} : { cursor: cursor as string | { type: "item"; itemId: string } }),
+    ...(offset_bytes === undefined ? {} : { offsetBytes: offset_bytes as number }),
+    ...(page_digest === undefined ? {} : { pageDigest: page_digest as string }),
+  };
 }

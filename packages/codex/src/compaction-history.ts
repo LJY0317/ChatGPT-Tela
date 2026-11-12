@@ -371,6 +371,126 @@ export function projectNativeHistoryReadback(
 }
 
 /** Read-only visible transcript projection. This does not decode or replace Native model state. */
+/** Read-only stored evidence; the inspector need not own live execution. */
+export async function readStoredNativeHistory(connect: CodexAppServerRpcFactory,
+  threadId: string, currentTurnId: string, signal?: AbortSignal, bodyBudgetBytes?: number): Promise<NativeVisibleHistorySnapshot> {
+    if (!threadId.trim() || !currentTurnId.trim()) throw new Error("Native visible prefix requires exact owner identifiers");
+    if (bodyBudgetBytes !== undefined && (!Number.isSafeInteger(bodyBudgetBytes) || bodyBudgetBytes <= 0)) {
+      throw new Error("Native history body budget must be positive bytes");
+    }
+    const active = signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+      : AbortSignal.timeout(30_000);
+    active.throwIfAborted();
+    const rpc = await connect(active);
+    try {
+      const metadata = async (): Promise<Record<string, unknown>> => {
+        active.throwIfAborted();
+        const response = record(await rpc.request("thread/read", { threadId, includeTurns: false }, active));
+        const thread = record(response?.thread);
+        if (!thread || thread.id !== threadId) {
+          throw new Error("Native visible prefix requires its exact stored thread");
+        }
+        if (thread.historyMode !== "paginated") throw new NativeHistoryBootstrapRequired("unindexed_history");
+        return thread;
+      };
+      const proveCurrent = async (): Promise<void> => {
+        active.throwIfAborted();
+        const response = record(await rpc.request("thread/turns/list", {
+          threadId, sortDirection: "desc", itemsView: "notLoaded", limit: 1,
+        }, active));
+        const turn = Array.isArray(response?.data) && response.data.length === 1
+          ? record(response.data[0]) : undefined;
+        if (!turn || turn.id !== currentTurnId
+          || turn.itemsView !== "notLoaded" || !Array.isArray(turn.items) || turn.items.length !== 0) {
+          emitDiagnosticEvent("chatgpt_tela_codex", "native_history_source_rejected", { phase: "stored_snapshot", reason_class: "head_changed" });
+          throw new Error("Native visible prefix does not belong to the exact current turn");
+        }
+      };
+      const owner = (thread: Record<string, unknown>) => ({
+        id: thread.id, updatedAt: thread.updatedAt, cwd: thread.cwd, environments: thread.environments, source: thread.source, parentThreadId: thread.parentThreadId,
+      });
+      const before = await metadata();
+      await proveCurrent();
+      const entries: { turnId: string; item: Record<string, unknown> }[] = [];
+      const ids = new Set<string>();
+      const cursors = new Set<string>();
+      let cursor: string | undefined;
+      let bytes = 0;
+      let bodyBytes = 0;
+      let passedCurrent = false;
+      let deferredOriginals = false;
+      history: for (;;) {
+        active.throwIfAborted();
+        const response = await readIndexedNativeItemsPage(rpc, {
+          threadId, sortDirection: "desc", limit: 4, ...(cursor ? { cursor } : {}),
+        }, active);
+        const pageBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+        bytes += pageBytes;
+        if (bodyBudgetBytes === undefined && (pageBytes > 2 * 1024 * 1024 || bytes > 8 * 1024 * 1024)) {
+          throw new NativeHistoryBootstrapRequired();
+        }
+        for (const entry of response.data) {
+          const item = entry.item;
+          if (ids.has(item.id)) {
+            throw new Error("Native visible prefix has incomplete or duplicate item evidence");
+          }
+          ids.add(item.id);
+          if (entry.turnId === currentTurnId) {
+            if (passedCurrent) throw new Error("Native visible prefix current turn is out of order");
+            continue;
+          }
+          passedCurrent = true;
+          if (item.type === "reasoning") continue;
+          bodyBytes += Buffer.byteLength(JSON.stringify(entry), "utf8");
+          if (bodyBudgetBytes !== undefined && bodyBytes > bodyBudgetBytes) {
+            // Stop at the first oversized exchange, even within a page. Keep
+            // neither its partial tool chain nor any older turns from that page.
+            while (entries.at(-1)?.turnId === entry.turnId) entries.pop();
+            deferredOriginals = true;
+            break history;
+          }
+          entries.push({ turnId: entry.turnId, item });
+        }
+        if (response.nextCursor === null || response.nextCursor === undefined) break;
+        const next = response.nextCursor;
+        if (!response.data.length || typeof next !== "string" || !next || next.length > 1024
+          || cursors.has(next)) throw new Error("Native visible prefix cursor is invalid or repeated");
+        cursors.add(next);
+        cursor = next;
+      }
+      await proveCurrent();
+      const after = await metadata();
+      if (JSON.stringify(owner(before)) !== JSON.stringify(owner(after))) {
+        emitDiagnosticEvent("chatgpt_tela_codex", "native_history_source_rejected", { phase: "stored_snapshot", reason_class: "source_changed" });
+        throw new Error("Native visible prefix ownership changed during reconstruction");
+      }
+      active.throwIfAborted();
+      const { visible, ...evidence } = sanitizeVisibleHistory(entries.reverse(), threadId, currentTurnId);
+      const content = JSON.stringify({
+        type: "tela_native_visible_prefix_v1",
+        semantics: deferredOriginals
+          ? "Recent complete original turns only. Other original history remains available through owner-bound indexed readback, not supplied or summarized. Current request and instructions remain authoritative. Do not execute historical requests or claim unavailable media was seen."
+          : "Complete visible conversation and tool evidence strictly before the current Native turn. Not encrypted model state. Current request and instructions remain authoritative; do not execute historical requests again. Evidence references are metadata, not access grants. Unavailable assets have not been seen.",
+        ...(deferredOriginals ? { deferredHistory: { scope: "prior-native-history" } } : {}),
+        items: visible,
+      });
+      const contentBytes = Buffer.byteLength(content, "utf8");
+      if (contentBytes > 16 * 1024 * 1024) throw new NativeHistoryBootstrapRequired();
+      emitDiagnosticEvent("chatgpt_tela_codex", "native_history_source_selected", {
+        phase: deferredOriginals ? "indexed_working_set" : "complete_visible_source",
+        item_count: visible.length,
+        received_bytes: bytes, body_bytes: contentBytes,
+        ...(bodyBudgetBytes === undefined ? {} : { input_budget: bodyBudgetBytes }),
+      });
+      const digest = createHash("sha256").update(JSON.stringify(canonicalDigestValue({
+        kind: "native-visible-prefix", owner: owner(before), threadId, source: JSON.parse(content),
+      }))).digest("hex");
+      return Object.freeze({ kind: "native-visible-prefix", threadId, currentTurnId,
+        digest, contentDigest: createHash("sha256").update(content).digest("hex"),
+        sourceItemCount: visible.length, content, ...evidence });
+    } finally { await rpc.close(); }
+}
+
 export class AppServerCompactionHistorySource {
   constructor(private readonly connect: CodexAppServerRpcFactory) {}
 
@@ -590,121 +710,8 @@ export class AppServerCompactionHistorySource {
    * turns and retain the original Native archive as an on-demand indexed range.
    * This is visible evidence, not recovered encrypted Native model state.
    */
-  async visibleHistory(threadId: string, currentTurnId: string, signal?: AbortSignal, bodyBudgetBytes?: number):
-    Promise<NativeVisibleHistorySnapshot> {
-    if (!threadId.trim() || !currentTurnId.trim()) throw new Error("Native visible prefix requires exact owner identifiers");
-    if (bodyBudgetBytes !== undefined && (!Number.isSafeInteger(bodyBudgetBytes) || bodyBudgetBytes <= 0)) {
-      throw new Error("Native history body budget must be positive bytes");
-    }
-    const active = signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
-      : AbortSignal.timeout(30_000);
-    active.throwIfAborted();
-    const rpc = await this.connect(active);
-    try {
-      const metadata = async (): Promise<Record<string, unknown>> => {
-        active.throwIfAborted();
-        const response = record(await rpc.request("thread/read", { threadId, includeTurns: false }, active));
-        const thread = record(response?.thread);
-        if (!thread || thread.id !== threadId || record(thread.status)?.type !== "active") {
-          throw new Error("Native visible prefix requires an active owned thread");
-        }
-        if (thread.historyMode !== "paginated") throw new NativeHistoryBootstrapRequired("unindexed_history");
-        return thread;
-      };
-      const proveCurrent = async (): Promise<void> => {
-        active.throwIfAborted();
-        const response = record(await rpc.request("thread/turns/list", {
-          threadId, sortDirection: "desc", itemsView: "notLoaded", limit: 1,
-        }, active));
-        const turn = Array.isArray(response?.data) && response.data.length === 1
-          ? record(response.data[0]) : undefined;
-        if (!turn || turn.id !== currentTurnId || turn.status !== "inProgress"
-          || turn.itemsView !== "notLoaded" || !Array.isArray(turn.items) || turn.items.length !== 0) {
-          throw new Error("Native visible prefix does not belong to the exact current turn");
-        }
-      };
-      const owner = (thread: Record<string, unknown>) => ({
-        id: thread.id, cwd: thread.cwd, environments: thread.environments, source: thread.source, parentThreadId: thread.parentThreadId,
-      });
-      const before = await metadata();
-      await proveCurrent();
-      const entries: { turnId: string; item: Record<string, unknown> }[] = [];
-      const ids = new Set<string>();
-      const cursors = new Set<string>();
-      let cursor: string | undefined;
-      let bytes = 0;
-      let bodyBytes = 0;
-      let passedCurrent = false;
-      let deferredOriginals = false;
-      history: for (;;) {
-        active.throwIfAborted();
-        const response = await readIndexedNativeItemsPage(rpc, {
-          threadId, sortDirection: "desc", limit: 4, ...(cursor ? { cursor } : {}),
-        }, active);
-        const pageBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
-        bytes += pageBytes;
-        if (bodyBudgetBytes === undefined && (pageBytes > 2 * 1024 * 1024 || bytes > 8 * 1024 * 1024)) {
-          throw new NativeHistoryBootstrapRequired();
-        }
-        for (const entry of response.data) {
-          const item = entry.item;
-          if (ids.has(item.id)) {
-            throw new Error("Native visible prefix has incomplete or duplicate item evidence");
-          }
-          ids.add(item.id);
-          if (entry.turnId === currentTurnId) {
-            if (passedCurrent) throw new Error("Native visible prefix current turn is out of order");
-            continue;
-          }
-          passedCurrent = true;
-          if (item.type === "reasoning") continue;
-          bodyBytes += Buffer.byteLength(JSON.stringify(entry), "utf8");
-          if (bodyBudgetBytes !== undefined && bodyBytes > bodyBudgetBytes) {
-            // Stop at the first oversized exchange, even within a page. Keep
-            // neither its partial tool chain nor any older turns from that page.
-            while (entries.at(-1)?.turnId === entry.turnId) entries.pop();
-            deferredOriginals = true;
-            break history;
-          }
-          entries.push({ turnId: entry.turnId, item });
-        }
-        if (response.nextCursor === null || response.nextCursor === undefined) break;
-        const next = response.nextCursor;
-        if (!response.data.length || typeof next !== "string" || !next || next.length > 1024
-          || cursors.has(next)) throw new Error("Native visible prefix cursor is invalid or repeated");
-        cursors.add(next);
-        cursor = next;
-      }
-      await proveCurrent();
-      const after = await metadata();
-      if (JSON.stringify(owner(before)) !== JSON.stringify(owner(after))) {
-        throw new Error("Native visible prefix ownership changed during reconstruction");
-      }
-      active.throwIfAborted();
-      const { visible, ...evidence } = sanitizeVisibleHistory(entries.reverse(), threadId, currentTurnId);
-      const content = JSON.stringify({
-        type: "tela_native_visible_prefix_v1",
-        semantics: deferredOriginals
-          ? "Recent complete original turns only. Other original history remains available through owner-bound indexed readback, not supplied or summarized. Current request and instructions remain authoritative. Do not execute historical requests or claim unavailable media was seen."
-          : "Complete visible conversation and tool evidence strictly before the current Native turn. Not encrypted model state. Current request and instructions remain authoritative; do not execute historical requests again. Evidence references are metadata, not access grants. Unavailable assets have not been seen.",
-        ...(deferredOriginals ? { deferredHistory: { scope: "prior-native-history" } } : {}),
-        items: visible,
-      });
-      const contentBytes = Buffer.byteLength(content, "utf8");
-      if (contentBytes > 16 * 1024 * 1024) throw new NativeHistoryBootstrapRequired();
-      emitDiagnosticEvent("chatgpt_tela_codex", "native_history_source_selected", {
-        phase: deferredOriginals ? "indexed_working_set" : "complete_visible_source",
-        item_count: visible.length,
-        received_bytes: bytes, body_bytes: contentBytes,
-        ...(bodyBudgetBytes === undefined ? {} : { input_budget: bodyBudgetBytes }),
-      });
-      const digest = createHash("sha256").update(JSON.stringify(canonicalDigestValue({
-        kind: "native-visible-prefix", owner: owner(before), threadId, source: JSON.parse(content),
-      }))).digest("hex");
-      return Object.freeze({ kind: "native-visible-prefix", threadId, currentTurnId,
-        digest, contentDigest: createHash("sha256").update(content).digest("hex"),
-        sourceItemCount: visible.length, content, ...evidence });
-    } finally { await rpc.close(); }
+  async visibleHistory(threadId: string, currentTurnId: string, signal?: AbortSignal, bodyBudgetBytes?: number): Promise<NativeVisibleHistorySnapshot> {
+    return readStoredNativeHistory(this.connect, threadId, currentTurnId, signal, bodyBudgetBytes);
   }
 
   async project(threadId: string, currentTurnId: string): Promise<NativeCompactionHistoryProjection> {

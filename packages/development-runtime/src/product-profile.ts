@@ -1,3 +1,6 @@
+import { connectStoredHistoryRpc } from "@chatgpt-tela/codex";
+import { readProductConfig } from "@chatgpt-tela/product-config";
+import { createSuppliedHistorySource } from "./supplied-history";
 import { CHATGPT_TEMPORARY_CHAT_URL, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
@@ -14,7 +17,7 @@ import { type ProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { MultiProfileControlClient } from "@chatgpt-tela/setup";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { publishAppOwnedDesktopCatalog } from "./app-owned-desktop-catalog";
 import {
   assertChatGptTelaAccountBinding,
@@ -116,6 +119,16 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     || !/^[A-Za-z0-9_-]{43,128}$/.test(ingress.capability)) {
     throw new Error("App-owned Responses requires an install-owned fixed port and URL capability");
   }
+  const catalogPreparation = input.catalogPreparation;
+  const installation = catalogPreparation && !catalogPreparation.readNativeCatalog
+    ? resolveDefaultDesktopInstallation({ environment: process.env }) : undefined;
+  const storedRoute = catalogPreparation && installation
+    ? readProductConfig(join(catalogPreparation.paths.configRoot, "product-v1.json")).appOwnedResponses?.find(r =>
+      r.slot === config.slot && r.port === ingress.port && r.capability === ingress.capability) : undefined;
+  const historyHome = storedRoute?.desktopConfigPath ? dirname(storedRoute.desktopConfigPath)
+    : storedRoute && config.slot === 1 ? installation!.codexHome : undefined;
+  const suppliedHistory = installation && historyHome ? createSuppliedHistorySource((threadId, signal) =>
+    connectStoredHistoryRpc({ executable: installation.codexExecutable, codexHome: historyHome, threadId, signal })) : undefined;
   const identity = productPublicMcpIdentity(config.publicMcpAbi);
   const managed = config.nativeTarget.kind === "multi-profile";
   let completedResults: import("./supplied-request-gateway").SuppliedResultScope | undefined;
@@ -168,6 +181,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   });
   runtime = await (input.electronStarter ?? startElectronDevelopmentRuntime)({
     profileSlot: config.slot,
+    ...(suppliedHistory ? { suppliedHistory } : {}),
     routeId: config.routeId,
     completedResults: resultScope,
     profileId: config.browserProfile.profileId,
@@ -197,12 +211,9 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   const startupStarted = performance.now();
   try {
     input.signal?.throwIfAborted();
-    const preparation = input.catalogPreparation;
-    const installation = preparation && !preparation.readNativeCatalog
-      ? resolveDefaultDesktopInstallation({ environment: process.env }) : undefined;
-    const nativeCatalog = preparation
-      ? await (preparation.readNativeCatalog
-        ? preparation.readNativeCatalog()
+    const nativeCatalog = catalogPreparation
+      ? await (catalogPreparation.readNativeCatalog
+        ? catalogPreparation.readNativeCatalog()
         : readDefaultDesktopNativeCatalog({ installation: installation!, ...(input.signal ? { signal: input.signal } : {}) }))
       : undefined;
     revalidate = async () => {
@@ -210,8 +221,8 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       // Retire any Web rows from a previous account before attempting discovery.
       // If login, quota or model discovery fails, the install-owned registration
       // artifact remains usable with Native models only.
-      if (preparation && nativeCatalog !== undefined) {
-        await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId, slot: config.slot,
+      if (catalogPreparation && nativeCatalog !== undefined) {
+        await publishAppOwnedDesktopCatalog({ paths: catalogPreparation.paths, installId: catalogPreparation.installId, slot: config.slot,
           nativeCatalog, webFamilies: [], assertCurrentAccount: () => {} });
       }
       const webDiscovery = await prepareProductWebDiscovery({
@@ -244,8 +255,8 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       });
       await router.refreshWebModelFamilies(input.signal);
       startupPhase = "catalog_publish";
-      if (preparation && nativeCatalog !== undefined) {
-        await publishAppOwnedDesktopCatalog({ paths: preparation.paths, installId: preparation.installId, slot: config.slot,
+      if (catalogPreparation && nativeCatalog !== undefined) {
+        await publishAppOwnedDesktopCatalog({ paths: catalogPreparation.paths, installId: catalogPreparation.installId, slot: config.slot,
           nativeCatalog, webFamilies: families,
           assertCurrentAccount: () => {
             const current = readChatGptTelaAccountBinding(config.browserProfile);

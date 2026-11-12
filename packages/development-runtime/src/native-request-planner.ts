@@ -1,3 +1,4 @@
+import type { SuppliedHistorySource } from "./supplied-history";
 import { prepareDeferredNativeHistory } from "./native-history-seed";
 import { classifyWebPreparationFailure } from "./web-preparation-diagnostics";
 import { decodeTelaCompactionSummary, telaCompactionSummaryText } from "@chatgpt-tela/codex";
@@ -952,6 +953,7 @@ export type SuppliedRequestWebTurnPlanner = RetiringDevelopmentWebTurnPlanner & 
 };
 
 export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeContinuitySources & {
+  readonly suppliedHistory?: SuppliedHistorySource;
   readonly checkpointCache?: ContextCheckpointCache;
   readonly budgetTokens?: number;
   readonly preparationBudgetFor?: (threadId: string, turnId: string,
@@ -1055,8 +1057,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
   const plannerOptions = options;
   const plan = async (identity: SuppliedWebRequestIdentity, binding: NativeTurnBinding | undefined,
     nativeRequest: unknown, preparation?: Parameters<DevelopmentWebTurnPlanner>[2]): Promise<DevelopmentWebTurnPlan> => {
-    // Input-only requests may reuse context planning, never out-of-band Native readers or Goal state.
+    // Supplied requests may use their profile-fixed stored reader, never a Native execution binding or out-of-band Goal state.
     const options: typeof plannerOptions = binding ? plannerOptions : {
+      ...(plannerOptions.suppliedHistory ? { suppliedHistory: plannerOptions.suppliedHistory } : {}),
       ...(plannerOptions.checkpointCache ? { checkpointCache: plannerOptions.checkpointCache } : {}),
       ...(plannerOptions.budgetTokens !== undefined ? { budgetTokens: plannerOptions.budgetTokens } : {}),
       ...(plannerOptions.checkpointProducer ? { checkpointProducer: plannerOptions.checkpointProducer } : {}),
@@ -1127,7 +1130,14 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // The continuity resolver owns all cold-source and checkpoint decisions.
     // Native task authority and Web surface settlement stay in this planner.
     stage("native_continuity");
-    if (!binding && opaque.count > 0) throw new NativeHistoryBootstrapRequired("source_unavailable");
+    let suppliedHistory: NativeRetainedHistory | undefined;
+    if (!binding && opaque.count > 0 && !retainedHistory) {
+      if (!options.suppliedHistory) throw new NativeHistoryBootstrapRequired("source_unavailable");
+      const source = await options.suppliedHistory.readSeed(identity, workingPolicy.firstMessageTargetTokens * 4,
+        preparation?.signal ?? new AbortController().signal);
+      if (source.threadId !== threadId || source.currentTurnId !== identity.turnId) throw Error("Supplied history belongs to a different request");
+      suppliedHistory = { visibleHistory: source.content, inlineHistoryAssets: source.inlineAssets, historyReferences: source.references };
+    }
     const continuity: NativeContinuityDecision = binding ? await resolveNativeContextContinuity({
       threadId, currentTurnId: identity.turnId,
       authority: binding.authority,
@@ -1138,8 +1148,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       options: { ...options, ...(checkpointProducer ? { checkpointProducer } : {}) },
       preparationBudget,
       ...(preparation ? { preparation } : {}),
-    }) : { mode: "current-input", inlineHistoryAssets: [], checkpointReused: false,
-      checkpointProduced: false };
+    }) : retainedHistory ? { mode: "retained", ...retainedHistory, checkpointReused: true, checkpointProduced: false }
+      : suppliedHistory ? { mode: "visible-prefix", ...suppliedHistory, checkpointReused: false, checkpointProduced: false }
+      : { mode: "current-input", inlineHistoryAssets: [], checkpointReused: false, checkpointProduced: false };
     const visibleHistory = continuity.visibleHistory;
     const inlineHistoryAssets = continuity.inlineHistoryAssets;
     const historyReferences = continuity.historyReferences;
@@ -1200,9 +1211,10 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // A healthy page already owns the prefix. Select existing checkpoints, but
     // defer paid preparation until a fresh page or Native compaction needs it.
     stage("checkpoint_lookup");
-    const deferred = !healthyRetained && binding?.readHistoryPage && binding?.readHistoryIndex
+    const historyReaderAvailable = !!options.suppliedHistory || !!(binding?.readHistoryPage && binding?.readHistoryIndex);
+    const deferred = !healthyRetained && historyReaderAvailable
       ? prepareDeferredNativeHistory(projection, workingPolicy, freshBudgetTokens) : undefined;
-    if (projection.deferredHistory && !(binding?.readHistoryPage && binding?.readHistoryIndex)) {
+    if (projection.deferredHistory && !historyReaderAvailable) {
       throw new Error("Deferred Native originals require their owner-bound reader");
     }
     const working = projection.deferredHistory

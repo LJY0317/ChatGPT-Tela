@@ -1276,7 +1276,7 @@ describe("Native request development Web planner", () => {
         {type:'message',role:'user',content:'Small current request'},
       ]};
       await expect(planner(registered(),request))
-        .rejects.toThrow('requires a verified checkpoint or explicit handoff');
+        .rejects.toMatchObject({ code: 'native_history_bootstrap_required', recoveryReason: 'source_budget' });
       expect(modelCalls).toBe(0);
     }finally{rmSync(root,{recursive:true,force:true});}
   });

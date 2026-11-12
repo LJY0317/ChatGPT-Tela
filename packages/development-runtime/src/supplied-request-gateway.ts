@@ -1,7 +1,9 @@
+import type { SuppliedHistorySource } from "./supplied-history";
+import { contextHistorySelection } from "@chatgpt-tela/mcp";
 import { createHash } from "node:crypto";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { NativeHistoryBootstrapRequired, encodeNativeToolInvocation, extractNativeToolResults, parseNativeTurnClaim, parseNativeTurnReplayIdentity } from "@chatgpt-tela/codex";
-import { NativeToolInventory, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticContext, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, startTurnDiagnosticSummary, withDiagnosticContext, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
+import { CONTEXT_HISTORY_TOOL, NativeToolInventory, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticContext, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, startTurnDiagnosticSummary, withDiagnosticContext, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
 import type { TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import { selectChatGptWebModel, type WebConversationProvider } from "@chatgpt-tela/chatgpt";
 import type { ResponsesGateway } from "@chatgpt-tela/responses";
@@ -28,6 +30,9 @@ export type SuppliedResultScope = {
 };
 
 interface Operation {
+  readonly threadId: string;
+  historyEnabled?: boolean;
+  historyReleasedBytes?: number;
   readonly turnId: string;
   fingerprint: string;
   readonly capability: string;
@@ -65,6 +70,7 @@ export function createSuppliedRequestGateway(input: {
   readonly browserHost: BrowserHost;
   readonly provider: WebConversationProvider;
   readonly planner?: SuppliedRequestWebTurnPlanner;
+  readonly suppliedHistory?: SuppliedHistorySource;
   readonly profileSlot?: number;
   readonly routeId?: string;
   readonly completedResults?: SuppliedResultScope | (() => SuppliedResultScope | undefined);
@@ -81,7 +87,7 @@ export function createSuppliedRequestGateway(input: {
   browserRetention(surfaceId?: string): ReturnType<RetainedBrowserEpochRegistry["retention"]>;
   close(): Promise<void>;
 } {
-  const planner = input.planner ?? createNativeRequestDevelopmentWebTurnPlanner();
+  const planner = input.planner ?? createNativeRequestDevelopmentWebTurnPlanner({ ...(input.suppliedHistory ? { suppliedHistory: input.suppliedHistory } : {}) });
   const controller = new AbortController();
   const operations = new Map<string, Operation>();
   // Negative-only replay receipts. Keep no old answer/input copies; use the same idle retention period.
@@ -105,6 +111,15 @@ export function createSuppliedRequestGateway(input: {
     invoke(capability, invocation) {
       const op = [...operations.values()].find(candidate => candidate.capability === capability);
       if (!op || op.finishedAt !== undefined) throw Error("unknown or retired supplied operation");
+      if (invocation.wireName === CONTEXT_HISTORY_TOOL.wireName && invocation.mode === "structured" && op.historyEnabled && input.suppliedHistory) {
+        return input.suppliedHistory.readPage({ threadId: op.threadId, turnId: op.turnId }, contextHistorySelection(invocation.arguments), controller.signal)
+          .then(result => {
+            if (operations.get(op.threadId) !== op || op.finishedAt !== undefined) throw Error("History request no longer belongs to the active Web operation");
+            const content = JSON.stringify(result);
+            op.historyReleasedBytes = (op.historyReleasedBytes ?? 0) + Buffer.byteLength(content);
+            return { callId: invocation.callId, content, isError: false };
+          });
+      }
       const tool = op.advertisedGoals.find(candidate => candidate.wireName === invocation.wireName);
       if (!tool || invocation.mode !== "structured") throw Error("supplied operation did not advertise this Goal function");
       const result = op.round.open(invocation);
@@ -209,7 +224,7 @@ export function createSuppliedRequestGateway(input: {
           for (const listener of listeners) { try { if (listener(summary) === false) listeners.delete(listener); } catch { listeners.delete(listener); } }
         };
         const owned: Operation = {
-          turnId: identity.turnId, fingerprint: hash, capability, listeners, delivered: false,
+          threadId: identity.threadId, turnId: identity.turnId, fingerprint: hash, capability, listeners, delivered: false,
           round: new ExactToolRound(), advertisedGoals, offer,
           outcome: Promise.resolve().then(async () => {
             const correlation = { scope_fingerprint: diagnosticFingerprint(identity.threadId),
@@ -237,7 +252,9 @@ export function createSuppliedRequestGateway(input: {
               plan = await planner.planSuppliedRequest(identity, body, { signal, onProgress: publish,
                 onPlannerStage: stage => { plannerStage = stage; },
               });
+              owned.historyEnabled = !!input.suppliedHistory && !!plan.physicalContext.deferredHistory;
               const chatTools = {
+                ...(owned.historyEnabled ? { nativeHistoryControl: capability } : {}),
                 ...(owned.advertisedGoals.length ? { nativeGoalControl: capability } : {}) };
               assertWebMessageFitsComposer({ ...plan, chatTools });
               if (plan.physicalContext.mode !== "retained-delta") await epochs.retire(identity.threadId);
@@ -265,6 +282,7 @@ export function createSuppliedRequestGateway(input: {
               });
               await epochs.complete(plan.nativeTaskId, plan.webEpochId, () => plan!.settle?.({
                 status: "completed", answer, surfaceLeaseId: page.surface.leaseId,
+                ...(owned.historyReleasedBytes ? { releasedToolResultBytes: owned.historyReleasedBytes } : {}),
                 ...(bound.document ? { documentGeneration: bound.document.generation } : {}),
               }));
               const responseContext = { ...correlation, operation_fingerprint: diagnosticFingerprint([identity.threadId, identity.turnId, plan.webEpochId].join("\n")) };

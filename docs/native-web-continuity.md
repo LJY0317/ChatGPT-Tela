@@ -40,12 +40,25 @@ access. This is a possible data source, not a live Desktop control connection.
 Its `notLoaded` status belongs to the inspection process and cannot establish
 Desktop idleness, permission to operate a task, or automatic-archive eligibility.
 
-This reader is not integrated into the supplied-request runtime. That integration
-must bind the exact profile and request to a coherent history range, keep current
-instructions and pending tool exchanges exact, and reuse the existing scoped
-context-history tool for any originals omitted from the Web working input.
-Do not introduce a second compression pipeline or restore the retired Native
-handoff helper. The prototype does not establish successful long Web continuation.
+The supplied-request runtime now has a profile-fixed stored reader. It uses the
+configured Desktop home and the official installed CLI for a disposable read-only
+stdio connection; it never starts or resumes a model turn, subscribes to live
+execution, mutates history, or exposes Native work tools. Only scoped indexed
+`thread/read`, `thread/turns/list` and `thread/items/list` requests are permitted.
+
+For an opaque first request, the existing visible-prefix projection keeps recent
+complete exchanges and marks older originals as unsupplied. The existing Tela Chat
+`read_context_history` capability reads those originals through the current Web
+operation, with the existing bounded UTF-8 range format. Current instructions and
+pending tool exchanges stay exact. The history control expires with that operation;
+a warm retained page reuses its admitted context without another stored-history
+read. No second compression pipeline, permanent history copy or retired handoff
+helper is added.
+
+Both profiles passed stored-source/readback probes without model calls. The
+HTTP/MCP fixture proves scoped readback, control retirement and warm reuse. These
+are source acceptance results; installed long-conversation Web generation and its
+answer delivery still need a disposable-fork trial after installation.
 
 ## Failures and diagnostics
 

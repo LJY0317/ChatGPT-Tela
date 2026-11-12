@@ -13,3 +13,5 @@ export * from "./tool-codec";
 export * from "./web-model-catalog";
 
 export * from "./native-history-items";
+
+export * from "./stored-history-rpc";
