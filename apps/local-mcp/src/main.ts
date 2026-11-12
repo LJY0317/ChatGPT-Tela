@@ -5,7 +5,7 @@ import { DynamicChatBackend, createPublicMcpServer } from "@chatgpt-tela/gateway
 import { prepareOwnedDirectory, readOwnershipManifest, registerLocalMarketplace, resolveProductPaths,
   withPackagedTransitionOwner, type ProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { readServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
-import { normalizeOwnedLocalChatPlugin, prepareLocalChatPlugin } from "./plugin-package";
+import { validateOwnedLocalChatPlugin, prepareLocalChatPlugin } from "./plugin-package";
 
 /** The installed service's local runtime descriptor is the only backend selector. */
 export function createDeviceLocalChatMcpServer(paths: ProductPaths = resolveProductPaths()) {
@@ -37,7 +37,7 @@ export async function registerDeviceLocalChatPlugin(input: { paths: ProductPaths
     if (prepared.state === "external-existing") throw Error("local plugin source belongs to another owner");
     const contents = readdirSync(root).filter(name => name !== ".chatgpt-tela-owner.json");
     if (contents.length === 0) prepareLocalChatPlugin(root, input.launcherExecutablePath);
-    else normalizeOwnedLocalChatPlugin(root, input.launcherExecutablePath);
+    else validateOwnedLocalChatPlugin(root);
     return registerLocalMarketplace({ manifestPath: input.paths.installManifest, marketplacePath: input.marketplacePath, pluginPath: join(root, "plugins", "tela-local-chat") });
   });
 }

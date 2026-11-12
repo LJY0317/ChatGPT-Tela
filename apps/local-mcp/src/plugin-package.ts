@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 /** Prepare an inactive marketplace; installation remains a separate host operation. */
@@ -41,9 +41,9 @@ export function prepareLocalChatPlugin(destination: string, launcher?: string) {
   return { root, plugin, marketplace };
 }
 
-function localPluginManifest(version = "0.0.2") {
+function localPluginManifest() {
   return { $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-    name: "tela-local-chat", version, description: "Device-local Tela Chat MCP" };
+    name: "tela-local-chat", version: "0.0.2", description: "Device-local Tela Chat MCP" };
 }
 
 function localMcpManifest(executable?: string) {
@@ -53,50 +53,17 @@ function localMcpManifest(executable?: string) {
       args: executable ? ["local-mcp"] : ["${PLUGIN_ROOT}/server.cjs"], cwd: "${PLUGIN_ROOT}" } } };
 }
 
-/** Called only after the product ownership marker and install manifest match. */
-export function normalizeOwnedLocalChatPlugin(destination: string, launcher: string): void {
+/** Preserve user edits; existing sources must already use the supported plugin layout. */
+export function validateOwnedLocalChatPlugin(destination: string): void {
   const root = resolve(destination);
   const plugin = join(root, "plugins", "tela-local-chat");
-  const standardManifest = join(plugin, ".codex-plugin", "plugin.json");
-  const standardMcp = join(plugin, ".mcp.json");
-  // An owned root does not imply ownership of a linked child directory.
-  if (realpathSync(plugin) !== join(realpathSync(root), "plugins", "tela-local-chat"))
+  const manifestDirectory = join(plugin, ".codex-plugin");
+  const manifest = join(manifestDirectory, "plugin.json");
+  const mcp = join(plugin, ".mcp.json");
+  // Ownership of the root does not include a linked external plugin.
+  if (realpathSync(plugin) !== join(realpathSync(root), "plugins", "tela-local-chat")
+    || !existsSync(manifest) || !existsSync(mcp)
+    || !lstatSync(manifestDirectory).isDirectory()
+    || !lstatSync(manifest).isFile() || !lstatSync(mcp).isFile())
     throw Error("existing local plugin source was modified; preserved");
-  const entries = readdirSync(plugin);
-  if (entries.includes(".codex-plugin") && entries.includes(".mcp.json")) {
-    // Current source contents may be edited, but the required layout must exist.
-    if (!lstatSync(join(plugin, ".codex-plugin")).isDirectory()
-      || !existsSync(standardManifest) || !lstatSync(standardManifest).isFile()
-      || !lstatSync(standardMcp).isFile())
-      throw Error("existing local plugin source was modified; preserved");
-    return;
-  }
-  const oldManifest = join(plugin, "plugin.json");
-  const oldMcp = join(plugin, "mcp.json");
-  const expected = new Map([
-    ["plugin.json", JSON.stringify(localPluginManifest("0.0.1"), null, 2) + "\n"],
-    ["mcp.json", JSON.stringify(localMcpManifest(resolve(launcher)), null, 2) + "\n"],
-  ]);
-  if (entries.sort().join(",") !== "mcp.json,plugin.json"
-    || [...expected].some(([name, content]) => {
-      const path = join(plugin, name);
-      const stat = lstatSync(path);
-      return !stat.isFile() || stat.isSymbolicLink() || readFileSync(path, "utf8") !== content;
-    })) throw Error("existing local plugin source was modified; preserved");
-
-  const manifestDir = join(plugin, ".codex-plugin");
-  mkdirSync(manifestDir);
-  try {
-    renameSync(oldManifest, standardManifest);
-    renameSync(oldMcp, standardMcp);
-  } catch (error) {
-    // Restore the previous layout if the second rename fails.
-    try {
-      if (readdirSync(manifestDir).includes("plugin.json")) renameSync(standardManifest, oldManifest);
-      rmdirSync(manifestDir);
-    } catch (rollbackError) {
-      throw new AggregateError([error, rollbackError], "local plugin normalization failed; rollback incomplete");
-    }
-    throw error;
-  }
 }

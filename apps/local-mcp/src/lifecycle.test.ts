@@ -12,7 +12,7 @@ import {
 } from "@chatgpt-tela/product-lifecycle";
 import { runProductUninstall } from "../../../packages/product-uninstall/src/index";
 import { createDeviceLocalChatMcpServer } from "./main";
-import { prepareLocalChatPlugin, normalizeOwnedLocalChatPlugin } from "./plugin-package";
+import { prepareLocalChatPlugin, validateOwnedLocalChatPlugin } from "./plugin-package";
 
 // The runner models only the standard OS registration contract. Nothing is
 // installed in the real user account, and no service is started or restarted.
@@ -112,7 +112,7 @@ test("owned local MCP source, alias and marketplace settle across packaged insta
       services: stoppedServices, ...options })).toVersion).toBe("2.0.0");
     expect(readOwnershipManifest(paths.installManifest)?.installId).toBe(installed.installId);
     expect(readOwnershipManifest(paths.installManifest)?.productVersion).toBe("2.0.0");
-    normalizeOwnedLocalChatPlugin(sourceRoot, join(paths.binaryRoot, "tela"));
+    validateOwnedLocalChatPlugin(sourceRoot);
     expect(readFileSync(configPath, "utf8")).toBe(originalPluginConfig);
     expect(readFileSync(join(paths.binaryRoot, "tela"), "utf8")).toContain("# 2.0.0");
     expect(await register(plugin)).toBe("already-registered");
