@@ -32,6 +32,21 @@ readable export or checkpoint is necessary for that missing context. Do not
 reintroduce an external Native engine, private provider identity, automatic paid
 Native summary, model fallback or multi-stage compression chain to bypass it.
 
+## Stored history versus live execution
+
+A bounded local prototype verified that the official app-server can return readable
+stored items through `thread/items/list`, without a model turn or private rollout
+access. This is a possible data source, not a live Desktop control connection.
+Its `notLoaded` status belongs to the inspection process and cannot establish
+Desktop idleness, permission to operate a task, or automatic-archive eligibility.
+
+This reader is not integrated into the supplied-request runtime. That integration
+must bind the exact profile and request to a coherent history range, keep current
+instructions and pending tool exchanges exact, and reuse the existing scoped
+context-history tool for any originals omitted from the Web working input.
+Do not introduce a second compression pipeline or restore the retired Native
+handoff helper. The prototype does not establish successful long Web continuation.
+
 ## Failures and diagnostics
 
 Known context-recovery failures retain their existing content-free public code and

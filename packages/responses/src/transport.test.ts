@@ -327,7 +327,7 @@ describe("Native Responses HTTP transport", () => {
       const expected = await first.json();
       if (recoveryReason === "checkpoint_rejected") expect(expected.error).toMatchObject({
         code: "tela_native_checkpoint_response_rejected", retryable: false,
-        recovery: { kind: "explicit_native_handoff", requires_new_native_turn: true },
+        recovery: { kind: "provide_readable_context", requires_new_native_turn: true },
       });
       if (recoveryReason === "source_budget") {
         expect(expected.error).toMatchObject({
@@ -338,7 +338,7 @@ describe("Native Responses HTTP transport", () => {
       }
       if (recoveryReason === "checkpoint_closed") {
         expect(expected.error).toMatchObject({code: "tela_native_checkpoint_operation_closed", retryable: false,
-          recovery: {kind: "explicit_native_handoff", requires_new_native_turn: true}});
+          recovery: {kind: "provide_readable_context", requires_new_native_turn: true}});
         expect(expected.error.message).not.toContain("Reconcile");
       }
       if (recoveryReason === "checkpoint_interrupted") expect(expected.error).toMatchObject({
@@ -459,7 +459,7 @@ describe("Native Responses HTTP transport", () => {
           retryable: false,
           recovery: {
             kind: recoveryReason === "unindexed_history"
-              ? "continue_on_native" : "explicit_native_handoff",
+              ? "continue_on_native" : "provide_readable_context",
             requires_user_action: true,
             requires_new_native_turn: recoveryReason !== "unindexed_history",
             original_history_preserved: true,
@@ -558,7 +558,7 @@ describe("Native Responses HTTP transport", () => {
     expect(result.error.message).toContain("does not automatically inherit the omitted history");
     expect(result.error.retryable).toBe(false);
     expect(result.error.recovery).toEqual({
-      kind:"explicit_native_handoff",
+      kind:"provide_readable_context",
       requires_user_action:true,
       requires_new_native_turn:true,
       original_history_preserved:true,

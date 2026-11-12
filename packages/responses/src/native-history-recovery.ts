@@ -3,21 +3,21 @@ import type { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
 /** Public recovery projection of the Native-owned lifecycle state. Diagnostics and
  * exception text never determine authority or get copied into the response. */
 const RECOVERY = {
-  checkpoint_rejected: {code: "tela_native_checkpoint_response_rejected", kind: "explicit_native_handoff", newTurn: true,
-    message: "A proven Web context-summary response was unusable and its isolated operation was released. Continue the same user goal with another available tool or method; if using Native, continue in a newly authorized Native turn or provide a verified handoff. Completed checkpoint stages and original history are preserved; no task answer or tool execution was committed by this request." },
-  source_budget: {code: "tela_native_context_checkpoint_required", kind: "explicit_native_handoff", newTurn: true,
+  checkpoint_rejected: {code: "tela_native_checkpoint_response_rejected", kind: "provide_readable_context", newTurn: true,
+    message: "A proven Web context-summary response was unusable and its isolated operation was released. Continue the same user goal with another available tool or method; if using Native, continue in a new request with readable context. Completed checkpoint stages and original history are preserved; no task answer or tool execution was committed by this request." },
+  source_budget: {code: "tela_native_context_checkpoint_required", kind: "provide_readable_context", newTurn: true,
     message: "The available Native history cannot fit within the Web context preparation budget. No history was truncated and no automatic Native fallback was started. Continue in Native, or explicitly start a new Web conversation with the relevant instructions, decisions and unfinished work in readable form. A new Web conversation does not automatically inherit the omitted history. Original history and completed checkpoints are preserved; this request committed no Web answer or task tool action." },
   checkpoint_interrupted: {code: "tela_native_checkpoint_reconciliation_required", kind: "reconcile_checkpoint", newTurn: true,
     message: "A Web context-summary submission has an uncertain outcome. Reconcile the checkpoint operation before repeating that effect; meanwhile, another available tool or method may continue the same user goal. Original history is preserved; no task answer or tool execution was committed by this request." },
   unindexed_history: {code: "tela_native_history_indexed_source_required", kind: "continue_on_native", newTurn: false,
     message: "This Native conversation uses unindexed history that is unavailable to the Web continuation path. Continue the same user goal in Native or with another available tool; a new handoff turn alone cannot establish an indexed source. Web continuation requires a supported independently verified checkpoint or a new public bounded history contract. Original history is preserved, and this request committed no Web answer or tool action." },
-  source_unavailable: {code: "tela_native_history_checkpoint_required", kind: "explicit_native_handoff", newTurn: true,
+  source_unavailable: {code: "tela_native_history_checkpoint_required", kind: "provide_readable_context", newTurn: true,
     message: "This Native conversation does not supply the readable history or a verified readable checkpoint required for Web continuation. Repeating the same Web request will not recover that context. Continue in Native, or explicitly start a new Web conversation with the relevant instructions, decisions and unfinished work in readable form. A new Web conversation does not automatically inherit the omitted history. Original history is preserved; no automatic Native fallback, Web answer or task tool execution was committed by this request." },
-  checkpoint_closed: {code: "tela_native_checkpoint_operation_closed", kind: "explicit_native_handoff", newTurn: true,
-    message: "Web context preparation ended after its isolated operation was released locally without a usable result. Continue the same user goal through another available tool or method; Native may use a new turn with the preserved checkpoints. Remote outcome remains unknown; original history and completed checkpoint stages are preserved. No task answer or tool execution was committed by this request." },
+  checkpoint_closed: {code: "tela_native_checkpoint_operation_closed", kind: "provide_readable_context", newTurn: true,
+    message: "Web context preparation ended after its isolated operation was released locally without a usable result. Continue the same user goal through another available tool or method; a new request may reuse compatible preserved checkpoints. Remote outcome remains unknown; original history and completed checkpoint stages are preserved. No task answer or tool execution was committed by this request." },
 } as const satisfies Record<NativeHistoryBootstrapRequired["recoveryReason"], {
   readonly code: string;
-  readonly kind: "continue_on_native" | "explicit_native_handoff" | "reconcile_checkpoint";
+  readonly kind: "continue_on_native" | "provide_readable_context" | "reconcile_checkpoint";
   readonly newTurn: boolean;
   readonly message: string;
 }>;
