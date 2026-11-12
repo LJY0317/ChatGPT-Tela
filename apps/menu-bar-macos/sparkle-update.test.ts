@@ -85,7 +85,7 @@ import Sparkle
   } finally {
     clearTimeout(deadline); observer?.close();
     if (child && child.exitCode === null) { child.kill(); await child.exited; }
-    spawnSync("/usr/bin/defaults", ["delete", bundleId, "TelaUpdateDesktopRestore"]);
+    spawnSync("/usr/bin/defaults", ["delete", bundleId, "TelaUpdateDesktopProfiles"]);
     rmSync(root, { recursive: true, force: true });
   }
 }, 90_000);

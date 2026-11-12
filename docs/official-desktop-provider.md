@@ -92,13 +92,16 @@ preserves that reason and offers normal ChatGPT termination with user consent.
 Diagnostics record only the profile slot, target kind/state, endpoint presence and
 provider-selection classification; no conversation or process details are needed. See [upgrade recovery](upgrade-recovery.md#macos-updates-through-sparkle).
 
-Menu app opening matches the actual application location, not only its bundle ID:
-profile clones may share the official ID. An absent app is launched as a separate
-instance; an existing exact app is activated without starting a duplicate.
-The OS result is checked against the requested app. Open/restore evidence shares
-`menu-ui-events.json` with the existing menu diagnostics (24 hours / 128 KiB),
-recording counts, match/acceptance flags and OS error codes without app paths or
-conversation content. OS acceptance alone does not prove a visible window.
+The default Desktop opens through the OS using its exact application identity.
+Managed profiles open through their configured provider's public `launch-target`
+contract, preserving that profile's environment and arguments. Tela does not open
+internal derived apps or activate background selector apps. Update snapshots store
+running profile slots and target IDs, not runtime app URLs. Earlier URL-only
+snapshots are retired; a first upgrade may require opening a profile once.
+Open/restore evidence shares `menu-ui-events.json` with the existing menu diagnostics
+(24 hours / 128 KiB). Provider launch stages use the existing update diagnostics.
+Neither records conversation content or raw app paths. Launch acceptance alone
+does not prove a visible window.
 
 ## Verification boundary
 

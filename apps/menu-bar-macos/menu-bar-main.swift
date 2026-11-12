@@ -201,7 +201,6 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       }
     }
     controlCenter.updater = updater
-    updater.desktopBundleIdentifiers = { [weak self] in self?.controlCenter.desktopBundleIdentifiers ?? ["com.openai.codex"] }
     updater.changed = { [weak self] in
       guard let self else { return }
       self.updateConnectionProgress(self.connectionProgress)
@@ -639,7 +638,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         item.isEnabled = false
         menu.addItem(item)
       } else {
-        let item = actionItem(updater.recoveredPendingUpdate ? "Review Pending Update…" : "Check for Updates…", action: #selector(openUpdates))
+        let item = actionItem(updater.recoveredPendingUpdate ? "Review Update…" : "Check for Updates…", action: #selector(openUpdates))
         item.isEnabled = updater.canCheck
         if #available(macOS 14.4, *), let problem = updater.problem { item.subtitle = problem }
         menu.addItem(item)

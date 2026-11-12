@@ -622,10 +622,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func addStatus(_ title: String, value: String, subtitle: String? = nil, to stack: NSStackView) {
-    let ready = value == "Available" || value == "Ready" || value == "Running"
     let state = label("● " + value)
     state.font = .systemFont(ofSize: TelaStyle.captionSize, weight: .medium)
-    state.textColor = ready ? .secondaryLabelColor : (value == "Checking…" ? .secondaryLabelColor : .systemOrange)
+    state.textColor = value == "Needs attention" || value == "Unavailable" ? .systemOrange : .secondaryLabelColor
     row(title, subtitle: subtitle, control: state, in: stack)
   }
 
@@ -712,14 +711,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     }
     switch selectedPage {
     case .home:
-      pageHeader("Your ChatGPT connections at a glance.")
+      pageHeader("")
       addTelaControl()
       let connections = card()
       addStatus("Chat · This Mac", value: availability(for: "chat"),
-                subtitle: "Local service only; install the plugin separately in ChatGPT Desktop.", to: connections)
+                subtitle: "Local tools for ChatGPT.", to: connections)
       divider(in: connections)
       addStatus("Work / Codex", value: availability(for: "codex", needsProfile: true),
-                subtitle: "Use Web models in your Codex conversations.", to: connections)
+                subtitle: "Web models in Work.", to: connections)
       if serviceStates["codex"] == "Ready" && availability(for: "codex", needsProfile: true) == "Needs attention" {
         let help = card("Finish connecting Work")
         append(secondary("Open Work to get Web models ready in ChatGPT."), to: help)
@@ -727,11 +726,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       }
       stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .work:
-      pageHeader("Your ChatGPT connections.")
+      pageHeader("")
       addTelaControl()
       if installedServiceControlsAvailable() && serviceStates["codex"] == "Ready" && (profiles.isEmpty || settingUp || setupMessage != nil) {
         let setup = card("Sign in and connect ChatGPT")
-        append(secondary("Sign in in Tela's login window. Open ChatGPT Plugins and connect ChatGPT Tela using the address below. Reuse an existing connection when available. Then finish setup in the login window."), to: setup)
+        append(secondary("Sign in, then connect Tela in ChatGPT Plugins using the address below. Use an existing connection if available."), to: setup)
         setup.addArrangedSubview(actionButton("Open ChatGPT Plugins", action: #selector(openChatGPTPlugins)))
         if let connectorURL {
           let address = secondary(connectorURL)
@@ -745,7 +744,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           login.isEnabled = !operationInProgress && serviceStates["codex"] == "Ready"
           setup.addArrangedSubview(login)
         }
-        if settingUp { append(secondary("Complete setup in the login window. Choose Finish setup from its menu or close the window. Cancel setup leaves the profile disconnected."), to: setup) }
+        if settingUp { append(secondary("Finish sign-in, then close the login window."), to: setup) }
         if let setupMessage { append(secondary(setupMessage), to: setup) }
       }
       if workInventory.error != nil {
@@ -961,10 +960,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       actions.bottomAnchor.constraint(equalTo: previewPane.bottomAnchor).isActive = true
       stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .settings:
-      pageHeader("Make Tela work the way you want.")
+      pageHeader("")
       addLocalChatPluginSetup()
       let diagnostics = card("Detailed diagnostics")
-      append(secondary("Off by default. Private evidence may include conversation text, local paths, and browser screens. It stays on this device, up to 7 days / 64 MB. Capture cannot guarantee a diagnosis."), to: diagnostics)
+      append(secondary("Includes conversation text, file paths, and screenshots. Stored on this Mac for up to 7 days / 64 MB."), to: diagnostics)
       let capturePicker = NSPopUpButton()
       for (value, title) in [("off", "Off"), ("15", "15 minutes"), ("until-disabled", "Until turned off")] {
         capturePicker.addItem(withTitle: title)
@@ -974,14 +973,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       capturePicker.target = self
       capturePicker.action = #selector(changeDiagnosticCapture(_:))
       capturePicker.isEnabled = !operationInProgress && installedServiceControlsAvailable() && diagnosticCaptureStatus != nil
-      row("Private capture", subtitle: diagnosticCaptureStatus == nil ? "Status unavailable" :
+      row("Capture", subtitle: diagnosticCaptureStatus == nil ? "Status unavailable" :
           diagnosticCaptureStatus?.mode == "timed" ? "Expires in about \(diagnosticCaptureStatus?.minutesRemaining ?? 0) min" : nil,
           control: capturePicker, in: diagnostics)
       if !diagnosticCaptureMessage.isEmpty { append(secondary(diagnosticCaptureMessage), to: diagnostics) }
       let folders = card("Chat · Local folders")
-      append(secondary("Choose folders ChatGPT may read and edit through Tela Chat. Your files remain yours."), to: folders)
-      if !chatFoldersAvailable { append(secondary("Folder settings unavailable. Refresh details or update Tela."), to: folders) }
-      else if chatFolders.isEmpty { append(secondary("No folders approved yet."), to: folders) }
+      append(secondary("Allow ChatGPT to read and edit these folders."), to: folders)
+      if !chatFoldersAvailable { append(secondary("Folder settings unavailable. Try refreshing."), to: folders) }
+      else if chatFolders.isEmpty { append(secondary("No folders added."), to: folders) }
       for (index, path) in chatFolders.enumerated() {
         let remove = actionButton("Remove access…", action: #selector(removeChatFolder(_:)))
         remove.tag = index; remove.isEnabled = !operationInProgress
@@ -991,7 +990,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       choose.isEnabled = chatFoldersAvailable && !operationInProgress
       folders.addArrangedSubview(choose)
       if chatFoldersAvailable && !chatFoldersApplied {
-        append(secondary("Saved folder access is not active yet. Applying it restarts only Chat and interrupts running Chat commands."), to:folders)
+        append(secondary("Restart Tela Chat to apply folder access. Running Chat commands will stop."), to:folders)
         let apply = actionButton("Apply Chat settings…", action:#selector(applyChatFolders))
         apply.isEnabled = !operationInProgress; folders.addArrangedSubview(apply)
       }
@@ -1022,7 +1021,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       delayPicker.action = #selector(setApprovalDelay(_:))
       delayPicker.isEnabled = !preferenceError && approvalAutomation != "off"
       row("Wait before approving", control: delayPicker, in: approvals)
-      append(secondary("Restart your Work profile to apply changes. This interrupts any active turn."), to: approvals)
+      append(secondary("Restart the profile to apply changes. Running work will stop."), to: approvals)
       if preferenceError { append(secondary("Couldn't read approval settings."), to: approvals) }
       if installedServiceControlsAvailable() && bootstrapState == "configured" {
         let background = card("Tela")
@@ -1032,11 +1031,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         row("Background activity", subtitle: changingServices ? "Updating…" : nil, control: button, in: background)
       }
       let support = card()
-      row("ChatGPT plugin", subtitle: "Manage account plugins in ChatGPT. Local plugin installation is completed in ChatGPT Desktop.",
+      row("ChatGPT plugin", subtitle: "Install or manage plugins in ChatGPT.",
           control: actionButton("Manage…", action: #selector(openChatGPTPlugins)), in: support)
       let updates = card("Updates")
       updatesSection = updates
-      let check = actionButton(updater?.recoveredPendingUpdate == true ? "Review Pending Update…" : "Check for Updates…", action: #selector(checkForUpdates))
+      let check = actionButton(updater?.recoveredPendingUpdate == true ? "Review Update…" : "Check for Updates…", action: #selector(checkForUpdates))
       check.isEnabled = updater?.canCheck == true && !operationInProgress
       let installed = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
       row(updater?.preparationStatus ?? updater?.availableVersion.map { "Version \($0) available" } ?? "ChatGPT Tela",
@@ -1069,8 +1068,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           let value = sender.selectedItem?.representedObject as? String else { return }
     if value != "off" {
       let alert = NSAlert()
-      alert.messageText = "Enable private diagnostics?"
-      alert.informativeText = "Diagnostic files may contain conversation text, browser screens and local paths. They remain on this device with bounded retention. Enabling capture cannot guarantee identifying the cause of a failure."
+      alert.messageText = "Enable detailed diagnostics?"
+      alert.informativeText = "Save conversation text, file paths, and screenshots on this Mac for up to 7 days / 64 MB."
       alert.addButton(withTitle: "Enable")
       alert.addButton(withTitle: "Cancel")
       if alert.runModal() != .alertFirstButtonReturn { renderCurrentPage(); return }
@@ -1100,9 +1099,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func addLocalChatPluginSetup() {
     guard installedServiceControlsAvailable() else { return }
-    let local = card("1 · Local Chat on this Mac")
+    let local = card("Chat on This Mac")
     let chatReady = serviceStates["chat"] == "Ready"
-    append(secondary("Tela Chat: \(serviceStates["chat"] ?? "Checking…"). For ChatGPT Desktop local threads on this Mac."), to: local)
+    append(secondary("Tela Chat: \(TelaLocalChatPresentation(serviceState: serviceStates["chat"] ?? "Checking…").status)"), to: local)
     if !chatReady {
       let start = actionButton("Start Tela Chat", action: #selector(startLocalChat))
       start.isEnabled = !operationInProgress
@@ -1112,15 +1111,15 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       stop.isEnabled = !operationInProgress
       local.addArrangedSubview(stop)
     }
-    let prepare = actionButton("Prepare local plugin", action: #selector(prepareLocalChatPlugin))
+    let prepare = actionButton("Prepare Plugin", action: #selector(prepareLocalChatPlugin))
     prepare.isEnabled = !operationInProgress
     local.addArrangedSubview(prepare)
-    if preparingLocalPlugin { append(secondary("Preparing local plugin…"), to: local) }
+    if preparingLocalPlugin { append(secondary("Preparing plugin…"), to: local) }
     if let localPluginMessage { append(secondary(localPluginMessage), to: local) }
-    let folders = actionButton("Approve local folders…", action: #selector(openLocalFolderSettings))
+    let folders = actionButton("Manage Folders…", action: #selector(openLocalFolderSettings))
     folders.isEnabled = !operationInProgress
     local.addArrangedSubview(folders)
-    append(secondary("2 · Approve folders in Settings. 3 · Install tela-local-chat from your personal marketplace in ChatGPT Desktop's Plugins Directory; preparation does not install or enable it. 4 · In a local Desktop thread, use a Chat tool to open the approved folder and read a file. HTTPS and Tailscale are not needed. ChatGPT controls plugin visibility; another signed-in device's plugin list is not guaranteed hidden."), to: local)
+    append(secondary("Prepare the plugin, then install Tela Local Chat from your personal marketplace in ChatGPT’s Plugins Directory."), to: local)
   }
 
   @objc private func openLocalFolderSettings() {
@@ -1174,7 +1173,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   @objc private func removeChatFolder(_ sender: NSButton) {
     guard !operationInProgress, chatFolders.indices.contains(sender.tag) else { return }
     let alert = NSAlert(); alert.messageText = "Remove Chat access to this folder?"
-    alert.informativeText = "Your files will be kept. Apply Chat settings afterward to stop access; broader approved parent folders still grant access."
+    alert.informativeText = "Apply Chat settings to remove access. Parent-folder permissions still apply."
     alert.addButton(withTitle:"Remove access"); alert.addButton(withTitle:"Cancel")
     guard alert.runModal() == .alertFirstButtonReturn else { return }
     changeChatFolders(["chat","disallow-root","--path",chatFolders[sender.tag]])
@@ -1182,7 +1181,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   @objc private func applyChatFolders() {
     guard !operationInProgress else { return }
     let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "Apply Chat folder access?"
-    alert.informativeText = "This restarts Tela Chat and interrupts running Chat commands. Work / Codex profiles stay open."
+    alert.informativeText = "Tela Chat will restart. Running Chat commands will stop."
     alert.addButton(withTitle:"Apply settings"); alert.addButton(withTitle:"Cancel")
     guard alert.runModal() == .alertFirstButtonReturn else { return }
     changeChatFolders(["services","restart","chat"])
@@ -1301,7 +1300,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       help.addArrangedSubview(actionButton("Check again", action: #selector(refreshPage)))
       return
     }
-    append(secondary("Start with device-local Chat below. HTTPS, Tailscale and a Web account setup are not required. A ready local service or prepared plugin does not prove ChatGPT Desktop installed or enabled it."), to: stack)
+    append(secondary("Start with Chat on this Mac. Install the plugin in ChatGPT Desktop."), to: stack)
     addLocalChatPluginSetup()
     let connection = card("Optional · Remote Web / Codex development")
     let endpoint = NSTextField(string: endpointDraft)
@@ -1325,7 +1324,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     consent.state = consentDraft ? .on : .off
     append(consent, to: connection)
     exposureConsent = consent
-    append(secondary("This preview has no authentication on the public endpoint. Anyone with its address can reach the exposed tools. Use only a controlled development environment. Consumer-safe sign-in is not available yet."), to: connection)
+    append(secondary("This preview has no authentication. Anyone with the address can use its tools. For development only."), to: connection)
     let save = actionButton("Save Web connection", action: #selector(saveFirstUseConfiguration))
     save.isEnabled = !operationInProgress
     connection.addArrangedSubview(save)
@@ -1474,11 +1473,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     if !start {
       let alert = NSAlert()
       alert.alertStyle = .warning
-      alert.messageText = chatOnly ? "Stop Tela Chat?" : "Stop Tela background services?"
+      alert.messageText = chatOnly ? "Stop Tela Chat?" : "Stop Tela?"
       alert.informativeText = chatOnly
-        ? "Running Chat commands may be interrupted. Work / Codex connections stay open."
-        : "This stops Chat and Work connections. ChatGPT profiles connected through Tela may close, and their running work may be interrupted."
-      alert.addButton(withTitle: "Stop services")
+        ? "Running Chat commands will stop. Work connections will stay open."
+        : "Chat and Web models will disconnect. Finish any work before continuing."
+      alert.addButton(withTitle: "Stop")
       alert.addButton(withTitle: "Cancel")
       guard alert.runModal() == .alertFirstButtonReturn else { return }
     }
@@ -1674,19 +1673,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   @objc private func openProfileButton(_ sender: NSButton) { openProfile(slot: sender.tag) }
 
-  var desktopBundleIdentifiers: [String] {
-    ["com.openai.codex"] + profiles.filter { $0.slot > 1 }.compactMap { $0.targetId }
-  }
-
   func openProfile(slot: Int) {
-    let bundleId = slot == 1 ? "com.openai.codex" : profiles.first(where: { $0.slot == slot })?.targetId
-    recordMenuDiagnostic("profile_open_requested", fields: ["slot": slot, "targetKnown": bundleId != nil])
-    guard let bundleId, let url = telaDesktopApplicationURL(bundleId: bundleId) else {
-      profileFailure = "Couldn't find the ChatGPT app for this profile."
+    let targetId = slot == 1 ? "default" : profiles.first(where: { $0.slot == slot })?.targetId
+    recordMenuDiagnostic("profile_open_requested", fields: ["slot": slot, "targetKnown": targetId != nil])
+    guard let targetId else {
+      profileFailure = "Couldn't find this ChatGPT profile."
       selectedPage = .work; show(); return
     }
-    // OS opening also delivers reopen to an app with no window. Activation alone does not.
-    openTelaDesktopApplication(at: url, activates: true) { [weak self] error in
+    openTelaDesktopProfile(TelaDesktopProfile(slot: slot, targetId: targetId), activates: true) { [weak self] error in
       Task { @MainActor in
         guard let self, error != nil else { return }
         self.profileFailure = "Couldn't open ChatGPT. Please try again."
@@ -1750,10 +1744,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       alert.alertStyle = .warning
       alert.messageText = action == "restart" ? "Reopen \(profile.targetDisplayName) with Tela?" : "Turn off Web models in \(profile.targetDisplayName)?"
       alert.informativeText = action == "restart"
-        ? "ChatGPT will close and reopen with Web models ready. Finish any ongoing work first. Your conversations will be kept."
+        ? "Finish any work before reopening ChatGPT."
         : profile.targetSessionState == "independent"
-          ? "This disconnects Tela's Web models from this profile. The official ChatGPT Desktop stays open; finish active Web work first."
-          : "This closes this ChatGPT app and interrupts any ongoing work. Your conversations will be kept. You can still open ChatGPT normally to use Native models."
+          ? "Finish any Web work before disconnecting. ChatGPT will stay open."
+          : "ChatGPT will close. Finish any work before continuing."
       alert.addButton(withTitle: action == "restart" ? "Reopen with Tela"
         : profile.targetSessionState == "independent" ? "Turn Off Web Models" : "Turn Off and Close")
       alert.addButton(withTitle: "Cancel")

@@ -1,3 +1,4 @@
+import { runDesktopAppCommand } from "./desktop-app";
 import { runApplicationUpdate } from "./application-update";
 import { diagnosePublicIngress, SystemTailscaleCommandRunner } from "@chatgpt-tela/tailscale-ingress";
 import { probePublicMcp, probeUnifiedDevelopmentMcp } from "@chatgpt-tela/gateway";
@@ -28,6 +29,7 @@ Usage:
   chatgpt-tela configure --file <product-config.json> [--enable-app-owned-desktop [--slot <profile>]]
   chatgpt-tela configure --stdin [--if-missing] [--enable-app-owned-desktop [--slot <profile>]]
   chatgpt-tela setup [--slot <profile>]
+  chatgpt-tela desktop-app snapshot | desktop-app open --slot N --target ID
   chatgpt-tela desktop-provider <register|restore> <--dry-run|--apply> [--slot N] [--config-file /path/to/config.toml]
   chatgpt-tela ingress status --public [--public-dns-url <DNS-JSON-URL>]
   chatgpt-tela services <start|stop>
@@ -66,7 +68,7 @@ function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat"
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  if (args[0] === "application-update") {
+  if (args[0] === "application-update" || args[0] === "desktop-app") {
     process.env.CHATGPT_TELA_DIAGNOSTIC_FILE ??= join(resolveProductPaths().logsRoot, "update.diagnostics.jsonl");
   }
   const lifecycleApply = ["install", "repair", "upgrade", "cancel-upgrade"].includes(args[0] ?? "")
@@ -185,6 +187,10 @@ async function main(): Promise<void> {
       defaultPayloadRoot: payloadRootForLauncherExecutable(),
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (args[0] === "desktop-app") {
+    process.stdout.write(`${JSON.stringify(await runDesktopAppCommand(args))}\n`);
     return;
   }
   if (args[0] === "desktop-provider") {

@@ -2,12 +2,10 @@ import AppKit
 import Sparkle
 
 /// A profile clone can share the official bundle ID. Prefer the standard installation for slot 1.
-func telaDesktopApplicationURL(bundleId: String,
-  applicationDirectories: [URL] = FileManager.default.urls(for: .applicationDirectory, in: .localDomainMask)
+func telaDefaultDesktopApplicationURL(applicationDirectories: [URL] = FileManager.default.urls(for: .applicationDirectory, in: .localDomainMask)
     + FileManager.default.urls(for: .applicationDirectory, in: .userDomainMask),
   registeredApplications: (String) -> [URL] = { NSWorkspace.shared.urlsForApplications(withBundleIdentifier: $0) }) -> URL? {
-  if bundleId != "com.openai.codex" { return NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) }
-  let candidates = registeredApplications(bundleId)
+  let candidates = registeredApplications("com.openai.codex")
   for directory in applicationDirectories {
     let matches = candidates.filter { $0.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL }
     if matches.count == 1 { return matches.first }
@@ -23,7 +21,7 @@ func openTelaDesktopApplication(at url: URL, activates: Bool, completion: @escap
     $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == expected
   }) {
     let success = !activates || running.activate(options: [.activateAllWindows])
-    recordMenuDiagnostic("desktop_open_existing", fields: ["success": success, "sameApplication": true])
+    recordMenuDiagnostic("desktop_open_existing", fields: ["success": success, "sameApplication": true, "activationPolicy": running.activationPolicy.rawValue])
     completion(success ? nil : NSError(domain: "TelaDesktopOpen", code: 2)); return
   }
   let configuration = NSWorkspace.OpenConfiguration()
@@ -34,9 +32,59 @@ func openTelaDesktopApplication(at url: URL, activates: Bool, completion: @escap
   NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, error in
     let matches = app?.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == expected
     recordMenuDiagnostic("desktop_open_completed", fields: ["success": error == nil && matches,
-      "appPresent": app != nil, "sameApplication": matches,
+      "appPresent": app != nil, "sameApplication": matches, "activationPolicy": app?.activationPolicy.rawValue ?? -1,
       "errorDomain": (error as NSError?)?.domain ?? "none", "errorCode": (error as NSError?)?.code ?? 0])
     completion(error ?? (matches ? nil : NSError(domain: "TelaDesktopOpen", code: 3)))
+  }
+}
+
+struct TelaDesktopProfile: Codable, Equatable {
+  let slot: Int
+  let targetId: String
+}
+
+private struct TelaDesktopSnapshot: Decodable { let profiles: [TelaDesktopProfile] }
+private struct TelaDesktopLaunch: Decodable { let state: String; let desktopProcessId: Int32? }
+
+private func runTelaDesktopCommand(_ arguments: [String]) throws -> Data {
+  guard let launcher = Bundle.main.url(forAuxiliaryExecutable: "chatgpt-tela") else {
+    throw NSError(domain: "TelaDesktopOpen", code: 4)
+  }
+  let process = Process(), output = Pipe()
+  process.executableURL = launcher; process.arguments = ["desktop-app"] + arguments
+  process.standardInput = FileHandle.nullDevice; process.standardOutput = output; process.standardError = FileHandle.nullDevice
+  try process.run()
+  let data = output.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+  guard process.terminationStatus == 0 else { throw NSError(domain: "TelaDesktopOpen", code: Int(process.terminationStatus)) }
+  return data
+}
+
+func openTelaDesktopProfile(_ profile: TelaDesktopProfile, activates: Bool, completion: @escaping (Error?) -> Void) {
+  if profile.slot == 1 {
+    guard let url = telaDefaultDesktopApplicationURL() else {
+      completion(NSError(domain: "TelaDesktopOpen", code: 5)); return
+    }
+    openTelaDesktopApplication(at: url, activates: activates, completion: completion)
+    return
+  }
+  Task.detached {
+    do {
+      let data = try runTelaDesktopCommand(["open", "--slot", String(profile.slot), "--target", profile.targetId])
+      let result = try JSONDecoder().decode(TelaDesktopLaunch.self, from: data)
+      DispatchQueue.main.async {
+        let accepted = !activates || (result.desktopProcessId.map {
+          NSRunningApplication(processIdentifier: $0)?.activate(options: [.activateAllWindows]) == true
+        } ?? (result.state == "launch-requested"))
+        recordMenuDiagnostic("profile_owner_open", fields: ["slot": profile.slot, "state": result.state, "accepted": accepted,
+          "activationPolicy": result.desktopProcessId.flatMap { NSRunningApplication(processIdentifier: $0)?.activationPolicy.rawValue } ?? -1])
+        completion(accepted ? nil : NSError(domain: "TelaDesktopOpen", code: 6))
+      }
+    } catch {
+      DispatchQueue.main.async {
+        recordMenuDiagnostic("profile_owner_open_failed", fields: ["slot": profile.slot, "errorCode": (error as NSError).code])
+        completion(error)
+      }
+    }
   }
 }
 
@@ -47,43 +95,48 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   private(set) var problem: String?
   private(set) var recoveredPendingUpdate = false
   var changed: (() -> Void)?
-  var desktopBundleIdentifiers: () -> [String] = { ["com.openai.codex"] }
-  var runningDesktopApplications: ([String]) -> [String] = { ids in
-    ids.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
-      .compactMap { $0.bundleURL?.absoluteString }
+  var runningDesktopProfiles: () throws -> [TelaDesktopProfile] = {
+    try JSONDecoder().decode(TelaDesktopSnapshot.self, from: runTelaDesktopCommand(["snapshot"])).profiles
   }
-  var reopenDesktop: (String, @escaping (Error?) -> Void) -> Void = { value, completion in
-    guard let url = URL(string: value), url.isFileURL else {
-      completion(NSError(domain: "TelaDesktopOpen", code: 1)); return
-    }
-    openTelaDesktopApplication(at: url, activates: false, completion: completion)
+  var reopenDesktop: (TelaDesktopProfile, @escaping (Error?) -> Void) -> Void = { profile, completion in
+    openTelaDesktopProfile(profile, activates: false, completion: completion)
   }
-  private static let desktopRestoreKey = "TelaUpdateDesktopRestore"
+  private static let desktopRestoreKey = "TelaUpdateDesktopProfiles"
 
   func preserveDesktopApps(targetBuild: String) {
-    let urls = Array(Set(runningDesktopApplications(desktopBundleIdentifiers()))).sorted()
-    UserDefaults.standard.set(["targetBuild": targetBuild, "applicationURLs": urls], forKey: Self.desktopRestoreKey)
-    recordMenuDiagnostic("desktop_restore_captured", fields: ["count": urls.count, "targetBuild": targetBuild])
+    // Retire the URL-only snapshot: a derived app URL cannot restore profile isolation.
+    UserDefaults.standard.removeObject(forKey: "TelaUpdateDesktopRestore")
+    do {
+      let profiles = try runningDesktopProfiles()
+      UserDefaults.standard.set(["targetBuild": targetBuild,
+        "profiles": profiles.map { ["slot": $0.slot, "targetId": $0.targetId] as [String: Any] }], forKey: Self.desktopRestoreKey)
+      recordMenuDiagnostic("desktop_restore_captured", fields: ["count": profiles.count, "targetBuild": targetBuild])
+    } catch {
+      UserDefaults.standard.removeObject(forKey: Self.desktopRestoreKey)
+      recordMenuDiagnostic("desktop_restore_capture_failed", fields: ["errorCode": (error as NSError).code])
+    }
   }
 
   func restoreDesktopApps(forBuild expectedBuild: String? = nil) {
+    let retiredSnapshot = UserDefaults.standard.object(forKey: "TelaUpdateDesktopRestore") != nil
+    UserDefaults.standard.removeObject(forKey: "TelaUpdateDesktopRestore")
     guard let saved = UserDefaults.standard.dictionary(forKey: Self.desktopRestoreKey),
       let build = saved["targetBuild"] as? String,
       build == (expectedBuild ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String),
-      let urls = saved["applicationURLs"] as? [String] else {
-      recordMenuDiagnostic("desktop_restore_skipped", fields: ["snapshotPresent": UserDefaults.standard.object(forKey: Self.desktopRestoreKey) != nil])
+      let rows = saved["profiles"], let data = try? JSONSerialization.data(withJSONObject: rows),
+      let profiles = try? JSONDecoder().decode([TelaDesktopProfile].self, from: data) else {
+      recordMenuDiagnostic("desktop_restore_skipped", fields: ["snapshotPresent": UserDefaults.standard.object(forKey: Self.desktopRestoreKey) != nil, "retiredSnapshot": retiredSnapshot])
       return
     }
-    // Consume once before Launch Services callbacks; a failed open never creates an automatic retry.
     UserDefaults.standard.removeObject(forKey: Self.desktopRestoreKey)
-    let running = Set(runningDesktopApplications(desktopBundleIdentifiers()))
-    let missing = urls.filter { !running.contains($0) }
-    recordMenuDiagnostic("desktop_restore_started", fields: ["count": missing.count, "alreadyRunning": urls.count - missing.count])
-    for url in missing {
-      reopenDesktop(url) { [weak self] error in
+    let running = (try? runningDesktopProfiles()) ?? []
+    let missing = profiles.filter { !running.contains($0) }
+    recordMenuDiagnostic("desktop_restore_started", fields: ["count": missing.count, "alreadyRunning": profiles.count - missing.count])
+    for profile in missing {
+      reopenDesktop(profile) { [weak self] error in
         guard error != nil else { return }
         Task { @MainActor in
-          self?.problem = "Tela updated, but a ChatGPT app could not reopen. Open it from Applications."
+          self?.problem = "Couldn't reopen ChatGPT. Open it from Applications."
           self?.changed?()
         }
       }
@@ -191,8 +244,8 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
             self.preparationWindow?.orderOut(nil)
             let alert = NSAlert()
             alert.messageText = "Close ChatGPT and update?"
-            alert.informativeText = error.localizedDescription + " ChatGPT will close. Any running work may be interrupted. Conversations and saved files are kept."
-            alert.addButton(withTitle: "Close ChatGPT and Update")
+            alert.informativeText = "Finish any work before continuing."
+            alert.addButton(withTitle: "Close and Update")
             alert.addButton(withTitle: "Later")
             if alert.runModal() == .alertFirstButtonReturn {
               self.preparationWindow?.makeKeyAndOrderFront(nil)

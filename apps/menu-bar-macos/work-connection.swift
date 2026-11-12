@@ -6,11 +6,11 @@ struct TelaLocalPluginRegistration: Decodable {
   var guidance: String? {
     switch result {
     case "registered":
-      return "Local plugin source ready. Install it in ChatGPT Desktop to finish connecting."
+      return "Source ready. Install Tela Local Chat in ChatGPT’s Plugins Directory."
     case "already-registered":
-      return "Local plugin entry is already registered. Check its installed version in ChatGPT Desktop; preparing does not update an installed plugin."
+      return "Source already added. Manage installation in ChatGPT’s Plugins Directory."
     case "preserved-user-change":
-      return "An existing local plugin entry was preserved. Review its source and ownership in ChatGPT Desktop before changing it. Preparing Tela does not replace or update that entry."
+      return "Custom source kept. Manage it in ChatGPT’s Plugins Directory."
     default: return nil
     }
   }
@@ -257,9 +257,9 @@ struct TelaLocalChatPresentation {
   let serviceState: String
   var status: String {
     switch serviceState {
-    case "Ready": return "Service ready · plugin not verified"
+    case "Ready": return "Running"
     case "Stopped": return "Off"
-    case "Unavailable": return "Service unavailable"
+    case "Unavailable": return "Unavailable"
     default: return "Checking…"
     }
   }
