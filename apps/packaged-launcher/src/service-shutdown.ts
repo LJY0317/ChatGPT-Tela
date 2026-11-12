@@ -72,9 +72,14 @@ export function ownedServiceShutdown(installId: string, paths: ProductPaths) {
       const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
       if (!current || current.status.state !== "ready") throw new Error(`${service} runtime is not ready for maintenance`);
       signal?.throwIfAborted();
-      if (service === "codex") await new CodexServiceClient(descriptorForService(current.descriptor, "codex")).waitForShutdownReadiness(signal);
-      else if (service === "chat") await new ChatServiceClient(descriptorForService(current.descriptor, "chat")).waitForShutdownReadiness(signal);
-      else await prepare(service);
+      try {
+        if (service === "codex") await new CodexServiceClient(descriptorForService(current.descriptor, "codex")).waitForShutdownReadiness(signal);
+        else if (service === "chat") await new ChatServiceClient(descriptorForService(current.descriptor, "chat")).waitForShutdownReadiness(signal);
+        else await prepare(service);
+      } catch (error) {
+        if (error instanceof ServiceShutdownNotStartedError) throw new PackagedServiceShutdownNotStartedError(service, { cause: error });
+        throw error;
+      }
     },
     prepare,
   });

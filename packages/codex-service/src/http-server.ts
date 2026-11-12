@@ -108,6 +108,10 @@ export async function startCodexServiceHttpServer(input: {
             emitDiagnosticEvent("chatgpt_tela_codex", "shutdown_observation_failed", {
               phase: "wait", abort_observed: request.signal.aborted, ...diagnosticFailureFields(cause),
             });
+            if (cause instanceof CodexShutdownNotStartedError) return Response.json({
+              contractVersion: 1, service: "codex", instanceId: input.service.serviceStatus().instanceId,
+              shutdown: "not-started", reason: cause.reason,
+            }, { status: 409 });
             return error(409, "Codex shutdown readiness could not be verified");
           }
         }
@@ -361,7 +365,7 @@ export async function startCodexServiceHttpServer(input: {
         }
         if (request.method === "POST" && url.pathname === "/v1/shutdown" && cause instanceof CodexShutdownNotStartedError) {
           return Response.json({ contractVersion: 1, service: "codex", instanceId: input.service.serviceStatus().instanceId,
-            shutdown: "not-started", error: { type: "tela_codex_shutdown_blocked",
+            shutdown: "not-started", reason: cause.reason, error: { type: "tela_codex_shutdown_blocked",
               message: "Finish active or unverifiable Native/Web work before shutting down" } }, { status: 409 });
         }
         return error(409, cause instanceof Error ? cause.message : String(cause));

@@ -49,7 +49,9 @@ export class ServiceHttpError extends Error {
 
 /** Exact authenticated response from the shutdown admission boundary, not an HTTP error guess. */
 export class ServiceShutdownNotStartedError extends ServiceHttpError {
-  constructor() { super(409, "The service acknowledged that shutdown was not started"); this.name = "ServiceShutdownNotStartedError"; }
+  constructor(readonly reason?: "native_activity_unobservable" | "work_not_ready") {
+    super(409, "The service acknowledged that shutdown was not started"); this.name = "ServiceShutdownNotStartedError";
+  }
 }
 
 /** A responding endpoint must prove the expected status contract and exact instance. */
@@ -94,10 +96,10 @@ export class LocalServiceClient {
       phase = "http";
       if (!response.ok) {
         const receipt = value as Record<string, unknown> | undefined;
-        if (path === "v1/shutdown" && method === "POST" && response.status === 409
+        if ((path === "v1/shutdown" || path === "v1/wait-shutdown-readiness") && method === "POST" && response.status === 409
           && receipt?.contractVersion === 1 && receipt.service === this.descriptor.service
           && receipt.instanceId === this.descriptor.instanceId && receipt.shutdown === "not-started") {
-          throw new ServiceShutdownNotStartedError();
+          throw new ServiceShutdownNotStartedError(receipt.reason === "native_activity_unobservable" || receipt.reason === "work_not_ready" ? receipt.reason : undefined);
         }
         throw new ServiceHttpError(response.status, errorMessage(value, `${this.descriptor.service} service request failed with HTTP ${response.status}`));
       }

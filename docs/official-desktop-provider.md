@@ -84,7 +84,13 @@ retired provider; Tela does not revive them or rewrite their provider history.
 
 On macOS, Sparkle owns download, verification, replacement and relaunch. Tela's
 existing handshake restores services and prepares missing opted-in routes. There
-is no second CLI upgrade engine. See [upgrade recovery](upgrade-recovery.md#macos-updates-through-sparkle).
+is no second CLI upgrade engine. An open Desktop using Tela does not prove active
+work, and Tela has no public connection to observe the Desktop-owned Native turn
+between Responses requests. Shutdown admission reports this as
+`native_activity_unobservable`, separately from observed Web work. The update UI
+preserves that reason and offers normal ChatGPT termination with user consent.
+Diagnostics record only the profile slot, target kind/state, endpoint presence and
+provider-selection classification; no conversation or process details are needed. See [upgrade recovery](upgrade-recovery.md#macos-updates-through-sparkle).
 
 ## Verification boundary
 

@@ -3,6 +3,7 @@ import { diagnosePublicIngress, SystemTailscaleCommandRunner } from "@chatgpt-te
 import { probePublicMcp, probeUnifiedDevelopmentMcp } from "@chatgpt-tela/gateway";
 import { readProductConfig } from "@chatgpt-tela/product-config";
 import { resolveProductPaths, PackagedServiceShutdownNotStartedError } from "@chatgpt-tela/product-lifecycle";
+import { ServiceShutdownNotStartedError } from "@chatgpt-tela/service-protocol/client";
 import { writeDiagnosticIncident, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { join } from "node:path";
 import {
@@ -107,7 +108,8 @@ async function main(): Promise<void> {
     } catch (error) {
       if (observation?.signal.aborted) return; // UI departed; no update action or fatal diagnostic.
       if (!(error instanceof PackagedServiceShutdownNotStartedError)) throw error;
-      process.stdout.write(JSON.stringify({ prepared: false, blockedService: error.service }) + "\n");
+      process.stdout.write(JSON.stringify({ prepared: false, blockedService: error.service,
+        ...(error.cause instanceof ServiceShutdownNotStartedError && error.cause.reason ? { blockedReason: error.cause.reason } : {}) }) + "\n");
     } finally {
       if (observation) {
         process.stdin.off("end", ownerClosed);

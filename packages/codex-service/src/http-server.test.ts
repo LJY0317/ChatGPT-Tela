@@ -83,7 +83,7 @@ describe("Tela Codex private HTTP server", () => {
       release(); await wait;
       expect(observations).toBe(1); expect(stops).toBe(0);
       service.waitForShutdownReadiness = async () => { throw new CodexShutdownNotStartedError(); };
-      await expect(client.waitForShutdownReadiness()).rejects.toThrow("could not be verified");
+      await expect(client.waitForShutdownReadiness()).rejects.toMatchObject({ reason: "work_not_ready" });
       expect(stops).toBe(0);
     } finally { release(); await server.close(); }
   });

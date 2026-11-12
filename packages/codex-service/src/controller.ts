@@ -462,7 +462,14 @@ export async function startCodexService(input: {
   ): Promise<boolean> => {
     if (profile.cleanupAcknowledged || profile.mode !== "app-owned" || profile.target.adapterKind !== "default-desktop") return false;
     const session = observedSession ?? await targets.session(profile.target.id, signal);
-    return session.state !== "available" && providerSelection() !== "unselected";
+    const selection = providerSelection();
+    const blocked = session.state !== "available" && selection !== "unselected";
+    if (blocked) emitDiagnosticEvent("chatgpt_tela_codex", "desktop_activity_unobservable", {
+      slot: profile.slot, target_kind: profile.target.adapterKind,
+      state: session.state, desktop_present: session.desktopProcessId !== undefined,
+      endpoint_available: session.endpoint !== undefined, policy: selection,
+    });
+    return blocked;
   };
 
   const interruptNativeTurns = async (slot: number, session: CodexNativeTargetSession): Promise<void> => {

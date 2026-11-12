@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, watch, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -106,7 +107,15 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     expect(readFileSync(receipts, "utf8")).toBe("1");
     await service.startProfile(1);
     providerSelection = "selected";
-    expect(await service.shutdownReadiness()).toBe("blocked");
+    const diagnostics: Record<string, unknown>[] = [];
+    const unobserve = observeDiagnosticEvents(row => { if (row.stage === "desktop_activity_unobservable") diagnostics.push(row); });
+    try {
+      expect(await service.shutdownReadiness()).toBe("blocked");
+      expect(diagnostics).toMatchObject([{ slot: 1, target_kind: "default-desktop",
+        state: "restart-required", endpoint_available: false, policy: "selected" }]);
+      await expect(client.waitForShutdownReadiness()).rejects.toMatchObject({ reason: "native_activity_unobservable" });
+      await expect(update.wait("codex")).rejects.toMatchObject({ service: "codex", cause: { reason: "native_activity_unobservable" } });
+    } finally { unobserve?.(); }
     await expect(update.prepare("codex")).rejects.toThrow();
     await expect(update.wait("codex")).rejects.toThrow();
     await expect(service.waitForShutdownReadiness()).rejects.toThrow();

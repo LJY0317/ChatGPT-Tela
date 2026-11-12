@@ -226,8 +226,11 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     let value = (try? JSONSerialization.jsonObject(with: outcome.1)) as? [String: Any]
     if let service = value?["blockedService"] as? String,
       let name = ["chat": "Tela Chat", "codex": "Work / Codex", "gateway": "Tela Gateway"][service] {
+      let detail = value?["blockedReason"] as? String == "native_activity_unobservable"
+        ? "ChatGPT is open, but Tela cannot check whether its Native work is idle. This does not mean running work was detected."
+        : "\(name) is not ready for this update. Finish any work before continuing; ChatGPT may need to close."
       throw NSError(domain: "TelaUpdateBusy", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "\(name) is not ready for this update. Finish any work before continuing; ChatGPT may need to close."])
+        userInfo: [NSLocalizedDescriptionKey: detail])
     }
     guard outcome.0 == 0, let value,
       value["ready"] as? Bool == true || value["prepared"] as? Bool == true else {
