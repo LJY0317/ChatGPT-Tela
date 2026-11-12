@@ -192,8 +192,10 @@ export interface CodexService {
 
 /** The Codex owner proved shutdown did not begin because work is active or unverifiable. */
 export class CodexShutdownNotStartedError extends Error {
-  constructor() {
-    super("Tela Codex has active or unverifiable Native/Web work; finish it before shutdown");
+  constructor(readonly reason: "work_not_ready" | "native_activity_unobservable" = "work_not_ready") {
+    super(reason === "native_activity_unobservable"
+      ? "Official ChatGPT is open; its Native activity cannot be observed by Tela"
+      : "Tela Codex has active or unverifiable Native/Web work; finish it before shutdown");
     this.name = "CodexShutdownNotStartedError";
   }
 }
@@ -669,7 +671,7 @@ export async function startCodexService(input: {
           if (stopping || profile.stopping) throw new CodexShutdownNotStartedError();
           if (profile.mode === "app-owned") {
             slot = profile.slot; phase = "native_activity";
-            if (await appOwnedDesktopBlocksShutdown(profile, observation)) throw new CodexShutdownNotStartedError();
+            if (await appOwnedDesktopBlocksShutdown(profile, observation)) throw new CodexShutdownNotStartedError("native_activity_unobservable");
             phase = "web_preparation";
             const response = await fetch(new URL("v1/web-state?wait=1", profile.bridgePreviewUrl), {
               headers: { authorization: `Bearer ${profile.uiToken}` }, timeout: false,
@@ -709,6 +711,7 @@ export async function startCodexService(input: {
       } catch (error) {
         emitDiagnosticEvent("chatgpt_tela_codex", "shutdown_wait_failed", {
           phase, ...(slot === undefined ? {} : { slot }), failure_class: diagnosticFailureClass(error),
+          ...(error instanceof CodexShutdownNotStartedError ? { reason_class: error.reason } : {}),
           abort_observed: signal?.aborted === true || input.signal?.aborted === true,
         });
         throw error;

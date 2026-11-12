@@ -131,5 +131,9 @@ The planner now uses the existing exact current-turn source attribution to locat
 that new input boundary. Its role remains tool-result; no tool name or embedded
 message text is interpreted, and no Native work or history authority is granted.
 The existing prefix, answer, route and physical-owner checks still apply. A foreign
-turn marker or changed prefix cannot authorize reuse. Synthetic regression tests
-cover this fix; installed acceptance of the fixed retained path remains pending.
+turn marker or changed prefix cannot authorize reuse. Synthetic regression tests cover this fix. Installed macOS build `2026111203`
+then completed a baseline and follow-up: the latter reused the same Web epoch and
+physical page, sent only the new suffix, and completed in about eight seconds.
+No additional stored-history read, preparation model call or Native dispatch for
+that conversation was observed. This does not resolve the separate previous-model
+compaction performed by the official engine on the first model switch.

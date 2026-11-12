@@ -4,9 +4,11 @@ import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 import { ChatServiceClient, CodexServiceClient, descriptorForService, ServiceShutdownNotStartedError } from "@chatgpt-tela/service-protocol/client";
 import { interruptLoadedAppServerTurns } from "@chatgpt-tela/codex";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { DefaultDesktopNativeTargetAdapter } from "../../../packages/codex-service/src/native-target";
 
 /** Explicit user consent only. Reuse task cancellation; never kill a service or delete its work. */
-export async function interruptOwnedWork(installId: string, paths: ProductPaths, running: readonly TelaServiceId[]) {
+export async function interruptOwnedWork(installId: string, paths: ProductPaths, running: readonly TelaServiceId[],
+  desktop: Pick<DefaultDesktopNativeTargetAdapter, "session" | "quit"> = new DefaultDesktopNativeTargetAdapter()) {
   const supervisor = new LocalServiceSupervisor({ installId });
   for (const service of running.filter(id => id === "codex" || id === "chat")) {
     const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
@@ -17,7 +19,14 @@ export async function interruptOwnedWork(installId: string, paths: ProductPaths,
       for (const profile of await client.profiles()) {
         // An app-owned provider runs inside Tela, but its Native engine belongs
         // to the official Desktop. It exposes no terminal that Tela may interrupt.
-        if (profile.controlState !== "running" || profile.targetSessionState === "independent") continue;
+        if (profile.controlState !== "running") continue;
+        if (profile.targetSessionState === "independent") {
+          if (profile.slot === 1) {
+            const observed = await desktop.session("default");
+            await desktop.quit("default", undefined, observed.desktopProcessId);
+          }
+          continue;
+        }
         const session = await client.terminalSession(profile.slot);
         count += await interruptLoadedAppServerTurns(session.endpoint, { signal: AbortSignal.timeout(PACKAGED_TRANSITION_TIMEOUT_MS) });
       }

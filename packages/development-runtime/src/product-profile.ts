@@ -275,10 +275,12 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     internalMcp = await startCodexBridgeMcpHttpServer({ bridge: runtime.suppliedToolBridge,
       port: 0, authentication: { kind: "bearer", token: config.internalMcpToken } });
     if (config.nativeTarget.kind === "multi-profile") {
-      startupPhase = "desktop_launch";
+      startupPhase = "desktop_target";
       const client = input.multiProfileClient ?? new MultiProfileControlClient({ command: [config.nativeTarget.launcherCli] });
-      await client.launchTarget({ targetId: config.nativeTarget.targetId, expectedProfileIndex: config.slot,
-        ...(input.signal ? { signal: input.signal } : {}) });
+      const targetId = config.nativeTarget.targetId;
+      const matches = (await client.targets(input.signal)).filter(target => target.id === targetId
+        && target.managed && target.profileIndex === config.slot);
+      if (matches.length !== 1) throw Error("Plura target does not own the selected profile");
     }
     const ownedMcp = internalMcp;
     const owned = runtime;

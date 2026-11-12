@@ -230,7 +230,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   var connectionProgressSlot: Int? { connectionProfileSlot }
   func workInventoryDidChange() {
     clearResolvedProfileFailure()
-    rememberRunningProfileApps(profiles)
     if accountInventory != profiles {
       accountInventory = profiles
       accountRevision += 1
@@ -260,7 +259,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     get { workState.inventory }
     set { workState.inventory = newValue }
   }
-  private var runningProfileApps: [Int: NSRunningApplication] = [:]
   private var profiles: [ControlCenterProfileStatus] { workInventory.profiles }
   private var profileAccounts: [Int: TelaAccountDisplay] = [:]
   private var accountInventory: [TelaWorkProfile] = []
@@ -1676,43 +1674,23 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   @objc private func openProfileButton(_ sender: NSButton) { openProfile(slot: sender.tag) }
 
-  // Keep the OS application instance found by authenticated inventory, rather than looking up
-  // a possibly reused PID on every click. A terminated instance always takes fresh discovery.
-  func rememberRunningProfileApps(_ verifiedProfiles: [TelaWorkProfile]) {
-    var current: [Int: NSRunningApplication] = [:]
-    for profile in verifiedProfiles where profile.connectionInProgress != true {
-      guard let pid = profile.desktopProcessId, pid > 0, pid <= Int(Int32.max) else { continue }
-      if let app = runningProfileApps[profile.slot], app.processIdentifier == pid_t(pid), !app.isTerminated {
-        current[profile.slot] = app
-      } else if let app = NSRunningApplication(processIdentifier: pid_t(pid)), !app.isTerminated {
-        current[profile.slot] = app
-      }
-    }
-    runningProfileApps = current
+  var desktopBundleIdentifiers: [String] {
+    ["com.openai.codex"] + profiles.filter { $0.slot > 1 }.compactMap { $0.targetId }
   }
 
   func openProfile(slot: Int) {
-    // Opening an app is independent of Tela's Web connection and must not
-    // connect, restart, or reconfigure the user's profile.
-    if let app = runningProfileApps[slot], !app.isTerminated, app.activate(options: []) { return }
-    Task { [self] in
-      await refreshCurrentPage()
-      if let app = runningProfileApps[slot], !app.isTerminated, app.activate(options: []) { return }
-      let targetId = profiles.first(where: { $0.slot == slot })?.targetId
-      let bundleId = slot == 1 ? "com.openai.codex" : targetId
-      guard let bundleId, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
-        profileFailure = "Couldn't find the ChatGPT app for this profile."
-        selectedPage = .work; show(); return
-      }
-      let configuration = NSWorkspace.OpenConfiguration()
-      configuration.activates = true
-      NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
-        guard error != nil else { return }
-        Task { @MainActor [weak self] in
-          guard let self else { return }
-          self.profileFailure = "Couldn't open ChatGPT. Please try again."
-          self.selectedPage = .work; self.show()
-        }
+    let bundleId = slot == 1 ? "com.openai.codex" : profiles.first(where: { $0.slot == slot })?.targetId
+    NSLog("Tela profile open requested slot=%d target_known=%d", slot, bundleId == nil ? 0 : 1)
+    guard let bundleId, let url = telaDesktopApplicationURL(bundleId: bundleId) else {
+      profileFailure = "Couldn't find the ChatGPT app for this profile."
+      selectedPage = .work; show(); return
+    }
+    // OS opening also delivers reopen to an app with no window. Activation alone does not.
+    openTelaDesktopApplication(at: url, activates: true) { [weak self] error in
+      Task { @MainActor in
+        guard let self, error != nil else { return }
+        self.profileFailure = "Couldn't open ChatGPT. Please try again."
+        self.selectedPage = .work; self.show()
       }
     }
   }
@@ -1890,7 +1868,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       if let profile = frame.profile {
         completed = profile.connected
         workInventory.loaded(profiles.filter { $0.slot != profile.slot } + [profile])
-        rememberRunningProfileApps(profiles)
         profileProgress = profile.connectionLabel
         renderCurrentPage()
       }
@@ -2012,7 +1989,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       }
       let envelope = try JSONDecoder().decode(ControlCenterProfilesEnvelope.self, from: await request(descriptor, path: "v1/codex/profiles"))
       workState.finishRead(ticket, profiles: envelope.profiles)
-      rememberRunningProfileApps(profiles)
     } catch { workState.finishRead(ticket, profiles: nil, error: error) }
   }
 

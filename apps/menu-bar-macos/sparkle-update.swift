@@ -1,6 +1,31 @@
 import AppKit
 import Sparkle
 
+/// A profile clone can share the official bundle ID. Prefer the standard installation for slot 1.
+func telaDesktopApplicationURL(bundleId: String,
+  applicationDirectories: [URL] = FileManager.default.urls(for: .applicationDirectory, in: .localDomainMask)
+    + FileManager.default.urls(for: .applicationDirectory, in: .userDomainMask),
+  registeredApplications: (String) -> [URL] = { NSWorkspace.shared.urlsForApplications(withBundleIdentifier: $0) }) -> URL? {
+  if bundleId != "com.openai.codex" { return NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) }
+  let candidates = registeredApplications(bundleId)
+  for directory in applicationDirectories {
+    let matches = candidates.filter { $0.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL }
+    if matches.count == 1 { return matches.first }
+    if matches.count > 1 { return nil }
+  }
+  return candidates.count == 1 ? candidates.first : nil
+}
+
+/// Standard Launch Services open/reopen; no Tela connection or profile mutation is involved.
+func openTelaDesktopApplication(at url: URL, activates: Bool, completion: @escaping (Error?) -> Void) {
+  let configuration = NSWorkspace.OpenConfiguration()
+  configuration.activates = activates
+  NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, error in
+    NSLog("Tela desktop open completed success=%d app_present=%d domain=%@ code=%ld", error == nil ? 1 : 0, app == nil ? 0 : 1, (error as NSError?)?.domain ?? "none", (error as NSError?)?.code ?? 0)
+    completion(error)
+  }
+}
+
 /// Sparkle owns all update transport, verification, replacement and standard presentation.
 @MainActor
 final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
@@ -8,6 +33,43 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   private(set) var problem: String?
   private(set) var recoveredPendingUpdate = false
   var changed: (() -> Void)?
+  var desktopBundleIdentifiers: () -> [String] = { ["com.openai.codex"] }
+  var runningDesktopApplications: ([String]) -> [String] = { ids in
+    ids.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+      .compactMap { $0.bundleURL?.absoluteString }
+  }
+  var reopenDesktop: (String, @escaping (Error?) -> Void) -> Void = { value, completion in
+    guard let url = URL(string: value), url.isFileURL else {
+      completion(NSError(domain: "TelaDesktopOpen", code: 1)); return
+    }
+    openTelaDesktopApplication(at: url, activates: false, completion: completion)
+  }
+  private static let desktopRestoreKey = "TelaUpdateDesktopRestore"
+
+  func preserveDesktopApps(targetBuild: String) {
+    let urls = Array(Set(runningDesktopApplications(desktopBundleIdentifiers()))).sorted()
+    UserDefaults.standard.set(["targetBuild": targetBuild, "applicationURLs": urls], forKey: Self.desktopRestoreKey)
+    NSLog("Tela desktop restoration captured count=%d", urls.count)
+  }
+
+  func restoreDesktopApps() {
+    guard let saved = UserDefaults.standard.dictionary(forKey: Self.desktopRestoreKey),
+      let build = saved["targetBuild"] as? String,
+      build == Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+      let urls = saved["applicationURLs"] as? [String] else { return }
+    // Consume once before Launch Services callbacks; a failed open never creates an automatic retry.
+    UserDefaults.standard.removeObject(forKey: Self.desktopRestoreKey)
+    NSLog("Tela desktop restoration started count=%d", urls.count)
+    for url in urls {
+      reopenDesktop(url) { [weak self] error in
+        guard error != nil else { return }
+        Task { @MainActor in
+          self?.problem = "Tela updated, but a ChatGPT app could not reopen. Open it from Applications."
+          self?.changed?()
+        }
+      }
+    }
+  }
   private var pendingBuild: String?
   private var preparingTermination = false
   private var idleObservation: UpdateIdleObservation?
@@ -24,7 +86,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     set { controller.updater.automaticallyChecksForUpdates = newValue }
   }
 
-  var preparationStatus: String? { idleObservation != nil ? "Waiting for tasks to finish…" : preparingTermination ? "Preparing update…" : nil }
+  var preparationStatus: String? { idleObservation != nil ? "Waiting to update…" : preparingTermination ? "Preparing update…" : nil }
   var canCheck: Bool { !preparingTermination && idleObservation == nil && (controller.updater.canCheckForUpdates || controller.updater.sessionInProgress) }
   func checkForUpdates(_ sender: Any?) { controller.checkForUpdates(sender) }
 
@@ -38,10 +100,10 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     progress.isIndeterminate = true
     progress.controlSize = .small
     progress.sizeToFit()
-    progress.setAccessibilityLabel(waiting ? "Waiting for tasks to finish" : "Preparing update")
-    let title = NSTextField(labelWithString: waiting ? "Waiting for tasks to finish…" : "Preparing update…")
+    progress.setAccessibilityLabel(waiting ? "Waiting to update" : "Preparing update")
+    let title = NSTextField(labelWithString: waiting ? "Waiting to update…" : "Preparing update…")
     title.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-    let detail = NSTextField(labelWithString: waiting ? "Tela will update when your tasks finish." : "Tela will restart automatically.")
+    let detail = NSTextField(labelWithString: waiting ? "Waiting for Tela services to be ready." : "Tela will restart automatically.")
     detail.textColor = .secondaryLabelColor
     let text = NSStackView(views: [title, detail])
     text.orientation = .vertical
@@ -63,6 +125,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     do {
       let result = try await lifecycle(["finish"])
       try controller.updater.start()
+      if result.ready { restoreDesktopApps() }
       recoveredPendingUpdate = !result.ready && result.prepared
       problem = recoveredPendingUpdate ? "An update is prepared. Review it in Sparkle to see whether it can continue." : result.ready ? nil : "Finish the pending update to restart Tela."
       if recoveredPendingUpdate { NSLog("Tela update startup found a prepared Sparkle handoff; awaiting a new user-initiated update session") }
@@ -107,9 +170,9 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
           if let error = failure as NSError?, error.domain == "TelaUpdateBusy", !arguments.contains("--interrupt-work") {
             self.preparationWindow?.orderOut(nil)
             let alert = NSAlert()
-            alert.messageText = "Stop Tela tasks and update?"
-            alert.informativeText = error.localizedDescription + " Running tasks will be interrupted. Conversations and saved files are kept."
-            alert.addButton(withTitle: "Stop Tasks and Update")
+            alert.messageText = "Close ChatGPT and update?"
+            alert.informativeText = error.localizedDescription + " ChatGPT will close. Any running work may be interrupted. Conversations and saved files are kept."
+            alert.addButton(withTitle: "Close ChatGPT and Update")
             alert.addButton(withTitle: "Later")
             if alert.runModal() == .alertFirstButtonReturn {
               self.preparationWindow?.makeKeyAndOrderFront(nil)
@@ -164,7 +227,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     if let service = value?["blockedService"] as? String,
       let name = ["chat": "Tela Chat", "codex": "Work / Codex", "gateway": "Tela Gateway"][service] {
       throw NSError(domain: "TelaUpdateBusy", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "\(name) is not ready for this update. Finish active work and try again; ChatGPT may need to be closed."])
+        userInfo: [NSLocalizedDescriptionKey: "\(name) is not ready for this update. Finish any work before continuing; ChatGPT may need to close."])
     }
     guard outcome.0 == 0, let value,
       value["ready"] as? Bool == true || value["prepared"] as? Bool == true else {
@@ -196,6 +259,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,
                untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
     let observation = UpdateIdleObservation()
+    preserveDesktopApps(targetBuild: item.versionString)
     recoveredPendingUpdate = false
     idleObservation = observation
     pendingBuild = item.versionString
@@ -235,6 +299,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     problem = error.localizedDescription
     changed?()
     guard ownedInstallation else { return }
+    UserDefaults.standard.removeObject(forKey: Self.desktopRestoreKey)
     Task {
       do { _ = try await lifecycle(["cancel"]); recoveredPendingUpdate = false }
       catch { problem = "Tela recovery needs attention before updating." }

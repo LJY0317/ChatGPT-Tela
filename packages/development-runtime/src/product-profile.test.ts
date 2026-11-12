@@ -359,25 +359,18 @@ test("two managed app-owned profiles keep independent capability routes and Desk
   const profiles = [2, 3] as const;
   const capabilities: Record<number, string> = { 2: "c".repeat(48), 3: "d".repeat(48) };
   const fixtureIds = profiles.map(slot => `managed.fixture.${slot}`);
-  const sessions = new Map<string, { route: string; overlay: string; body: Record<string, unknown> }>();
-  let createdSessions = 0;
   const calls: string[] = [];
   const toolCalls: number[] = [];
   const runner: MultiProfileControlRunner = {
     async run(_command, input) {
-      const [action, ...args] = input.arguments;
+      const [action] = input.arguments;
       calls.push(action!);
-      const argument = (name: string) => args[args.indexOf(name) + 1]!;
-      const id = argument("--target");
       const output = action === "targets" ? {
         contractVersion: 2,
         targets: profiles.map(slot => ({ id: `managed.fixture.${slot}`, displayName: `Fixture ${slot}`,
           managed: true, role: "managed", state: "stopped", backendPolicy: "official-desktop-owned", profileIndex: slot })),
       } : (() => {
-        if (action !== "launch-target" || !fixtureIds.includes(id as typeof fixtureIds[number])) throw Error("Unexpected lifecycle call");
-        expect(input.arguments).toEqual(["launch-target", "--target", id, "--json"]);
-        if (!sessions.has(id)) { createdSessions++; sessions.set(id, { route: "", overlay: "", body: {} }); }
-        return { contractVersion: 2, targetID: id, state: "running", backendPolicy: "official-desktop-owned", desktopProcessID: 4200 + Number(id.split(".").at(-1)) };
+        throw Error("Unexpected Desktop lifecycle call");
       })();
       return { stdout: JSON.stringify(output), stderr: "", exitCode: 0 };
     },
@@ -456,7 +449,7 @@ test("two managed app-owned profiles keep independent capability routes and Desk
     }
     const first = await open(2); active.push(first);
     const second = await open(3); active.push(second);
-    expect(createdSessions).toBe(2);
+    expect(calls.every(action => action === "targets")).toBe(true);
     const models = { contractVersion: 1, result: { models: [
       { slug: "native-model", display_name: "Native", visibility: "list", supported_in_api: true,
         supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] },
@@ -501,7 +494,7 @@ test("two managed app-owned profiles keep independent capability routes and Desk
     await first.stop(); active.splice(0, 1);
     const restarted = await open(2); active.push(restarted);
     expect(restarted.responses.baseUrl.href).toBe(first.responses.baseUrl.href);
-    expect(createdSessions).toBe(2);
+    expect(calls.every(action => action === "targets")).toBe(true);
     expect((await fetch(new URL("models", second.responses.baseUrl), {
       headers: { "OpenAI-Organization": capabilities[3]!, authorization: "Bearer synthetic-native-auth" },
     })).status).toBe(200);
@@ -519,23 +512,8 @@ test("two managed app-owned profiles keep independent capability routes and Desk
       },
     } });
     await expect(open(2, rejectedClient)).rejects.toThrow("does not own the selected profile");
-    const abort = new AbortController();
-    const cancellingClient = new MultiProfileControlClient({ command: [launcher], runner: {
-      async run(_command, input) {
-        if (input.arguments[0] === "targets") return { stderr: "", exitCode: 0,
-          stdout: JSON.stringify({ contractVersion: 2, targets: [{
-            id: "managed.fixture.2", displayName: "Fixture 2", managed: true, role: "managed",
-            state: "stopped", backendPolicy: "official-desktop-owned", profileIndex: 2,
-
-
-          }] }) };
-        abort.abort();
-        throw new DOMException("Fixture launch cancelled", "AbortError");
-      },
-    } });
-    await expect(open(2, cancellingClient, abort.signal)).rejects.toThrow("Fixture launch cancelled");
     const recovered = await open(2); active.push(recovered);
-    expect(createdSessions).toBe(2);
+    expect(calls.every(action => action === "targets")).toBe(true);
   } finally {
     await Promise.allSettled(active.map(item => item.stop()));
     rmSync(root, { recursive: true, force: true });

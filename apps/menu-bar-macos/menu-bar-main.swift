@@ -201,6 +201,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       }
     }
     controlCenter.updater = updater
+    updater.desktopBundleIdentifiers = { [weak self] in self?.controlCenter.desktopBundleIdentifiers ?? ["com.openai.codex"] }
     updater.changed = { [weak self] in
       guard let self else { return }
       self.updateConnectionProgress(self.connectionProgress)
@@ -737,9 +738,6 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     let observed = await inspect()
     guard generation == refreshGeneration else { return }
     snapshot = observed
-    if observed.workInventory.error == nil {
-      controlCenter.rememberRunningProfileApps(observed.workInventory.profiles)
-    }
     updateProfileProgress()
     if !menuOpen { rebuildMenu(loading: false) }
     showPendingLaunchNotice()

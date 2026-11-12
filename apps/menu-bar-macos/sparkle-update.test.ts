@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 (process.platform === "darwin" ? test : test.skip)("Sparkle postponement preserves work and AppKit modal termination runs preparation after completion", async () => {
+  const bundleId = `org.chatgpt-tela.disposable.${crypto.randomUUID()}`;
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-delegate-"));
   const app = join(root, "Probe.app"), mac = join(app, "Contents/MacOS");
   const frameworkRoot = resolve("apps/menu-bar-macos/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64");
@@ -20,7 +21,7 @@ import { spawnSync } from "node:child_process";
     mkdirSync(join(app, "Contents/Frameworks"));
     cpSync(join(frameworkRoot, "Sparkle.framework"), join(app, "Contents/Frameworks/Sparkle.framework"), { recursive: true, verbatimSymlinks: true });
     writeFileSync(join(app, "Contents/Info.plist"), `<?xml version="1.0"?><plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>org.chatgpt-tela.disposable.${crypto.randomUUID()}</string>
+<key>CFBundleIdentifier</key><string>${bundleId}</string>
 <key>CFBundleName</key><string>Tela update test</string><key>CFBundleExecutable</key><string>probe</string>
 <key>CFBundleVersion</key><string>1</string><key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/>
 </dict></plist>`);
@@ -47,7 +48,7 @@ import Sparkle
       try! Data("resumed".utf8).write(to: URL(fileURLWithPath: root + "/resumed"))
       DispatchQueue.main.async { NSApp.terminate(nil) }
     })
-    precondition(tela.preparationStatus == "Waiting for tasks to finish…" && !tela.canCheck)
+    precondition(tela.preparationStatus == "Waiting to update…" && !tela.canCheck)
     precondition(tela.applicationShouldTerminate(NSApp) == .terminateCancel)
     try! Data("started".utf8).write(to: URL(fileURLWithPath: root + "/started"))
   }
@@ -84,6 +85,7 @@ import Sparkle
   } finally {
     clearTimeout(deadline); observer?.close();
     if (child && child.exitCode === null) { child.kill(); await child.exited; }
+    spawnSync("/usr/bin/defaults", ["delete", bundleId, "TelaUpdateDesktopRestore"]);
     rmSync(root, { recursive: true, force: true });
   }
 }, 90_000);

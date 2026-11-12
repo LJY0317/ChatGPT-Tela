@@ -71,6 +71,42 @@ import AppKit
 import Sparkle
 @main struct Probe {
   @MainActor static func main() async {
+    let appsRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: appsRoot) }
+    let standard = appsRoot.appendingPathComponent("Applications/ChatGPT.app")
+    let clone = appsRoot.appendingPathComponent("runtime/profile-2/ChatGPT.app")
+    let resolved = telaDesktopApplicationURL(bundleId: "com.openai.codex",
+      applicationDirectories: [standard.deletingLastPathComponent()], registeredApplications: { _ in [clone, standard] })
+    precondition(resolved == standard, "shared bundle ID must not select the profile clone")
+    precondition(telaDesktopApplicationURL(bundleId: "com.openai.codex", applicationDirectories: [],
+      registeredApplications: { _ in [clone, standard] }) == nil, "ambiguous installation must not open the wrong profile")
+    let restore = TelaSparkleUpdater()
+    restore.desktopBundleIdentifiers = { ["fixture.default", "fixture.second"] }
+    restore.runningDesktopApplications = { _ in ["file:///fixture/default.app", "file:///fixture/default.app"] }
+    var opened: [String] = []
+    restore.reopenDesktop = { value, completion in opened.append(value); completion(nil) }
+    restore.preserveDesktopApps(targetBuild: "1")
+    restore.runningDesktopApplications = { _ in [] }
+    restore.restoreDesktopApps()
+    restore.restoreDesktopApps()
+    precondition(opened == ["file:///fixture/default.app"], "restore must reopen exactly the pre-update apps once")
+    restore.runningDesktopApplications = { _ in ["file:///fixture/default.app", "file:///fixture/second.app"] }
+    restore.preserveDesktopApps(targetBuild: "1")
+    restore.restoreDesktopApps()
+    precondition(opened == ["file:///fixture/default.app", "file:///fixture/default.app", "file:///fixture/second.app"],
+      "two running clones with the same bundle ID must restore by their distinct application locations")
+    restore.preserveDesktopApps(targetBuild: "2")
+    restore.restoreDesktopApps()
+    precondition(opened.count == 3 && UserDefaults.standard.dictionary(forKey: "TelaUpdateDesktopRestore") != nil,
+      "source build must not consume a future update snapshot")
+    UserDefaults.standard.removeObject(forKey: "TelaUpdateDesktopRestore")
+    restore.runningDesktopApplications = { _ in ["file:///fixture/default.app"] }
+    restore.reopenDesktop = { _, completion in completion(NSError(domain: "NSOSStatusErrorDomain", code: -10814)) }
+    restore.preserveDesktopApps(targetBuild: "1")
+    restore.restoreDesktopApps()
+    await Task.yield()
+    precondition(restore.problem?.contains("could not reopen") == true, "failed OS reopen must not be silent")
+    precondition(UserDefaults.standard.dictionary(forKey: "TelaUpdateDesktopRestore") == nil, "failed reopen must not keep retry state")
     let prior = TelaSparkleUpdater()
     let couldStart = await prior.start()
     precondition(!couldStart, "a source-build prepared handoff must block ordinary startup")
@@ -111,6 +147,7 @@ import Sparkle
       expect(existsSync(effects)).toBe(true);
       expect(readFileSync(effects, "utf8")).toBe("cancel\n");
     } finally {
+      spawnSync("/usr/bin/defaults", ["delete", "org.chatgpt-tela.disposable.recovered-abort", "TelaUpdateDesktopRestore"]);
       rmSync(root, { recursive: true, force: true });
     }
   }, 30_000,

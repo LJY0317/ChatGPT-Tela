@@ -215,5 +215,20 @@ test("consented update interruption uses the owned Native endpoint and exact act
       expect.objectContaining({ method: "turn/interrupt", params: { threadId: thread.id, turnId: "exact-turn" } }),
     ]);
     expect(calls.filter(call => call.method === "thread/read").every(call => call.params.includeTurns === false)).toBe(true);
+    service.profiles = async () => [{ slot: 1, targetId: "default", targetDisplayName: "ChatGPT",
+      targetState: "independent", targetSessionState: "independent", controlState: "running" }];
+    let quitPid: number | undefined;
+    await interruptOwnedWork("fixture", paths, ["codex"], {
+      async session() { return { targetId: "default", state: "restart-required", desktopProcessId: 123 }; },
+      async quit(_id, _signal, pid) { quitPid = pid; return { targetId: "default", state: "available" }; },
+    });
+    expect(quitPid).toBe(123);
+    await expect(interruptOwnedWork("fixture", paths, ["codex"], {
+      async session() { return { targetId: "default", state: "restart-required", desktopProcessId: 123 }; },
+      async quit() { throw Error("normal quit refused"); },
+    })).rejects.toThrow("normal quit refused");
+
+    expect(requestedSlots).toEqual([1]);
+
   } finally { await http.close(); native.stop(true); rmSync(home, { recursive: true, force: true }); }
 });

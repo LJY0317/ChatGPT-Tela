@@ -42,7 +42,7 @@ export async function restoreWorkProfiles(service: Pick<CodexService, "config" |
         : await service.startProfile(slot, { requireStopped: true });
       restored++;
       emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_succeeded", { slot,
-        native_ready: result.targetSessionState === "ready", web_ready: result.webModelsReady === true });
+        phase: "web_runtime", web_ready: result.webModelsReady === true });
     } catch (error) {
       failed++;
       emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_failed", { slot, failure_class: diagnosticFailureClass(error) });
