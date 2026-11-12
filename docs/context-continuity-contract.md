@@ -73,6 +73,25 @@ in constant space; old details require authorized readback. An oversized exact c
 unresolved causal chain can require recovery. Bounded admission does not guarantee success for every
 arbitrary task, or a globally bounded Native archive.
 
+### Official-engine pre-turn compaction
+
+The official Desktop engine can compact with the **previous Native model** before the
+first Web request when switching to a smaller context window. This is separate from
+Tela's Web checkpoint preparation; zero Web preparation calls does not prove zero
+Native model calls. A completed Web answer does not establish a preparation-free switch.
+
+An isolated probe of engine `0.167.0-alpha.3.2` confirms that this compaction carries the
+current thread/turn identity and `model_downshift` / `pre_turn` metadata, but not the
+selected destination model. The published [app-server contract](https://learn.chatgpt.com/docs/app-server)
+provides a turn model override and manual thread compaction, without establishing a
+separate pre-turn compaction-model override. Exact identity alone does not authorize
+rewriting a Native model request or manufacturing its opaque compaction result.
+
+Removing this Native preparation requires an engine-supported destination-aware
+compaction policy and compatible continuation output. Keep this as an upstream
+integration limitation until that contract is demonstrated; do not raise catalog limits,
+disable Native compaction globally, restore a patched engine, or discard source history.
+
 The installed baseline `97dc2d5` supports retained deltas, source-bound checkpoints, bounded
 fragmentation, durable stage reuse and cost refusal but does **not** maintain a rolling working set.
 In the subsequent local source implementation, `web-working-context-policy.ts` resolves one
@@ -121,8 +140,8 @@ Normally it fits the first-message target with runway below the resident rollove
 Mandatory exact content may exceed the soft target if it still passes hard admission; report that
 condition rather than silently truncating it or presenting a preference as provider capacity.
 
-Audit `web-model-catalog.ts`: it currently clones Native template metadata. Web rows must describe
-supported route capacity/compaction behavior, rather than accidentally inheriting Native limits.
+`web-model-catalog.ts` overrides the Native template's capacity/compaction metadata with
+Web-owned policy. Web rows must describe supported route behavior rather than inherit Native limits.
 Do not change Native model rows, copy Web transport limits into global Native settings, or force
 frequent Native compaction just to achieve a small initial Web message.
 
