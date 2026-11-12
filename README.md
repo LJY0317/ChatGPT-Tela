@@ -40,6 +40,8 @@ Plura launches the official app; Tela connects its local Responses route and
 per-profile model catalog while keeping the built-in `openai` provider identity. No external Native engine or
 launch-time proxy/overlay is used. See [explicit provider setup](docs/official-desktop-provider.md).
 This adapter remains pre-release; source verification and local acceptance do not establish a publicly supported release.
+For a large existing conversation, the official engine may first compact with the previous Native
+model before sending the first Web request. See [the first-transition limit](docs/context-continuity-contract.md#official-engine-pre-turn-compaction).
 Automatic delegation and conversation cleanup are not provided by the Desktop-owned
 adapter. Manage conversations in the official app; see [Web tasks](docs/web-delegation.md).
 
@@ -478,9 +480,9 @@ Desktop's Plugins Directory. Finally, in a **local Desktop thread**, invoke a Ch
 an approved workspace and read a file to verify actual access. Service readiness and plugin
 preparation do **not** prove host installation or permission. Neither public HTTPS nor Tailscale
 nor Web account setup is required for this local path.
-The installed macOS `fb519688` release accepted local Chat start/stop and an exact
-read through the existing Profile 1 plugin without re-registration. Fresh plugin
-installation, two-device isolation and Web-worker access remain unverified.
+Basic read-only Chat use of the standard local plugin has user acceptance on both macOS
+accounts. Clean installation on a new OS account, two-physical-device isolation and access
+from a separate Web worker remain distinct verification scopes.
 Use **Stop Tela Chat…** to stop only Chat while keeping Work/Codex connections open. With no Web
 configuration, reopening the menu does not restart Chat; use **Start Tela Chat** when needed.
 

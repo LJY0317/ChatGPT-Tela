@@ -1,28 +1,55 @@
 # Remaining product work
 
-Only work without sufficient acceptance evidence is listed here. Existing source and fixture acceptance remains recorded in the private release evidence; reopen it only when new evidence changes the next action.
+Track only work for the supported official Desktop-owned route. Do not reopen accepted
+basic file reads, Web/Native switching, ordinary profile restoration or normal maintenance
+cleanup without new failure evidence. Fixture, installed and user-observed acceptance have
+different scopes. See [compatibility boundaries](web-native-compatibility-gates.md).
 
-## Delegation and host behavior
+## Current product and release checks
 
-- **Native/Web tool ownership.** Official 0.166 source supports plugin-specific per-server disablement (separate from ordinary MCP), but account/cloud app routing and actual installed Desktop registration remain unaccepted. Obtain exact installed plugin IDs, manifest server names, account app inventory, target CODEX_HOME and an authorized disposable host session; verify Native model receipt while preserving Chat/Web-worker connections. See `web-native-compatibility-gates.md`. No extra filtering engine.
-- **Original Native computer and browser tools.** The bounded official app-owned trial accepted a synthetic provider response followed by actual Native app/browser enumeration. Separately, the input-only Electron entry accepted a real Web 6 / Extra High greeting through an isolated official engine, without Native inference fallback. Remaining: real Web local tools, installed Desktop integration, supported launch/update activity admission, Goal/history/Stop contracts and model/quota transitions. Actual clicks, screenshots and browser interaction remain unaccepted. Native models retain their original tools while Web uses Tela Chat; Web-to-original-Native tool execution is a separate gate. Keep unknown/opaque history explicit. Usage-free automatic pressure remains unaccepted; the installed fork's local estimation is not an official catalog feature. See `web-native-compatibility-gates.md`.
-- **Unattended coordinator recovery and idle usage.** The isolated synthetic failure reached an existing Web receiver and was read back. Real failed-job ownership, dormant Native coordinator wakeup/resumption, and coordinator request/token usage during a waiting interval remain unaccepted. Do not add polling, replay scheduling, blind retries, or a second Goal engine.
-- **End-to-end Web acceptance.** Verify durable result delivery to the calling task, simultaneous live jobs, exact cancellation and uncertain-ACK recovery, image and continuation paths, and job-to-browser attribution with one-shot approval boundaries on disposable owned tasks.
-- **Remote Web result delivery.** Source Chat HTTP/MCP and installed local stdio reads returned correct text, but remote Web delivery to the calling model remains unaccepted. Preserve this distinction when investigating missing results; server emission alone does not establish model receipt.
-- **Installed Goal control.** Isolated same-turn completion and explicit Native Goal completion returned successfully. An earlier provider stream failure preceded any observed Goal invocation; its upstream cause remains unknown. A fresh Web read followed by same-turn completion and no extra turn remains unaccepted.
-- **Visible presentation.** Live sidebar title behavior remains unaccepted. Review the existing Work session preview and contextual help without adding an observer or browser bridge.
+- **Consumer tool ownership.** Turn the bounded local host-policy setup into an explicit,
+  install-owned consumer integration where supported. Resolve exact installed plugin IDs,
+  manifest server names and account-app sources; preserve ordinary Chat and independent
+  Web-worker connections. Do not disable unrelated apps or infer the active model from prose.
+- **Web failure and control paths.** Verify quota/model transitions, stream failure,
+  uncertain submission, exact cancellation and original Goal completion on disposable tasks
+  using the current route. Preserve accepted effects and original requests; do not resend
+  settled turns or add a coordinator, poller, retry scheduler or second Goal engine.
+- **Consumer lifecycle.** In a disposable OS account or VM, complete clean installation,
+  host authorization, a harmless file read, actual repair/removal and keep-data reinstall.
+  Existing fixtures and installed read-only maintenance do not prove destructive consumer
+  acceptance. Keep account-plugin removal separate from local application removal.
+- **Interrupted signed updates.** Exercise interruption during package replacement and
+  service restoration in that controlled environment. Normal update/profile restoration and
+  the disposable UI-exit test do not prove every signed-install recovery case. Reconcile
+  existing transition receipts instead of repeating apply or reusing lost approval.
+- **Resources and platform support.** Measure installed disk/cache residue and idle
+  CPU/wakeups under representative use, plus restart continuity. Verify Windows/Linux
+  binaries and their supported install, update, removal and workspace-identity paths.
+  Preserve active work, unresolved operations and recovery material when testing cleanup.
+- **Physical device isolation.** On two owned computers sharing an account, use separate
+  sentinel files and one local service offline. Verify local tools never discover or fall
+  back to the other computer. Isolated service tests are not physical-device acceptance.
 
-## Context preservation and failure recovery
+## External contracts and explicit limits
 
-- Audit concrete checkpoint or stream failures using exact request and turn evidence; separate installed behavior from later source changes and failures before submission. Do not replay settled turns.
-- Two historically missing summary inputs remain unrecovered. If the original provider/history surface cannot supply them, record that contract limit rather than reconstructing or reactivating retired chats.
-- Automatic use of reused instruction revisions and actual context/token savings remain unverified; preserve the existing single-summary and on-demand history paths.
-- Retention-pressure UI on installed workloads, reboot continuity, and other-OS workspace identity remain unaccepted.
+- **Large Native-to-Web first transition.** The official engine can compact with the previous
+  Native model before sending the first Web request. A supported destination-aware compaction
+  override has not been established. Do not mask this by inflating Web limits, inventing a
+  checkpoint or restoring a patched engine. See [context boundaries](context-continuity-contract.md#official-engine-pre-turn-compaction).
+- **Unsupported tool and input extensions.** A Web answer does not authorize an original Native
+  work-tool call. Such continuation needs authenticated structured intent and result receipts
+  from the host. Attachments likewise need an exact supported upload/readback contract before
+  they are advertised. Keep current text/Tela Chat operation distinct from these extensions.
+- **Distribution and remote access.** Public distribution approval, supported local-host
+  availability and authenticated remote exposure need their own acceptance. A remote connector
+  is not a device-bound local plugin; do not claim the two have identical isolation.
+- **Automatic delegated-chat management.** The old managed-job/archive/delete machinery is
+  removed. Reconsider automation only if the task owner exposes exact creation, activity and
+  result-settlement records; do not adopt ordinary chats by title or revive the old engine.
+  See [Web tasks](web-delegation.md).
 
-## Desktop lifecycle and consumer distribution
+## Deferred at the user's request
 
-- **Deferred update exit.** Recovery of an unconsumed update approval after an unexpected UI-process exit remains unverified; the normal deferral path is accepted.
-- **Installed UI and release readiness.** An idle service stop/start restored both Web profiles while preserving the official app PIDs and the managed profile's route and overlay fingerprints. Verify the same reuse through a full package update, Quit-menu and Spotlight launch paths, preservation of actively generating Web windows, and consumer repair. Windows and Linux execution and release binaries remain unverified.
-- **Consumer lifecycle.** Complete fresh install, ChatGPT host authorization and a harmless tool round trip, installed maintenance removal, keep-data reinstall, and separate account-plugin cleanup through supported host operations. Source fixtures cover interrupted removal and keep-data reinstall; they do not establish installed consumer acceptance.
-- **Same-account device isolation.** Test two physical computers with separate local sentinel files and one local service offline. Each local thread must access only its own computer; Web and mobile must remain unavailable without remote fallback. Public distribution approval and authenticated transport remain external prerequisites where applicable.
-- **Other release gates.** Check download and disk footprint, repeated update/uninstall residue, supported Windows/Linux lifecycle, background Web model selection while a menu is open, and temporary Web-chat continuity against the actual host contract. Preserve checkpoints where restore is unsupported.
+- **Occasional second Quit.** Lifecycle diagnostics are installed. Do not force reproduction
+  or change termination behavior speculatively; investigate an actual recurrence if reported.
