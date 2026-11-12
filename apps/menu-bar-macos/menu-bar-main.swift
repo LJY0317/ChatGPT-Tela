@@ -444,25 +444,13 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
 
   private func recordMenuState(_ event: String, slot: Int? = nil, decisionId: String? = nil) {
     // Event-driven, bounded, local-only evidence: no window titles, other app identities or content.
-    let directory = home.appendingPathComponent("Library/Logs/ChatGPT Tela", isDirectory: true)
-    let url = directory.appendingPathComponent("menu-ui-events.json")
-    var rows: [[String: Any]] = []
-    if let data = try? Data(contentsOf: url), data.count <= 131072,
-       let existing = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] { rows = existing }
-    let now = Date().timeIntervalSince1970
-    var evidence: [String: Any] = ["at": now, "event": event, "menuOpen": menuOpen,
+    var evidence: [String: Any] = ["menuOpen": menuOpen,
       "uiSession": decisionUiSession,
       "appActive": NSApp.isActive, "ownAppFrontmost": NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
       "window": controlCenter.windowStateEvidence]
     if let slot, (1...99).contains(slot) { evidence["slot"] = slot }
     if let decisionId { evidence["decision"] = decisionId }
-    rows.append(evidence)
-    do {
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-        attributes: [.posixPermissions: 0o700])
-      try retainedMenuDiagnosticData(rows, since: now - 86400, maxBytes: 131072).write(to: url, options: .atomic)
-      try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-    } catch { /* Diagnostics cannot alter UI behavior. */ }
+    recordMenuDiagnostic(event, fields: evidence, home: home)
   }
 
   private func descriptorURL(_ service: String) -> URL {

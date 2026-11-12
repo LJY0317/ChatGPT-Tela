@@ -140,14 +140,14 @@ import Sparkle
 }
 `);
       const compile = spawnSync("/usr/bin/xcrun", [
-        "swiftc", "-parse-as-library", resolve("apps/menu-bar-macos/sparkle-update.swift"),
+        "swiftc", "-parse-as-library", resolve("apps/menu-bar-macos/diagnostic-retention.swift"), resolve("apps/menu-bar-macos/sparkle-update.swift"),
         probe, "-I", root, "-L", root, "-lSparkle", "-framework", "AppKit",
         "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
         "-o", join(mac, "probe"),
       ], { encoding: "utf8" });
       expect(compile.status, compile.stderr).toBe(0);
       const run = spawnSync(join(mac, "probe"), [], {
-        env: { ...process.env, TELA_SPARKLE_ABORT_EFFECTS: effects },
+        env: { ...process.env, CFFIXED_USER_HOME: root, TELA_SPARKLE_ABORT_EFFECTS: effects },
         encoding: "utf8", timeout: 10_000,
       });
       expect(run.status, run.stderr).toBe(0);

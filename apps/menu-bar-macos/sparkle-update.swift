@@ -18,11 +18,25 @@ func telaDesktopApplicationURL(bundleId: String,
 
 /// Standard Launch Services open/reopen; no Tela connection or profile mutation is involved.
 func openTelaDesktopApplication(at url: URL, activates: Bool, completion: @escaping (Error?) -> Void) {
+  let expected = url.standardizedFileURL.resolvingSymlinksInPath()
+  if let running = NSWorkspace.shared.runningApplications.first(where: {
+    $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == expected
+  }) {
+    let success = !activates || running.activate(options: [.activateAllWindows])
+    recordMenuDiagnostic("desktop_open_existing", fields: ["success": success, "sameApplication": true])
+    completion(success ? nil : NSError(domain: "TelaDesktopOpen", code: 2)); return
+  }
   let configuration = NSWorkspace.OpenConfiguration()
   configuration.activates = activates
+  // Profile clones share a bundle ID. Without a new instance Launch Services
+  // can return a different running clone even when given this exact app URL.
+  configuration.createsNewApplicationInstance = true
   NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, error in
-    NSLog("Tela desktop open completed success=%d app_present=%d domain=%@ code=%ld", error == nil ? 1 : 0, app == nil ? 0 : 1, (error as NSError?)?.domain ?? "none", (error as NSError?)?.code ?? 0)
-    completion(error)
+    let matches = app?.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == expected
+    recordMenuDiagnostic("desktop_open_completed", fields: ["success": error == nil && matches,
+      "appPresent": app != nil, "sameApplication": matches,
+      "errorDomain": (error as NSError?)?.domain ?? "none", "errorCode": (error as NSError?)?.code ?? 0])
+    completion(error ?? (matches ? nil : NSError(domain: "TelaDesktopOpen", code: 3)))
   }
 }
 
@@ -49,19 +63,22 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   func preserveDesktopApps(targetBuild: String) {
     let urls = Array(Set(runningDesktopApplications(desktopBundleIdentifiers()))).sorted()
     UserDefaults.standard.set(["targetBuild": targetBuild, "applicationURLs": urls], forKey: Self.desktopRestoreKey)
-    NSLog("Tela desktop restoration captured count=%d", urls.count)
+    recordMenuDiagnostic("desktop_restore_captured", fields: ["count": urls.count, "targetBuild": targetBuild])
   }
 
   func restoreDesktopApps(forBuild expectedBuild: String? = nil) {
     guard let saved = UserDefaults.standard.dictionary(forKey: Self.desktopRestoreKey),
       let build = saved["targetBuild"] as? String,
       build == (expectedBuild ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String),
-      let urls = saved["applicationURLs"] as? [String] else { return }
+      let urls = saved["applicationURLs"] as? [String] else {
+      recordMenuDiagnostic("desktop_restore_skipped", fields: ["snapshotPresent": UserDefaults.standard.object(forKey: Self.desktopRestoreKey) != nil])
+      return
+    }
     // Consume once before Launch Services callbacks; a failed open never creates an automatic retry.
     UserDefaults.standard.removeObject(forKey: Self.desktopRestoreKey)
     let running = Set(runningDesktopApplications(desktopBundleIdentifiers()))
     let missing = urls.filter { !running.contains($0) }
-    NSLog("Tela desktop restoration started count=%d", missing.count)
+    recordMenuDiagnostic("desktop_restore_started", fields: ["count": missing.count, "alreadyRunning": urls.count - missing.count])
     for url in missing {
       reopenDesktop(url) { [weak self] error in
         guard error != nil else { return }

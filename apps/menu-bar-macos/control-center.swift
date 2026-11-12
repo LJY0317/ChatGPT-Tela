@@ -1680,7 +1680,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   func openProfile(slot: Int) {
     let bundleId = slot == 1 ? "com.openai.codex" : profiles.first(where: { $0.slot == slot })?.targetId
-    NSLog("Tela profile open requested slot=%d target_known=%d", slot, bundleId == nil ? 0 : 1)
+    recordMenuDiagnostic("profile_open_requested", fields: ["slot": slot, "targetKnown": bundleId != nil])
     guard let bundleId, let url = telaDesktopApplicationURL(bundleId: bundleId) else {
       profileFailure = "Couldn't find the ChatGPT app for this profile."
       selectedPage = .work; show(); return

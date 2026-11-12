@@ -63,14 +63,14 @@ import Sparkle
     withExtendedLifetime(delegate) { app.run() }
   }
 }`);
-    const compile = spawnSync("/usr/bin/xcrun", ["swiftc", "-parse-as-library", resolve("apps/menu-bar-macos/sparkle-update.swift"), harness,
+    const compile = spawnSync("/usr/bin/xcrun", ["swiftc", "-parse-as-library", resolve("apps/menu-bar-macos/diagnostic-retention.swift"), resolve("apps/menu-bar-macos/sparkle-update.swift"), harness,
       "-F", frameworkRoot, "-framework", "Sparkle", "-framework", "AppKit", "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks", "-o", join(mac, "probe")], { encoding: "utf8" });
     expect(compile.status).toBe(0);
     expect(spawnSync("/usr/bin/mkfifo", [join(root, "release.fifo")]).status).toBe(0);
     const entered = new Promise<void>(resolve => {
       observer = watch(root, () => { if (existsSync(join(root, "wait-entered"))) { observer?.close(); resolve(); } });
     });
-    child = Bun.spawn([join(mac, "probe")], { env: { ...process.env, TELA_IDLE_FIXTURE: root }, stdout: "ignore", stderr: "ignore" });
+    child = Bun.spawn([join(mac, "probe")], { env: { ...process.env, CFFIXED_USER_HOME: root, TELA_IDLE_FIXTURE: root }, stdout: "ignore", stderr: "ignore" });
     const running = child;
     deadline = setTimeout(() => running.kill(), 20_000);
     await Promise.race([entered, child.exited.then(code => { throw Error(`probe exited before completion gate (${code})`); })]);

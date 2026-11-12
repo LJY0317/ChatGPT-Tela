@@ -25,12 +25,17 @@ import { spawnSync } from "node:child_process";
   precondition(fresh.count == 1 && fresh[0]["id"] as? Int == 200)
   let tooSmall = try retainedMenuDiagnosticData(rows, since: 99, maxBytes: 2)
   precondition(tooSmall == Data("[]".utf8))
+  let home = URL(fileURLWithPath: CommandLine.arguments[1])
+  recordMenuDiagnostic("desktop_open_completed", fields: ["sameApplication": false], home: home)
+  let stored = try Data(contentsOf: home.appendingPathComponent("Library/Logs/ChatGPT Tela/menu-ui-events.json"))
+  let evidence = try JSONSerialization.jsonObject(with: stored) as! [[String: Any]]
+  precondition(evidence.count == 1 && evidence[0]["sameApplication"] as? Bool == false)
   print("retention verified")
  }
 }`);
     const compile = spawnSync("/usr/bin/xcrun", ["swiftc", "-parse-as-library", resolve("apps/menu-bar-macos/diagnostic-retention.swift"), fixture, "-o", binary], { encoding: "utf8" });
     expect({ status: compile.status, stderr: compile.stderr }).toEqual({ status: 0, stderr: "" });
-    const run = spawnSync(binary, [], { encoding: "utf8" });
+    const run = spawnSync(binary, [root], { encoding: "utf8" });
     expect({ status: run.status, stdout: run.stdout, stderr: run.stderr }).toEqual({ status: 0, stdout: "retention verified\n", stderr: "" });
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 15000);
