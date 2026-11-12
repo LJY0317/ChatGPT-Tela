@@ -545,7 +545,9 @@ reopens the selected app even when Tela is disconnected. Use Work **On your comp
 first use or when the connection needs repair, rather than after every reboot. Settings holds approval
 automation, connection details, and maintenance. During a Tela update, an open ChatGPT app can make
 Native activity unobservable; that does not mean a task was found. Finish any work before choosing
-**Close ChatGPT and Update**. After replacement, Tela reopens the ChatGPT apps that were running when
+**Close ChatGPT and Update**. Tela uses normal termination for the connected Desktop profiles;
+if one refuses to quit, the update is postponed and any apps already closed by that attempt are reopened.
+After replacement, Tela reopens the ChatGPT apps that were running when
 the update began, without opening profiles that were closed. Older updaters did not record this handoff;
 a first upgrade from one may require opening ChatGPT manually once.
 

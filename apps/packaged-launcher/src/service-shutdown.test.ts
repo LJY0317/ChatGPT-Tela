@@ -197,7 +197,7 @@ test("consented update interruption uses the owned Native endpoint and exact act
   const requestedSlots: number[] = [];
   const service = {
     serviceStatus: () => ({ contractVersion: 1, service: "codex", instanceId: "fixture-interrupt", state: "ready" }),
-    profiles: async () => [1, 2, 3].map(slot => ({ slot, targetId: `target-${slot}`, targetDisplayName: `Profile ${slot}`,
+    profiles: async () => [1, 2].map(slot => ({ slot, targetId: `target-${slot}`, targetDisplayName: `Profile ${slot}`,
       targetState: "running", targetSessionState: slot === 3 ? "independent" : "ready",
       controlState: slot === 2 ? "restart-required" : "running" })),
     terminalSession: async (slot: number) => { requestedSlots.push(slot); return { contractVersion: 1, slot, endpoint: `ws://127.0.0.1:${native.port}` }; },
@@ -215,18 +215,29 @@ test("consented update interruption uses the owned Native endpoint and exact act
       expect.objectContaining({ method: "turn/interrupt", params: { threadId: thread.id, turnId: "exact-turn" } }),
     ]);
     expect(calls.filter(call => call.method === "thread/read").every(call => call.params.includeTurns === false)).toBe(true);
-    service.profiles = async () => [{ slot: 1, targetId: "default", targetDisplayName: "ChatGPT",
-      targetState: "independent", targetSessionState: "independent", controlState: "running" }];
-    let quitPid: number | undefined;
-    await interruptOwnedWork("fixture", paths, ["codex"], {
-      async session() { return { targetId: "default", state: "restart-required", desktopProcessId: 123 }; },
-      async quit(_id, _signal, pid) { quitPid = pid; return { targetId: "default", state: "available" }; },
-    });
-    expect(quitPid).toBe(123);
-    await expect(interruptOwnedWork("fixture", paths, ["codex"], {
-      async session() { return { targetId: "default", state: "restart-required", desktopProcessId: 123 }; },
+    service.profiles = async () => [1, 2, 3].map(slot => ({ slot, targetId: slot === 1 ? "default" : `profile-${slot}`,
+      targetDisplayName: `Profile ${slot}`, targetState: "independent", targetSessionState: "independent", controlState: "running" }));
+    const closed: { id: string; pid: number | undefined }[] = [];
+    const desktop = {
+      async resolve(slot: number) {
+        const id = slot === 1 ? "default" : `profile-${slot}`;
+        return { target: { slot, id, adapterKind: slot === 1 ? "default-desktop" as const : "multi-profile" as const,
+          displayName: `Profile ${slot}`, state: "running", managed: slot > 1 },
+          session: { targetId: id, state: slot === 3 ? "available" : "restart-required", ...(slot === 3 ? {} : { desktopProcessId: slot * 123 }) } };
+      },
+      async quit(id: string, _signal?: AbortSignal, pid?: number) { closed.push({ id, pid }); return { targetId: id, state: "available" }; },
+    };
+    await interruptOwnedWork("fixture", paths, ["codex"], desktop);
+    expect(closed).toEqual([{ id: "default", pid: 123 }, { id: "profile-2", pid: 246 }]);
+    closed.length = 0;
+    await expect(interruptOwnedWork("fixture", paths, ["codex"], { ...desktop,
       async quit() { throw Error("normal quit refused"); },
     })).rejects.toThrow("normal quit refused");
+    expect(closed).toEqual([]);
+    await expect(interruptOwnedWork("fixture", paths, ["codex"], { ...desktop,
+      async resolve(slot) { const r = await desktop.resolve(slot); return { ...r, target: { ...r.target, id: "replaced" } }; },
+    })).rejects.toThrow("ChatGPT profile changed");
+    expect(closed).toEqual([]);
 
     expect(requestedSlots).toEqual([1]);
 

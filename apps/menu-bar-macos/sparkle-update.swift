@@ -52,15 +52,17 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     NSLog("Tela desktop restoration captured count=%d", urls.count)
   }
 
-  func restoreDesktopApps() {
+  func restoreDesktopApps(forBuild expectedBuild: String? = nil) {
     guard let saved = UserDefaults.standard.dictionary(forKey: Self.desktopRestoreKey),
       let build = saved["targetBuild"] as? String,
-      build == Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+      build == (expectedBuild ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String),
       let urls = saved["applicationURLs"] as? [String] else { return }
     // Consume once before Launch Services callbacks; a failed open never creates an automatic retry.
     UserDefaults.standard.removeObject(forKey: Self.desktopRestoreKey)
-    NSLog("Tela desktop restoration started count=%d", urls.count)
-    for url in urls {
+    let running = Set(runningDesktopApplications(desktopBundleIdentifiers()))
+    let missing = urls.filter { !running.contains($0) }
+    NSLog("Tela desktop restoration started count=%d", missing.count)
+    for url in missing {
       reopenDesktop(url) { [weak self] error in
         guard error != nil else { return }
         Task { @MainActor in
@@ -143,6 +145,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     guard idleObservation == nil else { return .terminateCancel }
     guard let build = pendingBuild else { return .terminateNow }
     guard !preparingTermination else { return .terminateLater }
+    preserveDesktopApps(targetBuild: build)
     preparingTermination = true
     problem = nil
     preparationWindow = Self.makePreparationWindow()
@@ -186,6 +189,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
           NSLog("Tela update preparation ended after %.3f seconds", ProcessInfo.processInfo.systemUptime - started)
           self.preparingTermination = failure == nil
           self.problem = failure is CancellationError ? nil : failure?.localizedDescription
+          if failure != nil, let build = self.pendingBuild { self.restoreDesktopApps(forBuild: build) }
           app.reply(toApplicationShouldTerminate: failure == nil)
           self.changed?()
           if let error = failure, !(error is CancellationError) {
@@ -262,7 +266,6 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,
                untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
     let observation = UpdateIdleObservation()
-    preserveDesktopApps(targetBuild: item.versionString)
     recoveredPendingUpdate = false
     idleObservation = observation
     pendingBuild = item.versionString
@@ -293,6 +296,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     // A newly created UI can encounter an unrelated Sparkle check failure.
     // It does not own a previous process's prepared service handoff.
     let ownedInstallation = pendingBuild != nil || preparingTermination
+    let abortedBuild = pendingBuild
     idleObservation?.cancel()
     idleObservation = nil
     pendingBuild = nil
@@ -302,9 +306,11 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     problem = error.localizedDescription
     changed?()
     guard ownedInstallation else { return }
-    UserDefaults.standard.removeObject(forKey: Self.desktopRestoreKey)
     Task {
-      do { _ = try await lifecycle(["cancel"]); recoveredPendingUpdate = false }
+      do {
+        _ = try await lifecycle(["cancel"]); recoveredPendingUpdate = false
+        if let build = abortedBuild { restoreDesktopApps(forBuild: build) }
+      }
       catch { problem = "Tela recovery needs attention before updating." }
       changed?()
     }

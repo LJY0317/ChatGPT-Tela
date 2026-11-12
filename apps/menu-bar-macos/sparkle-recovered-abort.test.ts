@@ -92,17 +92,24 @@ import Sparkle
     precondition(opened == ["file:///fixture/default.app"], "restore must reopen exactly the pre-update apps once")
     restore.runningDesktopApplications = { _ in ["file:///fixture/default.app", "file:///fixture/second.app"] }
     restore.preserveDesktopApps(targetBuild: "1")
+    restore.runningDesktopApplications = { _ in [] }
     restore.restoreDesktopApps()
     precondition(opened == ["file:///fixture/default.app", "file:///fixture/default.app", "file:///fixture/second.app"],
       "two running clones with the same bundle ID must restore by their distinct application locations")
+    restore.runningDesktopApplications = { _ in ["file:///fixture/default.app", "file:///fixture/second.app"] }
     restore.preserveDesktopApps(targetBuild: "2")
     restore.restoreDesktopApps()
     precondition(opened.count == 3 && UserDefaults.standard.dictionary(forKey: "TelaUpdateDesktopRestore") != nil,
       "source build must not consume a future update snapshot")
+    restore.runningDesktopApplications = { _ in ["file:///fixture/second.app"] }
+    restore.restoreDesktopApps(forBuild: "2")
+    precondition(opened.count == 4 && opened.last == "file:///fixture/default.app",
+      "an aborted attempt must restore the app it closed without reopening the app that refused to quit")
     UserDefaults.standard.removeObject(forKey: "TelaUpdateDesktopRestore")
     restore.runningDesktopApplications = { _ in ["file:///fixture/default.app"] }
     restore.reopenDesktop = { _, completion in completion(NSError(domain: "NSOSStatusErrorDomain", code: -10814)) }
     restore.preserveDesktopApps(targetBuild: "1")
+    restore.runningDesktopApplications = { _ in [] }
     restore.restoreDesktopApps()
     await Task.yield()
     precondition(restore.problem?.contains("could not reopen") == true, "failed OS reopen must not be silent")
