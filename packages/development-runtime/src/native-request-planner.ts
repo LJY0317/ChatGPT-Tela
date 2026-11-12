@@ -90,6 +90,8 @@ export interface NativeRequestContextProjection {
   readonly currentGoalObservationId?: string;
   /** Last canonical input revision before the ephemeral current Goal observation. */
   readonly inputAnchorId: string;
+  /** Current-turn source attribution selects input, never upgrades its role or grants tool authority. */
+  readonly currentInputRevisionId?: string;
   /** Ephemeral exact-request bytes, never checkpoint authority or a persisted context cache. */
   readonly media: readonly WebTurnMedia[];
   readonly deferredHistory?: DeferredNativeHistory;
@@ -380,7 +382,8 @@ function retainedDelta(
   let assistantIndex = -1;
   for (let index = inputHeadIndex + 1; index < projection.revisions.length; index += 1) {
     const kind = projection.revisions[index]!.revision.kind;
-    if (kind === "user" || kind === "steering"
+    if (projection.revisions[index]!.revision.id === projection.currentInputRevisionId
+      || kind === "user" || kind === "steering"
       || (kind === "developer" && assistantIndex >= 0 && projection.currentGoalStatus === "active")) {
       fields.retained_stop_index = index;
       fields.retained_stop_kind = kind;
@@ -421,7 +424,8 @@ function retainedDelta(
   const delta = projection.revisions.slice(assistantIndex + 1);
   if (delta.length === 0) return miss("empty_suffix");
   const activeRequest = [...delta].reverse().find(item => (
-    item.revision.kind === "user" || item.revision.kind === "steering"
+    item.revision.id === projection.currentInputRevisionId
+      || item.revision.kind === "user" || item.revision.kind === "steering"
       || (item.revision.kind === "developer" && projection.currentGoalStatus === "active")
   ));
   if (!activeRequest) return miss("active_request_missing");
@@ -529,6 +533,7 @@ export function projectNativeRequestContext(
   currentNativeGoal?: NativeThreadGoalObservation,
   currentNativeGoalState?: "absent" | "unavailable",
   readableHistoricalTurnIds?: ReadonlySet<string>,
+  currentTurnId?: string,
 ): NativeRequestContextProjection {
   const body = nativeRequestContentSource(value);
   const taskId = nativeTaskId.trim();
@@ -538,6 +543,7 @@ export function projectNativeRequestContext(
   let parentId: string | null = null;
   const protectedRevisionIds: string[] = [];
   let deferredHistory: DeferredNativeHistory | undefined;
+  let currentInputRevisionId: string | undefined;
 
   const append = (kind: RevisionKind, content: string, media: readonly NativeProjectedMedia[] = [], historicalTurnId?: string): void => {
     if (!content) return;
@@ -768,6 +774,9 @@ export function projectNativeRequestContext(
         || type === "custom_tool_call_output" || type === "tool_search_output") {
         const tool = projectNativeToolEvidence(item, taskId, `input:${index}`);
         append("tool-result", stableJson(tool.item), tool.media, historicalTurnId);
+        if (currentTurnId !== undefined && attributedTurn === currentTurnId) {
+          currentInputRevisionId = projected.at(-1)!.revision.id;
+        }
         continue;
       }
 
@@ -808,6 +817,8 @@ export function projectNativeRequestContext(
   const lastConfiguration = [...projected].reverse().find(item => item.revision.kind === "configuration");
   if (lastConfiguration) protectedRevisionIds.push(lastConfiguration.revision.id);
   const inputAnchorId = projected.at(-1)?.revision.id;
+  if (currentInputRevisionId !== inputAnchorId) currentInputRevisionId = undefined;
+  if (currentInputRevisionId) protectedRevisionIds.push(currentInputRevisionId);
   appendCurrentGoal();
   const currentGoalObservationId = currentNativeGoal || currentNativeGoalState
     ? projected.at(-1)?.revision.id : undefined;
@@ -864,6 +875,7 @@ export function projectNativeRequestContext(
     lineage,
     headId: revisions.at(-1)!.revision.id,
     inputAnchorId: inputAnchorId ?? revisions.at(-1)!.revision.id,
+    ...(currentInputRevisionId ? { currentInputRevisionId } : {}),
     ...(currentGoalObservationId ? { currentGoalObservationId } : {}),
     protectedRevisionIds: Object.freeze(protectedRevisionIds),
     ...(currentNativeGoal ? { currentGoalStatus: currentNativeGoal.status } : {}),
@@ -1128,25 +1140,29 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // The resolver can then reuse only that already-owned physical history.
     let retainedHistory: NativeRetainedHistory | undefined;
     let provenRetainedProjection: NativeRequestContextProjection | undefined;
+    const hotDiagnostic: { reason?: string; fields?: Record<string, string | number | boolean> } = {};
     const hot = hotHistoryByTask.get(threadId);
     if (opaqueFingerprint && hot?.opaqueFingerprint === opaqueFingerprint && committed
       && committed.routeIdentity === currentRouteIdentity) {
       const provisional = projectNativeRequestContext(threadId, nativeRequest,
         hot.history.visibleHistory, hot.history.inlineHistoryAssets, hot.history.historyReferences, ingress,
         binding?.canonicalEvidence.nativeGoal,
-        binding?.canonicalEvidence.nativeGoalState);
+        binding?.canonicalEvidence.nativeGoalState, undefined, identity.turnId);
       const trial = admittedRetainedContext(provisional, committed, currentRouteIdentity,
-        budgetTokens, workingPolicy.outputReserveTokens, undefined, physicalLimits);
+        budgetTokens, workingPolicy.outputReserveTokens, hotDiagnostic, physicalLimits);
       if (trial && (!committed.physicalLimits || (trial.pressure && !trial.pressure.shouldRollover))) {
         retainedHistory = hot.history;
         provenRetainedProjection = provisional;
       }
+      if (trial?.pressure?.shouldRollover) hotDiagnostic.reason = "physical_pressure";
     }
     emitDiagnosticEvent("chatgpt_tela_work", "web_retained_context_hot_probe", {
       prior_settlement_present: committed !== undefined, cached_history_present: hot !== undefined,
       opaque_matches: !!opaqueFingerprint && hot?.opaqueFingerprint === opaqueFingerprint,
       route_matches: committed?.routeIdentity === currentRouteIdentity,
       reuse_eligible: provenRetainedProjection !== undefined,
+      reason_class: hotDiagnostic.reason ?? "source_not_matched",
+      ...hotDiagnostic.fields,
     });
     // The continuity resolver owns all cold-source and checkpoint decisions.
     // Native task authority and Web surface settlement stay in this planner.
@@ -1183,7 +1199,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       : projectNativeRequestContext(threadId, nativeRequest,
         visibleHistory, inlineHistoryAssets, historyReferences, ingress,
         binding?.canonicalEvidence.nativeGoal,
-        binding?.canonicalEvidence.nativeGoalState);
+        binding?.canonicalEvidence.nativeGoalState, undefined, identity.turnId);
     // Only a dedicated producer can reduce a fresh canonical prefix. Reuse the calibrated Web
     // transport budget; Native context limits and canonical history remain untouched.
     const hotCandidate = opaqueFingerprint && visibleHistory
@@ -1463,7 +1479,9 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     // remains exact; provider presentation trimming must not create another,
     // untracked summary or underestimate the context that a later rollover needs.
     const protectedNativeEvidence = Object.freeze(projection.revisions.map(item => item.revision.id));
-    const withInstructions = withExactCurrentInstructions(prepared.physicalContext, projection);
+    const withInstructions = withExactCurrentInstructions(projection.currentInputRevisionId
+      ? { ...prepared.physicalContext, activeRequestRevisionId: projection.currentInputRevisionId }
+      : prepared.physicalContext, projection);
     const providerProjection = physicalLimits
       ? fitFreshWebPhysicalContext(withInstructions, {
           ...physicalLimits, rolloverTokenLimit: workingPolicy.firstMessageTargetTokens,

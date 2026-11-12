@@ -118,3 +118,18 @@ original history. Prove the actual Web model, response delivery, context coverag
 and any preparation cost separately. Retired private-provider conversations are
 a different compatibility issue: preserve useful results and continue unfinished
 work in a supported conversation without rewriting the old provider record.
+
+## Host-delivered follow-ups
+
+The installed diagnostic trial identified a retained-context miss for an input
+delivered by the official host as a `function_call_output`, rather than a user
+message. Its unchanged canonical prefix was followed by the prior final and a
+new result attributed to the current turn. The old retained scan rejected that
+result as an unexplained event after the answer, then rebuilt the page.
+
+The planner now uses the existing exact current-turn source attribution to locate
+that new input boundary. Its role remains tool-result; no tool name or embedded
+message text is interpreted, and no Native work or history authority is granted.
+The existing prefix, answer, route and physical-owner checks still apply. A foreign
+turn marker or changed prefix cannot authorize reuse. Synthetic regression tests
+cover this fix; installed acceptance of the fixed retained path remains pending.

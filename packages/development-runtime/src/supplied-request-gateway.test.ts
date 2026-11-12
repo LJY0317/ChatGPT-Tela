@@ -15,6 +15,53 @@ import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-jou
 
 const model = chatGptWebModelId(chatGptWebFamilyKey("Supplied request fixture"));
 const firstInput = [{ type: "message", role: "user", content: "Inspect A." }];
+
+test("a current-turn attributed host result continues the exact retained page without becoming a user message", async () => {
+  let reads = 0;
+  const f = fixture({ suppliedHistory: {
+    async readSeed(id) {
+      reads++;
+      return { kind: "native-visible-prefix", threadId: id.threadId, currentTurnId: id.turnId,
+        digest: "a".repeat(64), contentDigest: "b".repeat(64), sourceItemCount: 0,
+        content: JSON.stringify({ type: "tela_native_visible_prefix_v1", deferredHistory: { scope: "prior-native-history" }, items: [] }),
+        inlineAssets: [], references: [], localImageCandidates: [] };
+    },
+    async readPage() { throw Error("This continuation does not need original readback"); },
+  } });
+  const incoming = (turn: string, text: string) => ({ type: "function_call_output", id: `host-${turn}`,
+    name: "incoming_fixture", namespace: "host_fixture", output: text,
+    internal_chat_message_metadata_passthrough: { turn_id: turn } });
+  const first = [{ type: "compaction", encrypted_content: "opaque" }, ...firstInput, incoming("turn-1", "First supplied task")];
+  try {
+    await f.gateway.handle(request("turn-1", first));
+    const current = f.submissions[0]!.physicalContext;
+    expect(current.segments.find(s => s.type === "revision" && s.revisionId === current.activeRequestRevisionId))
+      .toMatchObject({ kind: "tool-result" });
+    await f.gateway.handle(request("turn-2", [...first,
+      { type: "message", role: "assistant", content: "A inspected." }, incoming("turn-2", "Next supplied task")]));
+    expect(f.submissions[1]!.physicalContext.mode).toBe("retained-delta");
+    expect(f.submissions[1]!.physicalContext.segments).toHaveLength(1);
+    expect(f.submissions[1]!.physicalContext.segments[0]).toMatchObject({ kind: "tool-result" });
+    expect(f.submissions[1]!.physicalContext.segments[0]).toMatchObject({ revisionId: f.submissions[1]!.physicalContext.activeRequestRevisionId });
+    expect(reads).toBe(1);
+  } finally { await f.gateway.close(); }
+});
+
+test("host input attribution cannot bypass a foreign turn or an edited retained prefix", async () => {
+  for (const edited of [false, true]) {
+    const f = fixture();
+    const incoming = (turn: string) => ({ type: "function_call_output", id: `host-${turn}`, output: "Next task",
+      internal_chat_message_metadata_passthrough: { turn_id: turn } });
+    try {
+      await f.gateway.handle(request("turn-1", firstInput));
+      await f.gateway.handle(request("turn-2", [
+        ...(edited ? [{ role: "user", content: "Edited original task" }] : firstInput),
+        { role: "assistant", content: "A inspected." }, incoming(edited ? "turn-2" : "foreign-turn"),
+      ]));
+      expect(f.submissions[1]!.physicalContext.mode).not.toBe("retained-delta");
+    } finally { await f.gateway.close(); }
+  }
+});
 test("supplied HTTP body drain retains provider delivery evidence without inventing a Native final", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-supplied-diagnostics-"));
   const file = join(root, "events.jsonl");
