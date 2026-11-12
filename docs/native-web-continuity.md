@@ -56,9 +56,21 @@ read. No second compression pipeline, permanent history copy or retired handoff
 helper is added.
 
 Both profiles passed stored-source/readback probes without model calls. The
-HTTP/MCP fixture proves scoped readback, control retirement and warm reuse. These
-are source acceptance results; installed long-conversation Web generation and its
-answer delivery still need a disposable-fork trial after installation.
+HTTP/MCP fixture proves scoped readback, control retirement and warm reuse.
+Installed macOS build `2026111201` also completed a disposable long-conversation
+fork using Web 6/Extra High: one exact prior-turn read returned 7,625 bytes, the
+answer matched that turn, and the Desktop received the final response. The source
+conversation was preserved.
+
+This is not acceptance of a Native-free transition. The same trial first emitted
+a Native `compaction` request lasting approximately 104 seconds; the subsequent
+Web operation completed in approximately 40 seconds. No ordinary Native answer
+turn was observed for the trial. Do not confuse the planner's zero Web preparation
+model calls with zero official-engine compaction calls. The engine's pre-turn
+model-selection/compaction boundary remains to be resolved through its supported
+contract, without inventing a summary, raising limits to hide the trigger, or
+restoring an external Native engine. A separate post-final stored-read RPC failure
+was observed; its relationship to the completed trial is not established.
 
 ## Failures and diagnostics
 
