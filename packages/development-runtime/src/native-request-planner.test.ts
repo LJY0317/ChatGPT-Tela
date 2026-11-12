@@ -2031,6 +2031,8 @@ test('oversized indexed Native history uses one fitted common checkpoint, exact 
       expect(result.physicalContext.segments.some(item => item.content.includes('source-bound historical state'))).toBe(true);
       expect(observed).toContainEqual(expect.objectContaining({
         stage: 'web_retained_context_decision', reason_class: 'input_head_missing',
+        retained_system_matches: false,
+        retained_anchor_match_count: 0,
       }));
       expect(observed.filter(item => item.stage === 'native_checkpoint_preparation_rejected')).toHaveLength(0);
       result.settle?.({ status: 'completed', documentGeneration: 1, surfaceLeaseId: 'imported-page', answer: 'Imported work completed.' });

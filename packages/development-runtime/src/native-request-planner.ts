@@ -250,6 +250,8 @@ interface CommittedRetainedContext {
   readonly surfaceLeaseId: string;
   readonly documentGeneration: number;
   readonly inputHeadRevisionId: string;
+  readonly systemFingerprint: string;
+  readonly inputHeadContentFingerprint: string;
   readonly answerFingerprint: string;
   readonly routeIdentity: string;
   /** Monotonic input+estimated output of the exact owned physical generation. */
@@ -257,6 +259,16 @@ interface CommittedRetainedContext {
   readonly oversizedFreshSeed: boolean;
   readonly physicalLimits?: ChatGptWebPhysicalLimits;
   readonly deferredHistory?: WebPhysicalContext["deferredHistory"];
+}
+
+/** Bounded hashes explain a changed prefix without retaining another input copy. */
+function retainedInputIdentity(projection: NativeRequestContextProjection) {
+  return {
+    systemFingerprint: contentFingerprint(stableJson(projection.revisions
+      .filter(item => item.revision.kind === "system").map(item => item.content))),
+    inputHeadContentFingerprint: contentFingerprint(projection.revisions
+      .find(item => item.revision.id === projection.inputAnchorId)?.content ?? ""),
+  };
 }
 
 /** No upload bytes survive planner settlement; retained exact physical messages need only suffix media. */
@@ -346,7 +358,12 @@ function retainedDelta(
   ));
   fields.retained_input_head_found = inputHeadIndex >= 0;
   fields.retained_input_head_fingerprint = diagnosticFingerprint(committed.inputHeadRevisionId);
-  if (inputHeadIndex < 0) return miss("input_head_missing");
+  if (inputHeadIndex < 0) {
+    fields.retained_system_matches = retainedInputIdentity(projection).systemFingerprint === committed.systemFingerprint;
+    fields.retained_anchor_match_count = projection.revisions.filter(item =>
+      contentFingerprint(item.content) === committed.inputHeadContentFingerprint).length;
+    return miss("input_head_missing");
+  }
   fields.retained_input_head_index = inputHeadIndex;
   fields.retained_tail_count = projection.revisions.length - inputHeadIndex - 1;
   fields.retained_assistant_count = 0;
@@ -992,6 +1009,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
     readonly pending: symbol;
     readonly webEpochId: string;
     readonly inputHeadRevisionId: string;
+    readonly systemFingerprint: string;
+    readonly inputHeadContentFingerprint: string;
     readonly routeIdentity: string;
     readonly previousResidentTokens: number;
     readonly inputTokens: number;
@@ -1037,6 +1056,8 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       surfaceLeaseId: outcome.surfaceLeaseId,
       documentGeneration: outcome.documentGeneration,
       inputHeadRevisionId: entry.inputHeadRevisionId,
+      systemFingerprint: entry.systemFingerprint,
+      inputHeadContentFingerprint: entry.inputHeadContentFingerprint,
       answerFingerprint: contentFingerprint(outcome.answer),
       routeIdentity: entry.routeIdentity,
       estimatedResidentTokens,
@@ -1261,6 +1282,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
         settle: settleOwnedContext({
           threadId, pending, webEpochId: committed.webEpochId,
           inputHeadRevisionId: projection.inputAnchorId, routeIdentity: currentRouteIdentity,
+          ...retainedInputIdentity(projection),
           previousResidentTokens: committed.estimatedResidentTokens,
           oversizedFreshSeed: committed.oversizedFreshSeed,
           inputTokens: physicalContext.transferTokens + 1_024,
@@ -1559,6 +1581,7 @@ export function createNativeRequestDevelopmentWebTurnPlanner(options: NativeCont
       settle: settleOwnedContext({
         threadId, pending, webEpochId: epochId,
         inputHeadRevisionId: projection.inputAnchorId, routeIdentity: currentRouteIdentity,
+        ...retainedInputIdentity(projection),
         previousResidentTokens: 0,
         oversizedFreshSeed: !!physicalLimits && physicalContext.transferTokens >= physicalLimits.rolloverTokenLimit,
         inputTokens: physicalContext.transferTokens + 1_024,

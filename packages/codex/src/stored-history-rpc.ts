@@ -40,7 +40,7 @@ export async function connectStoredHistoryRpc(input: {
         if (message.error) {
           emitDiagnosticEvent("chatgpt_tela_codex", "stored_history_read_failed", { phase: p.method.replaceAll("/", "_"), reason_class: "rpc_error",
             ...(Number.isSafeInteger(message.error.code) ? { rpc_error_code: message.error.code } : {}) });
-          capturePrivateDiagnosticValue("context_preload_failure", { method: p.method, error: message.error });
+          capturePrivateDiagnosticValue("context_preload_failure", { method: p.method, threadId: input.threadId, error: message.error });
           p.reject(Error("Official stored history request failed"));
         } else p.resolve(message.result);
       } catch { broken = true; buffer = ""; fail(Error("Official stored history returned invalid JSON"), "invalid_json"); child.stdin.end(); return; }

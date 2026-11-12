@@ -81,7 +81,12 @@ A separate post-final stored-read RPC failure was observed; its relationship to
 the completed trial is not established. Stored-read failures now retain a numeric
 RPC error code in structural diagnostics. Detailed RPC error data uses the
 existing bounded, opt-in private context-failure capture; it is never included in
-the public error or structural log.
+the public error or structural log. A later short follow-up completed in
+approximately 20 seconds without a Native dispatch for that conversation, but
+rebuilt the Web page because the retained input head was absent. This does not
+prove warm-context reuse. Current diagnostics distinguish a changed system prefix
+from a matching prior input anchor without retaining another original-input copy;
+these observations never relax retained-context admission.
 
 ## Failures and diagnostics
 
