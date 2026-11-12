@@ -69,8 +69,19 @@ turn was observed for the trial. Do not confuse the planner's zero Web preparati
 model calls with zero official-engine compaction calls. The engine's pre-turn
 model-selection/compaction boundary remains to be resolved through its supported
 contract, without inventing a summary, raising limits to hide the trigger, or
-restoring an external Native engine. A separate post-final stored-read RPC failure
-was observed; its relationship to the completed trial is not established.
+restoring an external Native engine. An isolated run of the installed official
+CLI reproduced previous-model compaction before the selected Web request, using
+only synthetic responses and no real model calls. The current public turn-start
+schema exposes the requested model, but no separate pre-turn compaction-model
+selector was found. Ingress must not reject every Native compaction request or
+pretend to have produced a checkpoint: those requests also serve legitimate Native
+work.
+
+A separate post-final stored-read RPC failure was observed; its relationship to
+the completed trial is not established. Stored-read failures now retain a numeric
+RPC error code in structural diagnostics. Detailed RPC error data uses the
+existing bounded, opt-in private context-failure capture; it is never included in
+the public error or structural log.
 
 ## Failures and diagnostics
 

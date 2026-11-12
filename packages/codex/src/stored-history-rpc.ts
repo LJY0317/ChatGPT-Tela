@@ -1,4 +1,4 @@
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { capturePrivateDiagnosticValue, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { spawn } from "node:child_process";
 import type { CodexAppServerRpc } from "./app-server";
 
@@ -14,7 +14,7 @@ export async function connectStoredHistoryRpc(input: {
   const pending = new Map<number, { method: string; resolve(value: unknown): void; reject(error: unknown): void }>();
   const fail = (error: unknown, reason = "reader_closed") => {
     for (const p of pending.values()) {
-      emitDiagnosticEvent("chatgpt_tela_codex", "stored_history_read_failed", { phase: p.method, reason_class: reason });
+      emitDiagnosticEvent("chatgpt_tela_codex", "stored_history_read_failed", { phase: p.method.replaceAll("/", "_"), reason_class: reason });
       p.reject(error);
     }
     pending.clear();
@@ -38,7 +38,9 @@ export async function connectStoredHistoryRpc(input: {
         if (!p) continue;
         pending.delete(message.id);
         if (message.error) {
-          emitDiagnosticEvent("chatgpt_tela_codex", "stored_history_read_failed", { phase: p.method, reason_class: "rpc_error" });
+          emitDiagnosticEvent("chatgpt_tela_codex", "stored_history_read_failed", { phase: p.method.replaceAll("/", "_"), reason_class: "rpc_error",
+            ...(Number.isSafeInteger(message.error.code) ? { rpc_error_code: message.error.code } : {}) });
+          capturePrivateDiagnosticValue("context_preload_failure", { method: p.method, error: message.error });
           p.reject(Error("Official stored history request failed"));
         } else p.resolve(message.result);
       } catch { broken = true; buffer = ""; fail(Error("Official stored history returned invalid JSON"), "invalid_json"); child.stdin.end(); return; }

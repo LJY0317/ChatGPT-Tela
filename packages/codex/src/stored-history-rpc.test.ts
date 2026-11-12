@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectStoredHistoryRpc } from "./stored-history-rpc";
+import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 
 // Unix fixture executable; Windows execution remains an OS acceptance item.
 (process.platform === "win32" ? test.skip : test)("official-reader transport cannot send model, mutation or other-thread requests", async () => {
@@ -19,4 +20,18 @@ import { connectStoredHistoryRpc } from "./stored-history-rpc";
     expect(readFileSync(trace, "utf8").trim().split("\n").map(l => JSON.parse(l).method))
       .toEqual(["initialize", "initialized", "thread/read"]);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+(process.platform === "win32" ? test.skip : test)("stored RPC failure retains its numeric cause without exposing error text", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "tela-stored-rpc-error-")), file = join(directory, "reader");
+  writeFileSync(file, `#!${process.execPath}\nlet b='';for await(const c of process.stdin){b+=c.toString();let n;while((n=b.indexOf('\\n'))>=0){const m=JSON.parse(b.slice(0,n));b=b.slice(n+1);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,...(m.method==='initialize'?{result:{}}:{error:{code:-32602,message:'PRIVATE_THREAD_FAILURE'}})})+'\\n');}}`, { mode: 0o755 });
+  const events: unknown[] = [];
+  const unsubscribe = observeDiagnosticEvents(event => { if (event.stage === "stored_history_read_failed") events.push(event); });
+  let rpc: Awaited<ReturnType<typeof connectStoredHistoryRpc>> | undefined;
+  try {
+    rpc = await connectStoredHistoryRpc({ executable: file, codexHome: directory, threadId: "own" });
+    await expect(rpc.request("thread/read", { threadId: "own", includeTurns: false })).rejects.toThrow("Official stored history request failed");
+    expect(events).toMatchObject([{ phase: "thread_read", reason_class: "rpc_error", rpc_error_code: -32602 }]);
+    expect(JSON.stringify(events)).not.toContain("PRIVATE_THREAD_FAILURE");
+  } finally { unsubscribe?.(); await rpc?.close(); rmSync(directory, { recursive: true, force: true }); }
 });
