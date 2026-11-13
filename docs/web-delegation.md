@@ -115,16 +115,32 @@ Automatic creator enrollment, consumer hook installation and the archive/delete
 scheduler remain unconnected. The receipt operation is not yet installed in the
 current application; the 12-hour/7-day policy is not running automatically.
 
-The remaining execution boundary is not solved by receiving hooks. The current
-app-owned provider exposes no original Native control connection, and a fresh
-app-server's activity state describes that separate process. Installed archive/delete
-requests accept only a conversation ID, without a condition on the last observed
-turn. The upstream [removal handler](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/request_processors/thread_processor.rs)
-can shut down a loaded conversation; it is not an idle-only cleanup primitive.
-Before enabling automatic mutations, establish an owner-side lifecycle integration
-that skips newly active work and publishes archive/restore/delete outcomes. Do not
-substitute an independent mutation process, reintroduce the retired proxy or install
-an otherwise inactive registry/scheduler and report it as connected automation.
+An installed-engine, isolated two-client trial corrected the earlier assumption
+that a separate app-server necessarily bypasses the Desktop writer. Archive and
+delete both rejected a thread held by another writer, including after its turn
+completed; the original turn completed normally. After that owner disconnected,
+`thread/resume` acquired the writer, a competing resume was rejected, and archive
+succeeded. Thus a candidate archive path is to acquire the official writer first,
+read the newest turn and eligible activity/result references under that ownership,
+and archive through the same connection. An occupied writer is a deferred operation,
+not a failed task or permission to interrupt it. Do not infer idleness from
+`notLoaded`, and do not add a retry loop to obtain the writer.
+
+This is installed CLI/app-server evidence, not consumer Desktop acceptance or a
+universal lock guarantee across versions. It does not establish automatic enrollment,
+hook installation, a scheduler, or that a closed app is necessary for every archive.
+Keep the stored-history reader read-only; any lifecycle adapter needs its own exact
+scope and official writer ownership, without reviving the retired proxy.
+
+Deletion has an additional unresolved condition: the same isolated engine accepted
+`thread/delete` after `thread/unarchive`. Writer exclusion alone therefore does not
+protect a manually restored conversation from an outdated deletion decision. The
+archive confirmation, restore opt-out and deletion eligibility must be checked in a
+supported serialized lifecycle boundary before automatic deletion can be enabled.
+The current request schema has no expected archive revision. Do not treat a separate
+read followed by delete as a conditional operation, or report full automatic cleanup
+as implemented. Registration, explicit acknowledgement use and deadline execution
+still need to be connected to the validated boundaries.
 
 MCP initialization instructions direct ChatGPT Native-model work to the host's
 Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or

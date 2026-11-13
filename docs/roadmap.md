@@ -46,9 +46,11 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   is not a device-bound local plugin; do not claim the two have identical isolation.
 - **Automatic delegated-chat management.** The old managed-job/archive/delete machinery is
   removed. Isolated hooks establish Native child lineage, and the source CLI can explicitly
-  acknowledge an exact result. Live owner-side idle-conditional archive/delete integration
-  remains unestablished: a separate inspection server is not that owner. Do not install an
-  inert scheduler, adopt ordinary chats by title or revive the old engine.
+  acknowledge an exact result. An installed-engine two-client trial established writer
+  exclusion for archive/delete and a candidate resume/read/archive sequence after release.
+  Delete also accepted a manually restored chat, so restore-aware serialized deletion remains
+  unresolved. Creator enrollment, receipt use and deadline execution are not connected. Do
+  not install an inert scheduler, adopt ordinary chats by title or revive the old engine.
   See [Web tasks](web-delegation.md).
 
 ## Deferred at the user's request
