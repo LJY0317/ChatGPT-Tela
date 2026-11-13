@@ -202,14 +202,6 @@
     "packages/default-desktop-target": {
       "name": "@chatgpt-tela/default-desktop-target",
       "version": "0.0.0",
-      "dependencies": {
-        "@chatgpt-tela/codex": "workspace:*",
-        "@chatgpt-tela/core": "workspace:*",
-        "ws": "^8.18.0",
-      },
-      "devDependencies": {
-        "@types/ws": "^8.5.13",
-      },
     },
     "packages/development-runtime": {
       "name": "@chatgpt-tela/development-runtime",

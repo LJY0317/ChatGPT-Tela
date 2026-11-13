@@ -115,6 +115,17 @@ Automatic creator enrollment, consumer hook installation and the archive/delete
 scheduler remain unconnected. The receipt operation is not yet installed in the
 current application; the 12-hour/7-day policy is not running automatically.
 
+The remaining execution boundary is not solved by receiving hooks. The current
+app-owned provider exposes no original Native control connection, and a fresh
+app-server's activity state describes that separate process. Installed archive/delete
+requests accept only a conversation ID, without a condition on the last observed
+turn. The upstream [removal handler](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/request_processors/thread_processor.rs)
+can shut down a loaded conversation; it is not an idle-only cleanup primitive.
+Before enabling automatic mutations, establish an owner-side lifecycle integration
+that skips newly active work and publishes archive/restore/delete outcomes. Do not
+substitute an independent mutation process, reintroduce the retired proxy or install
+an otherwise inactive registry/scheduler and report it as connected automation.
+
 MCP initialization instructions direct ChatGPT Native-model work to the host's
 Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or
 DevSpace. The local, remote and development MCP surfaces share this guidance;

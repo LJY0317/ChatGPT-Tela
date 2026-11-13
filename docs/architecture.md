@@ -697,12 +697,11 @@ profile command.
 
 Multi-Profile is an adapter, not the product model. Tela Codex owns a neutral Native-target boundary; the
 Multi-Profile adapter translates its public target/session contract into that boundary and contains all
-slot-to-managed-target mapping. The built-in macOS default adapter owns the official-app/default-Codex
-lifecycle without requiring the separate Multi-Profile project: Codex chooses its own ephemeral app-server
-port, Tela places one route-preserving loopback WebSocket proxy in front of it, and only thread lifecycle
-requests receive the Tela Responses provider overlay. Unrelated app-server JSON-RPC is forwarded unchanged,
-the Responses credential remains environment-only, and model/Native tool names are not frozen into this
-adapter. Windows/Linux share the same lifecycle contract: process identity is re-proven before shutdown,
+slot-to-managed-target mapping. The built-in macOS default adapter opens the official app without
+requiring the separate Multi-Profile project. The official app owns its Native engine; Tela registers
+the owned built-in OpenAI Responses route and model catalog rather than proxying app-server JSON-RPC.
+There is no Tela-owned Native control endpoint on this route. Windows/Linux share the lifecycle contract:
+process identity is re-proven before shutdown,
 Linux requests graceful `SIGTERM`, and Windows requests `CloseMainWindow()` on the exact executable/PID.
 Packaged executable discovery is also fail-closed. Linux accepts the canonical package launcher only when it
 resolves inside supported system package roots and resolves the bundled Codex runtime from the package
@@ -761,8 +760,6 @@ the observer and still attempts profile cleanup if observer cleanup fails.
 
 An isolated real-engine two-client fixture exercised this observer: the second client received logout,
 performed its event-triggered second account read, and avoided duplicate signed-out invalidation.
-A further isolated fixture placed both clients behind the actual default-Desktop proxy: the notification
-and follow-up account read still arrived, and all fixture processes/temporary data were cleaned.
 The profile-runtime entry point also bundles with the observer/invalidation code included; the bundle
 was not executed or installed. Actual Desktop event propagation and installed observer operation are unverified. This does not log the
 website out or sign it in; it is a lifecycle prerequisite, not completion of automatic synchronization.

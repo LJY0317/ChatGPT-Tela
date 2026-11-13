@@ -798,9 +798,10 @@ No routine evidence contains text, URLs or renderer identities. Private HTML/scr
 the existing expiring capture policy. Counts distinguish missing assistants from unmatched or completed
 assistants; they do not alone prove a server generation failure or that ChatGPT consumed an MCP result.
 
-The owned default-profile proxy records model-list request, final response counts (Native/Web/hidden Web), and local WebSocket send completion/failure with a random connection fingerprint. Declared client categories separate Tela API probes from other clients; they do not prove process identity. No RPC identifiers, model names, client names, payloads or credentials are retained. Logging is limited to64 events plus a closing summary and128 tracked diagnostic requests per connection, with existing bounded log retention and no idle sampler.
-
-A successful socket write does not prove frontend receipt, filtering or rendering. Compare these transport events with an explicit human picker observation. Native startup and stop record phase, elapsed time, failure and rollback/cleanup outcome; Native readiness is not first-window paint. Work incident/trace analysis retains the allowlisted counts, statuses and fingerprints.
+Native startup and stop record phase, elapsed time, failure and rollback/cleanup outcome;
+Native readiness is not first-window paint. Work incident/trace analysis retains allowlisted
+counts, statuses and fingerprints. The retired default-profile app-server proxy and its
+transport diagnostics are removed; they do not observe the current app-owned route.
 
 ### macOS menu and Control Center evidence
 
