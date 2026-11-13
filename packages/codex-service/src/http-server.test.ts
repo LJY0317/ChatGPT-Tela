@@ -1,3 +1,4 @@
+import { createDelegatedRetention } from "./delegated-retention";
 import { ProfileConnectionError } from "./profile-operation";
 import { describe, expect, test } from "bun:test";
 import { CodexShutdownNotStartedError, type CodexService } from "./controller";
@@ -547,4 +548,37 @@ test("private service forwards exact selected preview and explicit reveal withou
     expect((await fetch(url, {method:"POST",headers,body:JSON.stringify({surfaceId:id,interactive:true})})).status).toBe(204);
     expect(modes).toEqual([false,true]);
   } finally {await client.close(); await server.close();}
+});
+
+test("owned management client connects explicit creation, acknowledgement and due archive without a Native turn", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "tela-retention-http-"));
+  let now = 1_000_000_000;
+  const methods: string[] = [];
+  const manager = createDelegatedRetention({ directory: join(directory, "records"), acknowledgementDirectory: join(directory, "ack"),
+    automatic: false, now: () => now,
+    profile(slot) { expect(slot).toBe(2); return { scope: "installed-profile-two", async connect() { return {
+      async close() {}, async request(method: string, params?: any): Promise<any> {
+        methods.push(method);
+        const thread = { id: "child", status: { type: "idle" }, source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } };
+        if (["thread/read", "thread/resume"].includes(method)) return { thread };
+        if (method === "thread/turns/list") return { data: [{ id: "turn", status: "completed", completedAt: 1_000_000 }] };
+        if (method === "thread/items/list") return { data: [{ turnId: params.turnId, item: { id: "answer", type: "agentMessage", phase: "final_answer" } }], nextCursor: null };
+        if (method === "thread/archive") return {};
+        throw Error("Unexpected Native action");
+      },
+    }; } }; },
+  });
+  const service = fixtureService(), server = await startCodexServiceHttpServer({ service, delegatedRetention: manager });
+  const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+    installId: "fixture", pid: process.pid, endpoint: server.endpoint.href, bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
+  try {
+    await client.manageDelegation({ action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" });
+    expect(await client.manageDelegation({ action: "acknowledge", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer" }))
+      .toMatchObject({ enrolled: true, automaticArchiveEnabled: true, automaticDeleteEnabled: false });
+    now += 12 * 3_600_000;
+    expect(await client.manageDelegation({ action: "reconcile", slot: 2 })).toEqual({ outcomes: [{ threadId: "child", status: "archived" }], automaticDeleteEnabled: false });
+    expect(methods).not.toContain("turn/start"); expect(methods).not.toContain("thread/delete");
+    const unauthorized = await fetch(new URL("v1/codex/delegations", server.endpoint), { method: "POST", body: JSON.stringify({ action: "reconcile", slot: 2 }) });
+    expect(unauthorized.status).toBe(401);
+  } finally { await server.close(); await manager.close(); rmSync(directory, { recursive: true, force: true }); }
 });

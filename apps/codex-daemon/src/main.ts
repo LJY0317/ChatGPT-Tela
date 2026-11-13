@@ -1,5 +1,7 @@
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
+  createDelegatedRetention,
   restoreWorkProfiles,
   startCodexService,
   startCodexServiceHttpServer,
@@ -12,6 +14,9 @@ import {
   removeServiceRuntimeDescriptor,
   writeServiceRuntimeDescriptor,
 } from "@chatgpt-tela/service-protocol";
+
+import { connectDormantThreadRpc, connectStoredHistoryRpc } from "@chatgpt-tela/codex";
+import { resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 
 function required(key: string): string {
   const value = process.env[key]?.trim();
@@ -54,10 +59,34 @@ async function main(): Promise<void> {
       };
     },
   });
+  let delegatedRetention: ReturnType<typeof createDelegatedRetention> | undefined;
+  try {
+    delegatedRetention = createDelegatedRetention({
+      directory: join(paths.serviceState("codex"), "delegated-retention"),
+      acknowledgementDirectory: join(paths.serviceState("codex"), "result-acknowledgements"),
+      profile(slot) {
+        const route = readProductConfigIfPresent()?.appOwnedResponses?.find(row => row.slot === slot);
+        if (!route) throw Error("The selected profile has no owned Desktop route");
+        const installation = resolveDefaultDesktopInstallation();
+        const home = route.desktopConfigPath ? dirname(route.desktopConfigPath)
+          : slot === 1 ? installation.codexHome : undefined;
+        if (!home) throw Error("The selected profile has no configured Desktop history location");
+        return {
+          scope: JSON.stringify([installId, slot, realpathSync(home)]),
+          connect: (threadId, lifecycleAccess) => (lifecycleAccess ? connectDormantThreadRpc : connectStoredHistoryRpc)({
+            executable: installation.codexExecutable, codexHome: home, threadId, signal: lifecycle.signal,
+          }),
+        };
+      },
+    });
+  } catch (error) {
+    emitDiagnosticEvent("chatgpt_tela_codex", "delegation_retention_start_failed", { failure_class: diagnosticFailureClass(error) });
+  }
   let restoring = true;
   const http = await startCodexServiceHttpServer({
     service,
     startupComplete: () => !restoring,
+    ...(delegatedRetention ? { delegatedRetention } : {}),
   });
   writeServiceRuntimeDescriptor(descriptorPath, {
     version: 1,
@@ -74,13 +103,16 @@ async function main(): Promise<void> {
   const restoration = restoreWorkProfiles(service, readProductPreferences().workProfileConnections ?? [], lifecycle.signal)
     .catch(error => emitDiagnosticEvent("chatgpt_tela_codex", "profile_restore_failed", { failure_class: diagnosticFailureClass(error) }))
     .finally(() => { restoring = false; });
+  const retentionStartup = restoration.then(() => delegatedRetention?.reconcile())
+    .catch(error => emitDiagnosticEvent("chatgpt_tela_codex", "delegation_retention_reconcile_failed", { failure_class: diagnosticFailureClass(error) }));
 
   let stopping: Promise<void> | undefined;
   const stop = () => {
     lifecycle.abort();
     if (!stopping) {
       stopping = (async () => {
-        const results = await Promise.allSettled([http.close(), restoration.then(() => service.close())]);
+        const results = await Promise.allSettled([http.close(), restoration.then(() => service.close()),
+          retentionStartup.then(() => delegatedRetention?.close())]);
         const failures = results
           .filter((result): result is PromiseRejectedResult => result.status === "rejected")
           .map(result => result.reason);

@@ -2,9 +2,9 @@ import { capturePrivateDiagnosticValue, emitDiagnosticEvent } from "@chatgpt-tel
 import { spawn } from "node:child_process";
 import type { CodexAppServerRpc } from "./app-server";
 
-/** Disposable metadata reader from the official installation. No model/turn or mutation methods. */
-export async function connectStoredHistoryRpc(input: {
-  executable: string; codexHome: string; threadId: string; signal?: AbortSignal;
+/** Shared transport; each exported client below has an independent, exact-thread method scope. */
+async function connectScopedRpc(input: {
+  executable: string; codexHome: string; threadId: string; signal?: AbortSignal; lifecycle?: boolean;
 }): Promise<CodexAppServerRpc> {
   input.signal?.throwIfAborted();
   const child = spawn(input.executable, ["app-server", "--stdio"], {
@@ -62,13 +62,35 @@ export async function connectStoredHistoryRpc(input: {
     await send("initialize", { clientInfo: { name: "tela-stored-history", version: "1" }, capabilities: { experimentalApi: true } }, input.signal);
     child.stdin.write(JSON.stringify({ method: "initialized" }) + "\n");
   } catch (error) { await close(); throw error; }
+  let leased = false;
   return { close, request(method, params, signal) {
     const p = params as Record<string, unknown> | undefined;
-    if (!["thread/read", "thread/items/list", "thread/turns/list"].includes(method) || p?.threadId !== input.threadId
+    const read = ["thread/read", "thread/items/list", "thread/turns/list"].includes(method);
+    const mutation = input.lifecycle && (method === "thread/resume" || method === "thread/archive");
+    if ((!read && !mutation) || p?.threadId !== input.threadId
       || method === "thread/read" && p.includeTurns !== false
-      || method === "thread/turns/list" && p.itemsView !== "notLoaded") {
+      || method === "thread/turns/list" && p.itemsView !== "notLoaded"
+      || method === "thread/resume" && (p.excludeTurns !== true || Object.keys(p).some(k => !["threadId", "excludeTurns"].includes(k)))
+      || method === "thread/archive" && (!leased || Object.keys(p).some(k => k !== "threadId"))) {
       return Promise.reject(Error("Stored history reader permits only scoped indexed reads"));
     }
-    return send(method, params, signal ?? input.signal);
+    return send(method, params, signal ?? input.signal).then(value => {
+      if (method === "thread/resume") leased = true;
+      if (method === "thread/archive") leased = false;
+      return value;
+    });
   } };
+}
+
+export function connectStoredHistoryRpc(input: {
+  executable: string; codexHome: string; threadId: string; signal?: AbortSignal;
+}): Promise<CodexAppServerRpc> {
+  return connectScopedRpc({ ...input, lifecycle: false });
+}
+
+/** Separate, exact-thread lifecycle client. No turns, provider overrides, unarchive or delete. */
+export function connectDormantThreadRpc(input: {
+  executable: string; codexHome: string; threadId: string; signal?: AbortSignal;
+}): Promise<CodexAppServerRpc> {
+  return connectScopedRpc({ ...input, lifecycle: true });
 }

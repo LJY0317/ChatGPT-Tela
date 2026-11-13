@@ -1,146 +1,99 @@
 # Web tasks
 
-Tela supplies Web model responses to the official desktop app. The app owns
-Native task execution, conversation identity, and its conversation lifecycle.
+Tela supplies Web responses to the official Desktop app. The app owns Native task
+execution and conversation identity. The retired external engine, managed-job CLI
+and proxy are removed; do not recreate them or change the official provider identity.
 
-The former source-only `web-delegate` CLI, managed-job capacity API and automatic
-archive/delete worker have been removed. They depended on an external Native
-terminal that the app-owned architecture does not expose. No replacement
-scheduler or private desktop connection is installed.
+## Delegated-chat retention
 
-Official app-server APIs can inspect stored conversations and archive them through
-`thread/archive`. An explicitly selected, settled conversation can therefore be
-archived without a model call or restoring the retired engine. This is manual
-conversation management, not automatic retention. A separate inspection process's
-`notLoaded` status does not prove that the Desktop has no active work.
+The source implementation connects explicit registration and result acknowledgement
+to the existing Tela Codex service's automatic archive path. It is not installed or
+accepted against consumer Desktop profiles yet. Automatic deletion remains disabled.
 
-Automatic retention needs a maintained creation record tying a Tela-created task
-to its exact host/profile and conversation, plus current activity and result
-settlement from that task's owner. A title, selected Web model, incoming Responses
-thread ID, or obsolete job journal alone does not establish that ownership. Ordinary
-user-created Web conversations must remain outside automatic management. Preserve
-result collection and manual archive/restore decisions separately from task
-execution; do not fabricate collection or archive timestamps from other activity.
+Use the Native coordinator's existing command tool after creating a selected child:
 
-### Automatic retention: requested, not implemented
+```sh
+chatgpt-tela retain-delegation --thread CHILD --slot 1
+```
 
-Removing the old worker did not fulfill the automatic-cleanup requirement. The
-replacement must integrate with the current task owner rather than revive the
-external engine. Ordinary user conversations remain unmanaged.
+This explicitly enrolls that child. It checks the public
+`source.subAgent.thread_spawn.parent_thread_id` against the coordinator's Native
+`CODEX_THREAD_ID` and scopes the record to this installation and exact configured
+profile/history home. A title, Web model, old journal, ordinary user chat, app save,
+or hook event alone never enrolls a conversation. Native `spawn_agent` does not
+implicitly call this command; the creation workflow must invoke it deliberately.
+No AGENTS.md rule or additional model request is needed for the operation itself.
 
-- Register exact host/profile/conversation identity from the creation receipt of a
-  Tela-created task. An explicit user selection may enroll an existing conversation;
-  title matching, Web-model use and historical journals may not enroll it.
-- Keep creation, actual task activity, coordinator acknowledgement and archive
-  confirmation distinct. Archive settled work 12 hours after the later of its exact
-  result acknowledgement and last actual task activity. Without acknowledgement,
-  keep the 7-day policy from the latest actual task activity. Status queries and
-  diagnostic reads do not restart either clock. Active work remains ineligible.
-- An acknowledgement binds the enrolled parent, child and exact terminal turn/result;
-  an older result's acknowledgement cannot cover a newer turn. Record it explicitly
-  after the coordinator receives the result, not from an app save, wakeup, child stop
-  or natural-language claim. Keep identifiers and acknowledgement time rather than a
-  second answer copy. Acknowledging a failure does not resolve the original request.
-  No additional model request is needed; the acknowledgement can accompany the
-  coordinator's next existing management operation. An absent receipt keeps 7 days.
-- Delete eligible managed work 30 days after confirmed archiving, preserving the
-  unresolved request/result record until its existing retention requirements are met.
-  Missing archive timestamps must not be replaced with conversation update times.
-- A manual restore removes that conversation from automatic management until the user
-  explicitly enrolls it again. Recheck exact ownership and activity at the mutation
-  boundary; active work, approval waits and unsettled operations are ineligible even
-  after a deadline. Cancel obsolete deadlines on new work, restore or removal.
-- Reuse the existing service lifecycle with one next-due wakeup and startup reconciliation
-  of enrolled records. Do not scan every conversation periodically or introduce another
-  engine, daemon, model call or retry chain. Remove expired management receipts under
-  age/total-byte retention rather than keeping a permanent second conversation catalog.
-
-The current provider ingress exposes response-operation correlation and delivery,
-not task creation, Desktop-wide activity or coordinator result collection. A separate
-stored-history reader cannot supply those missing live-owner facts. Do not widen
-that read-only transport into a background archive/delete client.
-
-Official [hooks](https://learn.chatgpt.com/docs/hooks) are a candidate event boundary:
-`SubagentStart` supplies parent session, child turn and agent identity, while prompt/stop
-events expose turn lifecycle. They do not by themselves prove Tela ownership or
-that the coordinator collected a result; `SessionEnd` is not an archive receipt.
-First verify those events in the installed Desktop and connect them to exact
-creation/collection receipts. No consumer hook registration or retention scheduler
-is installed yet. Existing conversations and private request/result journals are
-preserved; manual conversation controls remain available. Web responses and tools
-on the current provider route are independent of this missing automation.
-
-Isolated CLI and app-server trials both emitted session, prompt and stop hooks
-with exact conversation/turn identities against a local fixed-response fixture.
-The earlier app-server miss was a probe error: rewriting `config.toml` discarded
-its hook approvals. The official TUI records reviewed definition hashes through
-[`config/batchWrite`](https://github.com/openai/codex/blob/main/codex-rs/tui/src/hooks_rpc.rs).
-Preserve those settings; Tela's existing route registration/removal already does.
-This verifies event transport, not automatic collection or consumer Desktop
-installation. Use supported host authorization, retain exact creation/collection
-receipts and serialize mutations with the actual task owner before enabling cleanup.
-Do not copy private trust storage or silently approve unrelated hooks.
-
-An isolated official-engine spawn/wait trial also correlated `SubagentStart.agent_id`
-with the child's public `source.subAgent.thread_spawn` lineage. The spawn tool's task
-path matched `agent_path`; no title or event-order inference was needed. This proves
-Native child creation, not automatic Tela enrollment. In that installed interface,
-`wait_agent` returned only `{message: "Wait completed.", timed_out: false}`.
-Its post-tool hook contained neither a child ID nor a final answer. A wakeup must not
-be called a result-collection receipt. The chosen policy requires an explicit
-coordinator acknowledgement for the shorter 12-hour period; a final answer saved by
-the official app alone retains the 7-day period. This is confirmation of receipt,
-not proof that the model understood the result.
-
-The source CLI now provides an explicit receipt operation, invoked after the
-coordinator receives a result:
+After receiving an exact result, the coordinator confirms it through the same service:
 
 ```sh
 chatgpt-tela acknowledge-result --thread CHILD --turn TURN --item FINAL_ITEM --slot 1
 ```
 
-It takes the coordinator identity from the Native command's `CODEX_THREAD_ID`,
-checks the child's official lineage and exact indexed final item, and records
-identifiers and first-confirmation time without copying the answer. For the latest
-failed/interrupted turn, use `--outcome failed` or `--outcome interrupted` instead
-of `--item`. The configured profile selects the history location; there is no
-other-profile search. Repeated acknowledgement preserves the first timestamp.
-This is an explicit local assertion, not cryptographic attestation or a reading
-inference from a wakeup. It does not enroll, complete, archive or delete a chat.
-Derived receipts are kept under owned Codex state, pruned on acknowledgement use
-by 60-day age and 4 MiB total size, without a file-count limit. The existing
-read-only history transport remains read-only.
+For the latest failed/interrupted turn, replace `--item` with `--outcome failed` or
+`--outcome interrupted`. The service verifies lineage and the exact indexed final
+item or terminal failure; duplicate acknowledgement preserves its first timestamp.
+This is explicit confirmation of receipt, not proof of comprehension, task completion,
+or resolution of the original request. It stores identifiers and time, not answer
+or error bodies. A wait wakeup is not a collection receipt.
 
-Automatic creator enrollment, consumer hook installation and the archive/delete
-scheduler remain unconnected. The receipt operation is not yet installed in the
-current application; the 12-hour/7-day policy is not running automatically.
+- With a matching acknowledgement of the newest terminal turn, archive 12 hours after
+  the later of that acknowledgement and official turn completion.
+- Without one, use 7 days from official turn completion. A new turn invalidates an old
+  acknowledgement. Metadata reads do not move either clock; unknown terminal times
+  do not fall back to a fabricated activity timestamp.
+- The service keeps one next-due timer and reconciles enrolled records at startup.
+  It never scans the conversation catalog, adds a daemon, starts a model turn,
+  interrupts work or forces an owner to release a conversation.
+- At the mutation boundary, an exact-thread lifecycle client acquires the official
+  writer through `thread/resume` with `excludeTurns:true`, checks lineage and the
+  latest terminal turn under that ownership, then calls `thread/archive` on the same
+  connection. No provider/config/history overrides, unarchive or delete are exposed.
+  The separate stored-history reader remains read-only.
+- A writer conflict or unavailable lifecycle defers the record without a retry loop.
+  It is reconsidered at service startup or explicit reconciliation, not by polling:
 
-An installed-engine, isolated two-client trial corrected the earlier assumption
-that a separate app-server necessarily bypasses the Desktop writer. Archive and
-delete both rejected a thread held by another writer, including after its turn
-completed; the original turn completed normally. After that owner disconnected,
-`thread/resume` acquired the writer, a competing resume was rejected, and archive
-succeeded. Thus a candidate archive path is to acquire the official writer first,
-read the newest turn and eligible activity/result references under that ownership,
-and archive through the same connection. An occupied writer is a deferred operation,
-not a failed task or permission to interrupt it. Do not infer idleness from
-`notLoaded`, and do not add a retry loop to obtain the writer.
+  ```sh
+  chatgpt-tela reconcile-delegations --slot 1
+  ```
 
-This is installed CLI/app-server evidence, not consumer Desktop acceptance or a
-universal lock guarantee across versions. It does not establish automatic enrollment,
-hook installation, a scheduler, or that a closed app is necessary for every archive.
-Keep the stored-history reader read-only; any lifecycle adapter needs its own exact
-scope and official writer ownership, without reviving the retired proxy.
+  There is not yet a verified owner-release event connection guaranteeing immediate
+  progress after that deferral. A due time does not justify interrupting live work.
+- An archive request has a durable pending intent followed by a confirmed archive
+  timestamp. A crash or ambiguous failure between them reports `archive_unconfirmed`
+  and never automatically repeats the mutation. Confirmed records are never
+  re-archived after manual restore; re-enrollment must be explicit.
+- Archived metadata expires after 60 days on startup; registration/acknowledgement
+  metadata uses total-byte limits without file-count limits. Existing unresolved
+  records are preserved when new registration would exceed the storage budget.
+  Acknowledgement receipts retain their existing 60-day/4-MiB age/byte policy.
 
-Deletion has an additional unresolved condition: the same isolated engine accepted
-`thread/delete` after `thread/unarchive`. Writer exclusion alone therefore does not
-protect a manually restored conversation from an outdated deletion decision. The
-archive confirmation, restore opt-out and deletion eligibility must be checked in a
-supported serialized lifecycle boundary before automatic deletion can be enabled.
-The current request schema has no expected archive revision. Do not treat a separate
-read followed by delete as a conditional operation, or report full automatic cleanup
-as implemented. Registration, explicit acknowledgement use and deadline execution
-still need to be connected to the validated boundaries.
+Native context and local service authentication are not cryptographic attestation of
+which model read an answer. Profile changes invalidate the old ownership scope.
+Native child creation, explicit Tela enrollment, result confirmation, archive intent
+and archive success remain separate facts.
+
+## Verified boundary and remaining work
+
+Installed-engine isolated tests established that a separate writer cannot archive,
+delete or resume a thread held by another owner, including an idle loaded thread.
+After release, resume/read/archive succeeded without a model request. Resuming an
+already archived thread was rejected without changing its archived state. These are
+installed CLI/app-server observations, not universal guarantees across versions or
+consumer Desktop acceptance.
+
+Deletion needs an additional restore-aware serialized contract: the installed engine
+accepted `thread/delete` after `thread/unarchive`. Writer exclusion alone therefore
+cannot enforce “delete only the still-archived generation.” Automatic 30-day deletion
+is not enabled. Do not approximate it with a separate read followed by unconditional
+delete. Full manual archive/restore observation before the first managed archive is
+also not established; an archive-and-restore occurring entirely between observations
+must not be claimed as detected. Consumer acceptance must resolve that boundary.
+
+Official [hooks](https://learn.chatgpt.com/docs/hooks) supplied exact session/child
+identities in isolated trials, but are not installed by this change. `SessionEnd` is
+not an archive receipt and `wait_agent` is not an exact-result acknowledgement.
+Existing profile data and user-created conversations have not been enrolled or changed.
 
 MCP initialization instructions direct ChatGPT Native-model work to the host's
 Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or

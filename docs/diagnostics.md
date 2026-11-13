@@ -289,10 +289,15 @@ checkpoint, authority, user, assistant, tool and other roles (`source_*_bytes/co
 These source-item sizes, message wire sizes and input estimates measure different
 boundaries; none measures provider billing or plugin-schema tokens. Missing older
 fields remain unmeasured rather than zero, and collection cannot reconstruct them.
-Retention lifecycle events `web_delegation_retention_started/completed` distinguish an
-unfinished pass from a completed pass with a next deadline. `native_account_owner_proof_failed`
-records the profile slot, last owner-proof phase and failure class without account contents.
-These observations add no owner lookup, retry, cleanup timer or change to archival admission.
+The current source archive path emits `delegation_retention_enrolled`,
+`delegation_retention_acknowledged`, `delegation_retention_archive_requested`,
+`delegation_retention_archive_completed` and `delegation_retention_deferred`.
+These are distinct creation/collection/intent/confirmation observations with a
+profile slot and hashed scope/thread identity, never answer or error bodies.
+Repeated deferred observations are coalesced until state changes. Existing
+age/byte diagnostic retention applies. A pending archive without confirmation
+is not a success receipt; automatic deletion is disabled. See [Web tasks](web-delegation.md).
+
 For a Web identity rejection, the historical inspector also gives a
 time-bounded structural sequence of renderer unresponsiveness, input
 ownership revocation, input classification, and later Native failure,

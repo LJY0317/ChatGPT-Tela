@@ -2,7 +2,6 @@ import { DIAGNOSTIC_LIMITS, diagnosticLogPaths, diagnosticCenter, diagnosticSour
 import {
   existsSync,
   lstatSync,
-  realpathSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -13,8 +12,6 @@ import { summarizeWorkIncident } from "./work-incident";
 import { observeDesktopPerformance } from "./desktop-performance";
 import { diagnosePublicIngress } from "@chatgpt-tela/tailscale-ingress";
 import { summarizeRetentionCanary } from "./retention-canary";
-import { acknowledgeNativeResult, type ResultReference } from "./result-acknowledgement";
-import { connectStoredHistoryRpc } from "@chatgpt-tela/codex";
 import { diagnoseDefaultDesktop, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 import {
   probePublicMcp,
@@ -95,6 +92,16 @@ function flag(name: string): boolean {
 
 function slot(): number {
   return profileSlotFromArguments(process.argv.slice(2));
+}
+
+async function existingCodexService(paths: ReturnType<typeof resolveProductPaths>): Promise<CodexServiceClient> {
+  const manifest = readOwnershipManifest(paths.installManifest);
+  if (!manifest) throw Error("Install and start Tela before managing delegated chats");
+  const running = await new LocalServiceSupervisor({ installId: manifest.installId }).current({
+    service: "codex", descriptorPath: serviceDescriptorPath(paths, "codex"),
+  });
+  if (!running) throw Error("Start Tela before managing delegated chats");
+  return new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
 }
 
 function runScript(script: string): void {
@@ -873,25 +880,22 @@ async function main(): Promise<void> {
       || outcome !== "answer" && option("--item")) throw Error("Use --item for an answer, or --outcome failed|interrupted");
     const parentThreadId = process.env.CODEX_THREAD_ID;
     if (!parentThreadId) throw Error("Run acknowledge-result from the coordinating Native chat");
-    const result: ResultReference = { parentThreadId, threadId: required("--thread"), turnId: required("--turn"),
-      ...(outcome === "answer" ? { outcome, itemId: required("--item") } : { outcome: outcome as "failed" | "interrupted" }) };
-    const manifest = readOwnershipManifest(productPaths.installManifest);
-    if (!manifest) throw Error("Install Tela before recording a result acknowledgement");
-    const profileSlot = slot(), config = readEffectiveProductConfig(productPaths);
-    const route = config.appOwnedResponses?.find(row => row.slot === profileSlot);
-    if (!route) throw Error("The selected profile has no owned Desktop route");
-    const installation = resolveDefaultDesktopInstallation();
-    const home = route.desktopConfigPath ? dirname(route.desktopConfigPath)
-      : profileSlot === 1 ? installation.codexHome : undefined;
-    if (!home) throw Error("The selected profile has no configured Desktop history location");
-    const rpc = await connectStoredHistoryRpc({ executable: installation.codexExecutable, codexHome: home, threadId: result.threadId });
-    try {
-      const acknowledgement = await acknowledgeNativeResult({ rpc, result,
-        directory: join(productPaths.serviceState("codex"), "result-acknowledgements"),
-        scope: JSON.stringify([manifest.installId, profileSlot, realpathSync(home)]),
-      });
-      console.log(JSON.stringify({ acknowledgement, conversationChanged: false, automaticRetentionEnabled: false }, null, 2));
-    } finally { await rpc.close(); }
+    const client = await existingCodexService(productPaths);
+    const response = await client.manageDelegation({ action: "acknowledge", slot: slot(), parentThreadId,
+      threadId: required("--thread"), turnId: required("--turn"),
+      ...(outcome === "answer" ? { outcome, itemId: required("--item") } : { outcome: outcome as "failed" | "interrupted" }),
+    });
+    console.log(JSON.stringify(response, null, 2));
+    return;
+  }
+  if (command === "retain-delegation" || command === "reconcile-delegations") {
+    const client = await existingCodexService(productPaths);
+    if (command === "reconcile-delegations") console.log(JSON.stringify(await client.manageDelegation({ action: "reconcile", slot: slot() }), null, 2));
+    else {
+      const parentThreadId = process.env.CODEX_THREAD_ID, threadId = option("--thread");
+      if (!parentThreadId || !threadId) throw Error("Run retain-delegation --thread CHILD from its coordinating Native chat");
+      console.log(JSON.stringify(await client.manageDelegation({ action: "enroll", slot: slot(), parentThreadId, threadId }), null, 2));
+    }
     return;
   }
   if (command === "retention-canary") {
@@ -1110,6 +1114,8 @@ async function main(): Promise<void> {
     + "  diagnostics incident [--minutes <1-120>]\n"
     + "  diagnostics trace [--minutes <1-120>]\n"
     + "  diagnostics desktop [--seconds <5-60>] (macOS)\n"
+    + "  retain-delegation --thread <child-id> [--slot <n>]\n"
+    + "  reconcile-delegations [--slot <n>]\n"
     + "  retention-canary [--minutes <1-120>]\n"
     + "  acknowledge-result --thread <id> --turn <id> (--item <id> | --outcome failed|interrupted) [--slot <n>]\n"
     + "  uninstall (--dry-run | --apply) [--remove-data]\n"

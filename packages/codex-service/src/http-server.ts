@@ -13,6 +13,8 @@ import {
 import { ProfileConnectionError, ProfileStartIntentConflictError } from "./profile-operation";
 import { CodexShutdownNotStartedError, type CodexService } from "./controller";
 
+import type { createDelegatedRetention } from "./delegated-retention";
+
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 export interface CodexServiceHttpServer {
@@ -71,6 +73,7 @@ export async function startCodexServiceHttpServer(input: {
   readonly service: CodexService;
   readonly bearerToken?: string;
   readonly startupComplete?: () => boolean;
+  readonly delegatedRetention?: ReturnType<typeof createDelegatedRetention>;
   /** Optional, owner-verified structural inspection; not a Native turn mutation. */
 }): Promise<CodexServiceHttpServer> {
   const bearerToken = input.bearerToken ?? randomBytes(36).toString("base64url");
@@ -114,6 +117,23 @@ export async function startCodexServiceHttpServer(input: {
             }, { status: 409 });
             return error(409, "Codex shutdown readiness could not be verified");
           }
+        }
+        if (request.method === "POST" && url.pathname === "/v1/codex/delegations") {
+          const manager = input.delegatedRetention;
+          if (!manager) return error(503, "Delegated-chat retention is unavailable");
+          const body: any = await request.json();
+          if (!body || typeof body !== "object" || !Number.isInteger(body.slot) || body.slot < 1 || body.slot > 99) return error(400, "Invalid delegation request");
+          if (body.action === "reconcile") return Response.json(await manager.reconcile(body.slot));
+          if (typeof body.parentThreadId !== "string" || typeof body.threadId !== "string") return error(400, "Invalid delegation identity");
+          if (body.action === "enroll") return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId));
+          if (body.action === "acknowledge" && typeof body.turnId === "string"
+            && (body.outcome === "answer" && typeof body.itemId === "string" || ["failed", "interrupted"].includes(body.outcome))) {
+            return Response.json(await manager.acknowledge(body.slot, {
+              parentThreadId: body.parentThreadId, threadId: body.threadId, turnId: body.turnId,
+              ...(body.outcome === "answer" ? { outcome: "answer", itemId: body.itemId } : { outcome: body.outcome }),
+            }));
+          }
+          return error(400, "Invalid delegation action");
         }
         if (request.method === "GET" && url.pathname === "/v1/codex/profiles") {
           const profiles = await input.service.profiles();

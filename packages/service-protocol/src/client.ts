@@ -161,6 +161,15 @@ export class CodexServiceClient extends LocalServiceClient {
     })).result;
   }
 
+  async manageDelegation(input: { slot: number } & (
+    { action: "reconcile" }
+    | { action: "enroll"; parentThreadId: string; threadId: string }
+    | ({ action: "acknowledge"; parentThreadId: string; threadId: string; turnId: string }
+      & ({ outcome: "answer"; itemId: string } | { outcome: "failed" | "interrupted" }))
+  ), signal?: AbortSignal): Promise<unknown> {
+    return this.request("v1/codex/delegations", "POST", input, signal);
+  }
+
   async profiles(signal?: AbortSignal): Promise<readonly CodexProfileStatusContract[]> {
     const value = await this.request("v1/codex/profiles", "GET", undefined, signal);
     if (!value || typeof value !== "object" || Array.isArray(value)) {

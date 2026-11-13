@@ -7,6 +7,8 @@
     "@chatgpt-tela/codex-service": "workspace:*",
     "@chatgpt-tela/product-config": "workspace:*",
     "@chatgpt-tela/product-lifecycle": "workspace:*",
-    "@chatgpt-tela/service-protocol": "workspace:*"
+    "@chatgpt-tela/service-protocol": "workspace:*",
+    "@chatgpt-tela/codex": "workspace:*",
+    "@chatgpt-tela/default-desktop-target": "workspace:*"
   }
 }
