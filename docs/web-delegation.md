@@ -31,10 +31,18 @@ external engine. Ordinary user conversations remain unmanaged.
 - Register exact host/profile/conversation identity from the creation receipt of a
   Tela-created task. An explicit user selection may enroll an existing conversation;
   title matching, Web-model use and historical journals may not enroll it.
-- Keep creation, latest task activity, successful result collection and actual archive
-  confirmation distinct. Archive successful collected work after 24 hours without
-  further activity. Failed, interrupted or uncollected work keeps the 7-day policy;
-  observing an error does not mark the original request resolved.
+- Keep creation, actual task activity, coordinator acknowledgement and archive
+  confirmation distinct. Archive settled work 12 hours after the later of its exact
+  result acknowledgement and last actual task activity. Without acknowledgement,
+  keep the 7-day policy from the latest actual task activity. Status queries and
+  diagnostic reads do not restart either clock. Active work remains ineligible.
+- An acknowledgement binds the enrolled parent, child and exact terminal turn/result;
+  an older result's acknowledgement cannot cover a newer turn. Record it explicitly
+  after the coordinator receives the result, not from an app save, wakeup, child stop
+  or natural-language claim. Keep identifiers and acknowledgement time rather than a
+  second answer copy. Acknowledging a failure does not resolve the original request.
+  No additional model request is needed; the acknowledgement can accompany the
+  coordinator's next existing management operation. An absent receipt keeps 7 days.
 - Delete eligible managed work 30 days after confirmed archiving, preserving the
   unresolved request/result record until its existing retention requirements are met.
   Missing archive timestamps must not be replaced with conversation update times.
@@ -79,9 +87,11 @@ path matched `agent_path`; no title or event-order inference was needed. This pr
 Native child creation, not automatic Tela enrollment. In that installed interface,
 `wait_agent` returned only `{message: "Wait completed.", timed_out: false}`.
 Its post-tool hook contained neither a child ID nor a final answer. A wakeup must not
-be called a result-collection receipt. Distinguish a final answer saved by the official
-app from a coordinator acknowledging that it read that answer; the latter must not
-be imposed as a cleanup prerequisite unless the chosen product policy requires it.
+be called a result-collection receipt. The chosen policy requires an explicit
+coordinator acknowledgement for the shorter 12-hour period; a final answer saved by
+the official app alone retains the 7-day period. This is confirmation of receipt,
+not proof that the model understood the result. No consumer acknowledgement operation
+or scheduler is connected yet; these periods describe the requested replacement.
 
 MCP initialization instructions direct ChatGPT Native-model work to the host's
 Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or
