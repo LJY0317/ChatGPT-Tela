@@ -62,13 +62,16 @@ is installed yet. Existing conversations and private request/result journals are
 preserved; manual conversation controls remain available. Web responses and tools
 on the current provider route are independent of this missing automation.
 
-The installed official engine's isolated CLI emitted session, prompt and stop hooks
-against a local fixed-response fixture. This does not establish Desktop integration:
-the separate app-server trial completed its turn but did not emit the configured
-hooks, and its hook listing did not establish the CLI's trust state. Do not copy
-private trust storage, silently grant trust or install a replacement daemon to
-bridge that difference. Use the host's supported authorization and verify delivery
-on the actual task owner before enabling retention mutations.
+Isolated CLI and app-server trials both emitted session, prompt and stop hooks
+with exact conversation/turn identities against a local fixed-response fixture.
+The earlier app-server miss was a probe error: rewriting `config.toml` discarded
+its hook approvals. The official TUI records reviewed definition hashes through
+[`config/batchWrite`](https://github.com/openai/codex/blob/main/codex-rs/tui/src/hooks_rpc.rs).
+Preserve those settings; Tela's existing route registration/removal already does.
+This verifies event transport, not automatic collection or consumer Desktop
+installation. Use supported host authorization, retain exact creation/collection
+receipts and serialize mutations with the actual task owner before enabling cleanup.
+Do not copy private trust storage or silently approve unrelated hooks.
 
 MCP initialization instructions direct ChatGPT Native-model work to the host's
 Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or
