@@ -62,6 +62,14 @@ is installed yet. Existing conversations and private request/result journals are
 preserved; manual conversation controls remain available. Web responses and tools
 on the current provider route are independent of this missing automation.
 
+The installed official engine's isolated CLI emitted session, prompt and stop hooks
+against a local fixed-response fixture. This does not establish Desktop integration:
+the separate app-server trial completed its turn but did not emit the configured
+hooks, and its hook listing did not establish the CLI's trust state. Do not copy
+private trust storage, silently grant trust or install a replacement daemon to
+bridge that difference. Use the host's supported authorization and verify delivery
+on the actual task owner before enabling retention mutations.
+
 MCP initialization instructions direct ChatGPT Native-model work to the host's
 Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or
 DevSpace. The local, remote and development MCP surfaces share this guidance;
