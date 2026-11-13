@@ -53,7 +53,7 @@ stored-history reader cannot supply those missing live-owner facts. Do not widen
 that read-only transport into a background archive/delete client.
 
 Official [hooks](https://learn.chatgpt.com/docs/hooks) are a candidate event boundary:
-`SubagentStart` supplies parent session/turn and agent identity, while prompt/stop
+`SubagentStart` supplies parent session, child turn and agent identity, while prompt/stop
 events expose turn lifecycle. They do not by themselves prove Tela ownership or
 that the coordinator collected a result; `SessionEnd` is not an archive receipt.
 First verify those events in the installed Desktop and connect them to exact
@@ -72,6 +72,16 @@ This verifies event transport, not automatic collection or consumer Desktop
 installation. Use supported host authorization, retain exact creation/collection
 receipts and serialize mutations with the actual task owner before enabling cleanup.
 Do not copy private trust storage or silently approve unrelated hooks.
+
+An isolated official-engine spawn/wait trial also correlated `SubagentStart.agent_id`
+with the child's public `source.subAgent.thread_spawn` lineage. The spawn tool's task
+path matched `agent_path`; no title or event-order inference was needed. This proves
+Native child creation, not automatic Tela enrollment. In that installed interface,
+`wait_agent` returned only `{message: "Wait completed.", timed_out: false}`.
+Its post-tool hook contained neither a child ID nor a final answer. A wakeup must not
+be called a result-collection receipt. Distinguish a final answer saved by the official
+app from a coordinator acknowledging that it read that answer; the latter must not
+be imposed as a cleanup prerequisite unless the chosen product policy requires it.
 
 MCP initialization instructions direct ChatGPT Native-model work to the host's
 Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or
