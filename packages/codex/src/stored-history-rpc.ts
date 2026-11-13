@@ -67,7 +67,14 @@ async function connectScopedRpc(input: {
     const p = params as Record<string, unknown> | undefined;
     const read = ["thread/read", "thread/items/list", "thread/turns/list"].includes(method);
     const mutation = input.lifecycle && (method === "thread/resume" || method === "thread/archive");
-    if ((!read && !mutation) || p?.threadId !== input.threadId
+    // archive cascades through spawned descendants. The lifecycle owner may
+    // inspect only whether this exact thread has one, not browse the catalog.
+    const descendants = input.lifecycle && leased && method === "thread/list"
+      && p?.ancestorThreadId === input.threadId && p.limit === 1 && p.useStateDbOnly === true
+      && typeof p.archived === "boolean" && Array.isArray(p.modelProviders) && p.modelProviders.length === 0
+      && Array.isArray(p.sourceKinds) && p.sourceKinds.length === 1 && p.sourceKinds[0] === "subAgentThreadSpawn"
+      && Object.keys(p).every(k => ["ancestorThreadId", "limit", "useStateDbOnly", "archived", "modelProviders", "sourceKinds"].includes(k));
+    if ((!read && !mutation && !descendants) || !descendants && p?.threadId !== input.threadId
       || method === "thread/read" && p.includeTurns !== false
       || method === "thread/turns/list" && p.itemsView !== "notLoaded"
       || method === "thread/resume" && (p.excludeTurns !== true || Object.keys(p).some(k => !["threadId", "excludeTurns"].includes(k)))

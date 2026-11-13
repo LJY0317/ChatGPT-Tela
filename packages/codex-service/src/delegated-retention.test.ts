@@ -7,7 +7,7 @@ import { createDelegatedRetention } from "./delegated-retention";
 const HOUR = 3_600_000;
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "tela-managed-retention-"));
-  let now = 1_000_000_000, scope = "install/profile-one", busy = false;
+  let now = 1_000_000_000, scope = "install/profile-one", busy = false, descendant: "active" | "archived" | undefined;
   const calls: { method: string; lifecycle: boolean; slot: number }[] = [];
   const thread: any = { id: "child", parentThreadId: "parent", status: { type: "idle" },
     source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } };
@@ -21,12 +21,13 @@ function fixture() {
         calls.push({ method, lifecycle, slot });
         if (method === "thread/read") return { thread };
         if (method === "thread/turns/list") return { data: [turn] };
-        if (method === "thread/items/list") return { data: [{ turnId: params.turnId, item }], nextCursor: null };
+        if (method === "thread/items/list") return { data: [{ turnId: params.turnId ?? "turn", item }], nextCursor: null };
         if (method === "thread/resume") {
           if (!lifecycle || busy) throw Error("WRITER_BUSY");
           expect(params).toEqual({ threadId: "child", excludeTurns: true });
           leased = true; return { thread };
         }
+        if (method === "thread/list") return { data: (descendant === "archived" ? params.archived : descendant === "active" && !params.archived) ? [{ id: "unenrolled-descendant" }] : [], nextCursor: null };
         if (method === "thread/archive") { expect(leased).toBe(true); return {}; }
         throw Error("Unexpected operation " + method);
       } };
@@ -34,7 +35,7 @@ function fixture() {
   };
   const manager = createDelegatedRetention(options);
   return { directory, options, manager, thread, turn, calls,
-    advance(hours: number) { now += hours * HOUR; }, setBusy(value: boolean) { busy = value; }, changeScope() { scope = "new-install"; },
+    advance(hours: number) { now += hours * HOUR; }, setBusy(value: boolean) { busy = value; }, changeScope() { scope = "new-install"; }, setDescendant(value: "active" | "archived" | undefined) { descendant = value; },
     receipt() { return JSON.parse(readFileSync(join(options.directory, readdirSync(options.directory)[0]!), "utf8")); },
     async close() { await manager.close(); rmSync(directory, { recursive: true, force: true }); } };
 }
@@ -176,4 +177,47 @@ test("missing terminal completion time and a newer unfinished turn never inherit
     expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("deferred");
     expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
   } finally { await f.close(); }
+});
+
+test("recursive archive never touches active or archived descendants outside the enrolled leaf", async () => {
+  for (const state of ["active", "archived"] as const) {
+    const f = fixture();
+    try {
+      await f.manager.enroll(1, "parent", "child"); f.advance(7 * 24); f.setDescendant(state);
+      expect((await f.manager.reconcile()).outcomes).toEqual([{ threadId: "child", status: "excluded_descendants" }]);
+      expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
+      expect(readdirSync(f.options.directory)).toEqual([]);
+      const calls = f.calls.length;
+      await f.manager.reconcile(); expect(f.calls.length).toBe(calls);
+    } finally { await f.close(); }
+  }
+});
+
+test("persisted Native spawn evidence excludes a container even when restore races across list buckets", async () => {
+  for (const creationItem of [
+    { id: "spawn", type: "collabAgentToolCall", tool: "spawnAgent", receiverThreadIds: ["restored-descendant"] },
+    { id: "started", type: "subAgentActivity", kind: "started", agentThreadId: "restored-descendant" },
+  ]) {
+    const f = fixture();
+    let manager: ReturnType<typeof createDelegatedRetention> | undefined;
+    try {
+      await f.manager.enroll(1, "parent", "child"); await f.manager.close(); f.advance(7 * 24);
+      manager = createDelegatedRetention({ ...f.options, profile(slot) {
+        const profile = f.options.profile(slot);
+        return { ...profile, async connect(threadId, lifecycle) {
+          const rpc = await profile.connect(threadId, lifecycle);
+          return { close: () => rpc.close(), async request(method, params: any) {
+            if (method === "thread/items/list") return params.cursor
+              ? { data: [{ turnId: "older", item: creationItem }], nextCursor: null }
+              : { data: [{ turnId: "newer", item: { id: "recent", type: "agentMessage" } }], nextCursor: "older-page" };
+            // Empty bucket queries cannot override the durable creation evidence.
+            return rpc.request(method, params);
+          } };
+        } };
+      } });
+      expect((await manager.reconcile()).outcomes[0]?.status).toBe("excluded_descendants");
+      expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
+      expect(f.calls.some(c => c.method === "thread/list")).toBe(false);
+    } finally { await manager?.close(); await f.close(); }
+  }
 });

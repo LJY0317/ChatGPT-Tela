@@ -562,7 +562,8 @@ test("owned management client connects explicit creation, acknowledgement and du
         const thread = { id: "child", status: { type: "idle" }, source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } };
         if (["thread/read", "thread/resume"].includes(method)) return { thread };
         if (method === "thread/turns/list") return { data: [{ id: "turn", status: "completed", completedAt: 1_000_000 }] };
-        if (method === "thread/items/list") return { data: [{ turnId: params.turnId, item: { id: "answer", type: "agentMessage", phase: "final_answer" } }], nextCursor: null };
+        if (method === "thread/items/list") return { data: [{ turnId: params.turnId ?? "turn", item: { id: "answer", type: "agentMessage", phase: "final_answer" } }], nextCursor: null };
+        if (method === "thread/list") return { data: [], nextCursor: null };
         if (method === "thread/archive") return {};
         throw Error("Unexpected Native action");
       },

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectDormantThreadRpc, connectStoredHistoryRpc } from "./stored-history-rpc";
+import { readIndexedNativeItemsPage } from "./native-history-items";
 import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 
 // Unix fixture executable; Windows execution remains an OS acceptance item.
@@ -49,11 +50,33 @@ import { observeDiagnosticEvents } from "@chatgpt-tela/core";
       ["thread/resume", { threadId: "own", excludeTurns: true, modelProvider: "other" }],
       ["thread/resume", { threadId: "own", excludeTurns: false }],
     ] as const) await expect(rpc.request(method, params)).rejects.toThrow();
+    const descendants = { ancestorThreadId: "own", archived: false,
+      sourceKinds: ["subAgentThreadSpawn"], modelProviders: [], limit: 1, useStateDbOnly: true };
+    await expect(rpc.request("thread/list", descendants)).rejects.toThrow();
     await rpc.request("thread/resume", { threadId: "own", excludeTurns: true });
+    for (const params of [{ ...descendants, ancestorThreadId: "other" }, { ...descendants, limit: 100 },
+      { ...descendants, useStateDbOnly: false }, { ...descendants, searchTerm: "user chats" }]) {
+      await expect(rpc.request("thread/list", params)).rejects.toThrow();
+    }
+    await rpc.request("thread/list", descendants);
+    await rpc.request("thread/list", { ...descendants, archived: true });
     await rpc.request("thread/archive", { threadId: "own" });
     await expect(rpc.request("thread/archive", { threadId: "own" })).rejects.toThrow();
     await rpc.close(); rpc = undefined;
     expect(readFileSync(trace, "utf8").trim().split("\n").map(l => JSON.parse(l).method))
-      .toEqual(["initialize", "initialized", "thread/resume", "thread/archive"]);
+      .toEqual(["initialize", "initialized", "thread/resume", "thread/list", "thread/list", "thread/archive"]);
+  } finally { await rpc?.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+(process.platform === "win32" ? test.skip : test)("indexed maintenance reads inherit the lifecycle owner's cancellation without a dummy signal", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "tela-lifecycle-cancel-")), file = join(directory, "reader");
+  writeFileSync(file, `#!${process.execPath}\nlet b='';for await(const c of process.stdin){b+=c.toString();let n;while((n=b.indexOf('\\n'))>=0){const m=JSON.parse(b.slice(0,n));b=b.slice(n+1);if(m.method==='initialize')process.stdout.write(JSON.stringify({id:m.id,result:{}})+'\\n');}}`, { mode: 0o755 });
+  const lifecycle = new AbortController();
+  let rpc: Awaited<ReturnType<typeof connectDormantThreadRpc>> | undefined;
+  try {
+    rpc = await connectDormantThreadRpc({ executable: file, codexHome: directory, threadId: "own", signal: lifecycle.signal });
+    const page = readIndexedNativeItemsPage(rpc, { threadId: "own", limit: 1 });
+    lifecycle.abort(Error("Service is stopping"));
+    await expect(page).rejects.toThrow("Service is stopping");
   } finally { await rpc?.close(); rmSync(directory, { recursive: true, force: true }); }
 });

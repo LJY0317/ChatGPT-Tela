@@ -64,7 +64,7 @@ export async function acknowledgeNativeResult(input: {
       const page = await readIndexedNativeItemsPage(input.rpc, {
         threadId: result.threadId, turnId: result.turnId, limit: 32, sortDirection: "desc",
         ...(cursor ? { cursor } : {}),
-      }, input.signal ?? new AbortController().signal);
+      }, input.signal);
       const item = page.data.find(row => row.item.id === result.itemId)?.item;
       if (item) {
         if (item.type !== "agentMessage" || item.phase !== "final_answer") throw Error("Selected item is not a final answer");

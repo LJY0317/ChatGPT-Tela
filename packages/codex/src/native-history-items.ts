@@ -26,7 +26,7 @@ export async function readIndexedNativeItemsPage(
   rpc: Pick<CodexAppServerRpc, "request">,
   request: { threadId: string; turnId?: string; cursor?: string | { type: "item"; itemId: string };
     limit?: number; sortDirection?: "asc" | "desc" },
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ) {
   const limit = request.limit ?? 4;
   const page = record(await rpc.request("thread/items/list", { ...request, limit }, signal));

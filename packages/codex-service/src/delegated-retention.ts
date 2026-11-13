@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CodexAppServerRpc } from "@chatgpt-tela/codex";
+import { readIndexedNativeItemsPage, type CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { acknowledgeNativeResult, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
 
@@ -33,6 +33,30 @@ function terminalTime(turn: any): number | undefined {
 async function latest(rpc: CodexAppServerRpc, threadId: string): Promise<any> {
   const result: any = await rpc.request("thread/turns/list", { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" });
   return result?.data?.[0];
+}
+
+/** A restored child can move between active/archived list queries. Native
+ * creation items remain evidence even if both bucket queries miss that move. */
+async function hasSpawnHistory(rpc: CodexAppServerRpc, threadId: string): Promise<boolean> {
+  let cursor: string | undefined;
+  const visited = new Set<string>();
+  do {
+    const page = await readIndexedNativeItemsPage(rpc, { threadId, limit: 32, sortDirection: "desc",
+      ...(cursor ? { cursor } : {}),
+    });
+    if (page.data.some(({ item }) => (
+      item.type === "collabAgentToolCall" && item.tool === "spawnAgent"
+        && Array.isArray(item.receiverThreadIds) && item.receiverThreadIds.length > 0
+    ) || (
+      item.type === "subAgentActivity" && item.kind === "started"
+        && typeof item.agentThreadId === "string" && item.agentThreadId.length > 0 && item.agentThreadId !== threadId
+    ))) return true;
+    if (page.nextCursor == null) return false;
+    if (typeof page.nextCursor !== "string" || visited.has(page.nextCursor)) throw Error("Official creation history paging did not advance");
+    cursor = page.nextCursor;
+    visited.add(cursor);
+  } while (cursor);
+  return false;
 }
 
 /** One existing service owns writes and one next-due timer. No conversation scans or model requests. */
@@ -91,8 +115,9 @@ export function createDelegatedRetention(input: {
     queue = result.then(() => undefined, () => undefined);
     return result.finally(schedule);
   };
-  const event = (stage: string, record: State) => emitDiagnosticEvent("chatgpt_tela_codex", stage, {
+  const event = (stage: string, record: State, reason?: string) => emitDiagnosticEvent("chatgpt_tela_codex", stage, {
     slot: record.slot, scope_fingerprint: record.scope, thread_fingerprint: hash(record.threadId),
+    ...(reason ? { reason_class: reason } : {}),
   });
   const report = (error: unknown) => emitDiagnosticEvent("chatgpt_tela_codex", "delegation_retention_failed", diagnosticFailureFields(error));
   const api = {
@@ -171,6 +196,25 @@ export function createDelegatedRetention(input: {
             const next = { ...record, dueAt };
             delete next.deferred;
             if (dueAt > now()) { save(k, next); outcomes.push({ threadId: record.threadId, status: "not_due" }); continue; }
+            // Native archive recursively affects spawned descendants, even
+            // those not registered here. Only a persisted leaf is eligible.
+            let hasDescendants = await hasSpawnHistory(rpc, record.threadId);
+            for (const archived of hasDescendants ? [] : [false, true]) {
+              const page: any = await rpc.request("thread/list", { ancestorThreadId: record.threadId,
+                archived, sourceKinds: ["subAgentThreadSpawn"], modelProviders: [], limit: 1, useStateDbOnly: true });
+              if (!Array.isArray(page?.data) || page.data.length === 0 && page.nextCursor != null) throw Error("Official descendant metadata is unavailable");
+              if (page.data.length > 0) { hasDescendants = true; break; }
+            }
+            if (hasDescendants) {
+              // Containers are outside this archive primitive's ownership, not
+              // temporarily busy. Relinquish management instead of re-auditing
+              // their history on every service restart. The chat/ACK remain.
+              unlinkSync(path(k));
+              records.delete(k);
+              event("delegation_retention_excluded", record, "descendants_present");
+              outcomes.push({ threadId: record.threadId, status: "excluded_descendants" });
+              continue;
+            }
             // Durable intent prevents re-archiving a manually restored chat if
             // the process dies between the mutation and confirmation write.
             save(k, { ...next, archivePending: true });
@@ -185,7 +229,7 @@ export function createDelegatedRetention(input: {
             if (records.get(k)?.archivePending) report(error);
             else if (!record.deferred) {
               report(error); save(k, { ...record, deferred: "lifecycle_unavailable" });
-              event("delegation_retention_deferred", record);
+              event("delegation_retention_deferred", record, "lifecycle_unavailable");
             }
             outcomes.push({ threadId: record.threadId, status: "deferred" });
           } finally { await rpc?.close(); }

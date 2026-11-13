@@ -50,6 +50,14 @@ or error bodies. A wait wakeup is not a collection receipt.
   latest terminal turn under that ownership, then calls `thread/archive` on the same
   connection. No provider/config/history overrides, unarchive or delete are exposed.
   The separate stored-history reader remains read-only.
+- The official archive API also attempts to archive spawned descendants. Automatic
+  management therefore supports only leaves without recorded Native child creation.
+  Before archiving, it pages this conversation's official item history for successful
+  spawn/child-start evidence and performs scoped, one-item descendant queries under
+  the writer. A container is excluded from management, not retried on every startup;
+  its conversation and independent acknowledgement receipt remain unchanged.
+  Active and archived list reads alone are insufficient: a child can be restored
+  between them and disappear from both reads even while the parent's writer is held.
 - A writer conflict or unavailable lifecycle defers the record without a retry loop.
   It is reconsidered at service startup or explicit reconciliation, not by polling:
 
@@ -80,7 +88,9 @@ delete or resume a thread held by another owner, including an idle loaded thread
 After release, resume/read/archive succeeded without a model request. Resuming an
 already archived thread was rejected without changing its archived state. These are
 installed CLI/app-server observations, not universal guarantees across versions or
-consumer Desktop acceptance.
+consumer Desktop acceptance. An isolated product-source run also excluded a Native
+container, archived a selected leaf, and left that leaf active after manual restore
+and reconciliation. Its clock was advanced in the fixture; no real profile was changed.
 
 Deletion needs an additional restore-aware serialized contract: the installed engine
 accepted `thread/delete` after `thread/unarchive`. Writer exclusion alone therefore

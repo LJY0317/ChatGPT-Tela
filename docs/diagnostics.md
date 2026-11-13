@@ -291,7 +291,9 @@ boundaries; none measures provider billing or plugin-schema tokens. Missing olde
 fields remain unmeasured rather than zero, and collection cannot reconstruct them.
 The current source archive path emits `delegation_retention_enrolled`,
 `delegation_retention_acknowledged`, `delegation_retention_archive_requested`,
-`delegation_retention_archive_completed` and `delegation_retention_deferred`.
+`delegation_retention_archive_completed`, `delegation_retention_deferred` and
+`delegation_retention_excluded`. The exclusion reason `descendants_present` means
+that recursive Native archival would exceed the selected conversation's scope.
 These are distinct creation/collection/intent/confirmation observations with a
 profile slot and hashed scope/thread identity, never answer or error bodies.
 Repeated deferred observations are coalesced until state changes. Existing

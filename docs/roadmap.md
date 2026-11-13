@@ -47,7 +47,10 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
 - **Automatic delegated-chat management.** Explicit registration and exact-result
   acknowledgement now reach the existing service's next-due archive path in source.
   Source tests cover profile scope, current-turn clocks, writer deferral and restart;
-  consumer Desktop installation/acceptance remains. Native creation must explicitly
+  consumer Desktop installation/acceptance remains. Containers with Native child
+  creation are excluded because the official archive operation cascades; an isolated
+  source run verified leaf archival and preservation after manual restore.
+  Native creation must explicitly
   invoke registration; owner-release wakeup and complete manual-restore observation
   are not connected. Automatic deletion remains disabled pending a restore-aware
   serialized contract. Do not revive the retired engine or adopt ordinary chats by title.
