@@ -22,13 +22,45 @@ user-created Web conversations must remain outside automatic management. Preserv
 result collection and manual archive/restore decisions separately from task
 execution; do not fabricate collection or archive timestamps from other activity.
 
-The former 24-hour collected-result, 7-day uncollected-result and 30-day archived
-delete policy is not currently scheduled. Restoring it requires the lifecycle
-inputs above; do not restore the old external engine, scan titles to adopt chats,
-or treat successful manual archiving as acceptance of automatic cleanup.
-Existing conversations and private request/result journals are preserved. Use the
-app's conversation controls to manage them. Web responses and tools on the current
-provider route remain independent of this removed management layer.
+### Automatic retention: requested, not implemented
+
+Removing the old worker did not fulfill the automatic-cleanup requirement. The
+replacement must integrate with the current task owner rather than revive the
+external engine. Ordinary user conversations remain unmanaged.
+
+- Register exact host/profile/conversation identity from the creation receipt of a
+  Tela-created task. An explicit user selection may enroll an existing conversation;
+  title matching, Web-model use and historical journals may not enroll it.
+- Keep creation, latest task activity, successful result collection and actual archive
+  confirmation distinct. Archive successful collected work after 24 hours without
+  further activity. Failed, interrupted or uncollected work keeps the 7-day policy;
+  observing an error does not mark the original request resolved.
+- Delete eligible managed work 30 days after confirmed archiving, preserving the
+  unresolved request/result record until its existing retention requirements are met.
+  Missing archive timestamps must not be replaced with conversation update times.
+- A manual restore removes that conversation from automatic management until the user
+  explicitly enrolls it again. Recheck exact ownership and activity at the mutation
+  boundary; active work, approval waits and unsettled operations are ineligible even
+  after a deadline. Cancel obsolete deadlines on new work, restore or removal.
+- Reuse the existing service lifecycle with one next-due wakeup and startup reconciliation
+  of enrolled records. Do not scan every conversation periodically or introduce another
+  engine, daemon, model call or retry chain. Remove expired management receipts under
+  age/total-byte retention rather than keeping a permanent second conversation catalog.
+
+The current provider ingress exposes response-operation correlation and delivery,
+not task creation, Desktop-wide activity or coordinator result collection. A separate
+stored-history reader cannot supply those missing live-owner facts. Do not widen
+that read-only transport into a background archive/delete client.
+
+Official [hooks](https://learn.chatgpt.com/docs/hooks) are a candidate event boundary:
+`SubagentStart` supplies parent session/turn and agent identity, while prompt/stop
+events expose turn lifecycle. They do not by themselves prove Tela ownership or
+that the coordinator collected a result; `SessionEnd` is not an archive receipt.
+First verify those events in the installed Desktop and connect them to exact
+creation/collection receipts. No consumer hook registration or retention scheduler
+is installed yet. Existing conversations and private request/result journals are
+preserved; manual conversation controls remain available. Web responses and tools
+on the current provider route are independent of this missing automation.
 
 MCP initialization instructions direct ChatGPT Native-model work to the host's
 Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or
