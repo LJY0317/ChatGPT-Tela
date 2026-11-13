@@ -41,6 +41,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@chatgpt-tela/chat-service": "workspace:*",
+        "@chatgpt-tela/codex": "workspace:*",
         "@chatgpt-tela/credential-store": "workspace:*",
         "@chatgpt-tela/default-desktop-target": "workspace:*",
         "@chatgpt-tela/development-runtime": "workspace:*",

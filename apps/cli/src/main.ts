@@ -13,6 +13,8 @@ import { summarizeWorkIncident } from "./work-incident";
 import { observeDesktopPerformance } from "./desktop-performance";
 import { diagnosePublicIngress } from "@chatgpt-tela/tailscale-ingress";
 import { summarizeRetentionCanary } from "./retention-canary";
+import { acknowledgeNativeResult, type ResultReference } from "./result-acknowledgement";
+import { connectStoredHistoryRpc } from "@chatgpt-tela/codex";
 import { diagnoseDefaultDesktop, resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 import {
   probePublicMcp,
@@ -860,6 +862,38 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(diagnosticsSummary(productPaths), null, 2));
     return;
   }
+  if (command === "acknowledge-result") {
+    const required = (name: string) => {
+      const value = option(name);
+      if (!value) throw Error(`acknowledge-result requires ${name}`);
+      return value;
+    };
+    const outcome = option("--outcome") ?? "answer";
+    if (!["answer", "failed", "interrupted"].includes(outcome)
+      || outcome !== "answer" && option("--item")) throw Error("Use --item for an answer, or --outcome failed|interrupted");
+    const parentThreadId = process.env.CODEX_THREAD_ID;
+    if (!parentThreadId) throw Error("Run acknowledge-result from the coordinating Native chat");
+    const result: ResultReference = { parentThreadId, threadId: required("--thread"), turnId: required("--turn"),
+      ...(outcome === "answer" ? { outcome, itemId: required("--item") } : { outcome: outcome as "failed" | "interrupted" }) };
+    const manifest = readOwnershipManifest(productPaths.installManifest);
+    if (!manifest) throw Error("Install Tela before recording a result acknowledgement");
+    const profileSlot = slot(), config = readEffectiveProductConfig(productPaths);
+    const route = config.appOwnedResponses?.find(row => row.slot === profileSlot);
+    if (!route) throw Error("The selected profile has no owned Desktop route");
+    const installation = resolveDefaultDesktopInstallation();
+    const home = route.desktopConfigPath ? dirname(route.desktopConfigPath)
+      : profileSlot === 1 ? installation.codexHome : undefined;
+    if (!home) throw Error("The selected profile has no configured Desktop history location");
+    const rpc = await connectStoredHistoryRpc({ executable: installation.codexExecutable, codexHome: home, threadId: result.threadId });
+    try {
+      const acknowledgement = await acknowledgeNativeResult({ rpc, result,
+        directory: join(productPaths.serviceState("codex"), "result-acknowledgements"),
+        scope: JSON.stringify([manifest.installId, profileSlot, realpathSync(home)]),
+      });
+      console.log(JSON.stringify({ acknowledgement, conversationChanged: false, automaticRetentionEnabled: false }, null, 2));
+    } finally { await rpc.close(); }
+    return;
+  }
   if (command === "retention-canary") {
     const minutesRaw = option("--minutes");
     const minutes = minutesRaw === undefined ? 15 : Number(minutesRaw);
@@ -1077,6 +1111,7 @@ async function main(): Promise<void> {
     + "  diagnostics trace [--minutes <1-120>]\n"
     + "  diagnostics desktop [--seconds <5-60>] (macOS)\n"
     + "  retention-canary [--minutes <1-120>]\n"
+    + "  acknowledge-result --thread <id> --turn <id> (--item <id> | --outcome failed|interrupted) [--slot <n>]\n"
     + "  uninstall (--dry-run | --apply) [--remove-data]\n"
     + "  chat roots\n"
     + "  chat allow-root --path <workspace-root>\n"

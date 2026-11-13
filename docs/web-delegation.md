@@ -90,8 +90,30 @@ Its post-tool hook contained neither a child ID nor a final answer. A wakeup mus
 be called a result-collection receipt. The chosen policy requires an explicit
 coordinator acknowledgement for the shorter 12-hour period; a final answer saved by
 the official app alone retains the 7-day period. This is confirmation of receipt,
-not proof that the model understood the result. No consumer acknowledgement operation
-or scheduler is connected yet; these periods describe the requested replacement.
+not proof that the model understood the result.
+
+The source CLI now provides an explicit receipt operation, invoked after the
+coordinator receives a result:
+
+```sh
+chatgpt-tela acknowledge-result --thread CHILD --turn TURN --item FINAL_ITEM --slot 1
+```
+
+It takes the coordinator identity from the Native command's `CODEX_THREAD_ID`,
+checks the child's official lineage and exact indexed final item, and records
+identifiers and first-confirmation time without copying the answer. For the latest
+failed/interrupted turn, use `--outcome failed` or `--outcome interrupted` instead
+of `--item`. The configured profile selects the history location; there is no
+other-profile search. Repeated acknowledgement preserves the first timestamp.
+This is an explicit local assertion, not cryptographic attestation or a reading
+inference from a wakeup. It does not enroll, complete, archive or delete a chat.
+Derived receipts are kept under owned Codex state, pruned on acknowledgement use
+by 60-day age and 4 MiB total size, without a file-count limit. The existing
+read-only history transport remains read-only.
+
+Automatic creator enrollment, consumer hook installation and the archive/delete
+scheduler remain unconnected. The receipt operation is not yet installed in the
+current application; the 12-hour/7-day policy is not running automatically.
 
 MCP initialization instructions direct ChatGPT Native-model work to the host's
 Native work tools. Ordinary Chat and Web-backed Work/Codex use Tela Chat or
