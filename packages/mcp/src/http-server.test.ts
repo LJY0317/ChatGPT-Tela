@@ -55,6 +55,48 @@ test("MCP shutdown retains a failed owned session close and settles only the rem
   }
 });
 
+test("idle MCP cleanup failure is reported and remains retryable on shutdown", async () => {
+  let closeAttempts = 0;
+  const diagnostics: Record<string, string | number | boolean>[] = [];
+  const stopObserving = observeDiagnosticEvents(row => diagnostics.push(row));
+  const server = await startCustomMcpHttpServer({
+    label: "idle-cleanup-fixture",
+    sessionIdleTimeoutMs: 20,
+    createServer() {
+      const mcp = new McpServer({ name: "idle-cleanup-fixture", version: "1" }, { capabilities: {} });
+      const originalClose = mcp.close.bind(mcp);
+      mcp.close = async () => {
+        if (++closeAttempts === 1) throw new Error("idle MCP cleanup failed");
+        await originalClose();
+      };
+      return mcp;
+    },
+  });
+  try {
+    const response = await fetch(server.endpointUrl, {
+      method: "POST",
+      headers: { authorization: `Bearer ${server.bearerToken}`, "content-type": "application/json",
+        accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+        protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "idle-fixture", version: "1" },
+      } }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    for (let index = 0; index < 40 && !diagnostics.some(row => row.stage === "mcp_session_close_failed"); index++) {
+      await Bun.sleep(10);
+    }
+    expect(closeAttempts).toBe(1);
+    expect(diagnostics.some(row => row.stage === "mcp_session_close_failed")).toBe(true);
+    expect(server.activeSessionCount).toBe(1);
+    await server.stop();
+    expect(server.activeSessionCount).toBe(0);
+  } finally {
+    stopObserving?.();
+    await server.stop().catch(() => {});
+  }
+});
+
 test("MCP listener close failure remains retryable without readmitting requests", async () => {
   const server = await startDevelopmentMcpHttpServer({ turns: new ActiveTurnRegistry() });
   const original = NodeHttpServer.prototype.close;

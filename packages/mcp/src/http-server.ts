@@ -152,12 +152,16 @@ async function startMcpHttpServer(input: {
     })().catch(error => { delete entry.closing; throw error; });
   };
 
+  const reportSessionCloseFailure = (error: unknown): void => {
+    emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_session_close_failed", diagnosticFailureFields(error));
+  };
+
   const armIdleTimer = (sessionId: string, entry: SessionEntry): void => {
     clearIdleTimer(entry);
     if (entry.closed || entry.inFlightRequests !== 0 || sessions.get(sessionId) !== entry) return;
     const timer = setTimeout(() => {
       if (entry.closed || entry.inFlightRequests !== 0 || sessions.get(sessionId) !== entry) return;
-      void closeEntry(sessionId, entry);
+      void closeEntry(sessionId, entry).catch(reportSessionCloseFailure);
     }, sessionIdleTimeoutMs);
     timer.unref?.();
     entry.idleTimer = timer;
@@ -234,9 +238,7 @@ async function startMcpHttpServer(input: {
       const owned = sessions.get(sessionId);
       if (owned === entry && !entry!.closed) {
         entry!.transportClosed = true;
-        void closeEntry(sessionId, entry!).catch(error => {
-          emitDiagnosticEvent("chatgpt_tela_mcp", "mcp_session_close_failed", diagnosticFailureFields(error));
-        });
+        void closeEntry(sessionId, entry!).catch(reportSessionCloseFailure);
       }
     };
     try {
