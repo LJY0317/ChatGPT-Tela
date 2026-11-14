@@ -1,3 +1,4 @@
+import { DELEGATION_COMMANDS, runDelegationCommand } from "./delegation-command";
 import { DIAGNOSTIC_LIMITS, diagnosticLogPaths, diagnosticCenter, diagnosticSourcePaths } from "@chatgpt-tela/core";
 import {
   existsSync,
@@ -92,16 +93,6 @@ function flag(name: string): boolean {
 
 function slot(): number {
   return profileSlotFromArguments(process.argv.slice(2));
-}
-
-async function existingCodexService(paths: ReturnType<typeof resolveProductPaths>): Promise<CodexServiceClient> {
-  const manifest = readOwnershipManifest(paths.installManifest);
-  if (!manifest) throw Error("Install and start Tela before managing delegated chats");
-  const running = await new LocalServiceSupervisor({ installId: manifest.installId }).current({
-    service: "codex", descriptorPath: serviceDescriptorPath(paths, "codex"),
-  });
-  if (!running) throw Error("Start Tela before managing delegated chats");
-  return new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
 }
 
 function runScript(script: string): void {
@@ -869,33 +860,8 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(diagnosticsSummary(productPaths), null, 2));
     return;
   }
-  if (command === "acknowledge-result") {
-    const required = (name: string) => {
-      const value = option(name);
-      if (!value) throw Error(`acknowledge-result requires ${name}`);
-      return value;
-    };
-    const outcome = option("--outcome") ?? "answer";
-    if (!["answer", "failed", "interrupted"].includes(outcome)
-      || outcome !== "answer" && option("--item")) throw Error("Use --item for an answer, or --outcome failed|interrupted");
-    const parentThreadId = process.env.CODEX_THREAD_ID;
-    if (!parentThreadId) throw Error("Run acknowledge-result from the coordinating Native chat");
-    const client = await existingCodexService(productPaths);
-    const response = await client.manageDelegation({ action: "acknowledge", slot: slot(), parentThreadId,
-      threadId: required("--thread"), turnId: required("--turn"),
-      ...(outcome === "answer" ? { outcome, itemId: required("--item") } : { outcome: outcome as "failed" | "interrupted" }),
-    });
-    console.log(JSON.stringify(response, null, 2));
-    return;
-  }
-  if (command === "retain-delegation" || command === "reconcile-delegations") {
-    const client = await existingCodexService(productPaths);
-    if (command === "reconcile-delegations") console.log(JSON.stringify(await client.manageDelegation({ action: "reconcile", slot: slot() }), null, 2));
-    else {
-      const parentThreadId = process.env.CODEX_THREAD_ID, threadId = option("--thread");
-      if (!parentThreadId || !threadId) throw Error("Run retain-delegation --thread CHILD from its coordinating Native chat");
-      console.log(JSON.stringify(await client.manageDelegation({ action: "enroll", slot: slot(), parentThreadId, threadId }), null, 2));
-    }
+  if (command && DELEGATION_COMMANDS.includes(command)) {
+    console.log(JSON.stringify(await runDelegationCommand(process.argv.slice(2), { paths: productPaths }), null, 2));
     return;
   }
   if (command === "retention-canary") {

@@ -1,3 +1,4 @@
+import { DELEGATION_COMMANDS, runDelegationCommand } from "../../cli/src/delegation-command";
 import { runDesktopAppCommand } from "./desktop-app";
 import { runApplicationUpdate } from "./application-update";
 import { diagnosePublicIngress, SystemTailscaleCommandRunner } from "@chatgpt-tela/tailscale-ingress";
@@ -38,6 +39,9 @@ Usage:
   chatgpt-tela services restart chat
   chatgpt-tela chat roots
   chatgpt-tela local-mcp [package <destination>|register]
+  chatgpt-tela retain-delegation --thread <child-id> [--slot N]
+  chatgpt-tela acknowledge-result --thread <id> --turn <id> (--item <id> | --outcome failed|interrupted) [--slot N]
+  chatgpt-tela reconcile-delegations [--slot N]
   chatgpt-tela chat <allow-root|disallow-root> --path <folder>
   chatgpt-tela install (--dry-run | --apply) [--payload <package-directory>]
   chatgpt-tela repair  (--dry-run | --apply) [--payload <package-directory>]
@@ -68,6 +72,10 @@ function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat"
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args[0] && DELEGATION_COMMANDS.includes(args[0])) {
+    process.stdout.write(JSON.stringify(await runDelegationCommand(args)) + "\n");
+    return;
+  }
   if (args[0] === "application-update" || args[0] === "desktop-app") {
     process.env.CHATGPT_TELA_DIAGNOSTIC_FILE ??= join(resolveProductPaths().logsRoot, "update.diagnostics.jsonl");
   }
