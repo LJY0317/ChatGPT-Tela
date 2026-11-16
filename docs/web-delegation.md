@@ -4,6 +4,65 @@ Tela supplies Web responses to the official Desktop app. The app owns Native tas
 execution and conversation identity. The retired external engine, managed-job CLI
 and proxy are removed; do not recreate them or change the official provider identity.
 
+## Finding Web tasks today
+
+In the official ChatGPT Desktop app, open Work for the connected profile and select
+a Web model where that choice is offered. Start a task or use the app's own agent
+delegation controls when available. The official host creates and admits the task;
+Tela supplies its Web responses. Tela has no separate **New Web task** action.
+
+On macOS, open **ChatGPT Tela → Control Center → Work**. The profile's **Open app**
+button opens its official app. The existing **Web activity** section lists owned,
+currently available Web browser surfaces. Select one to **View snapshot**, **Open
+browser**, or **Interact…**. These actions reuse that surface; they do not start or
+duplicate a task. An empty list means there is no active owned surface to preview,
+not that an official task or conversation was deleted. Manage tasks and conversations
+in the official app. The retention commands below are source-level management
+operations, not user-facing delegation creation commands.
+
+### Concurrent delegation setting: pending host support
+
+The requested policy is **three simultaneous Web-delegated child tasks per profile
+by default**, with a user-editable count that never exceeds the official host's
+effective maximum for that profile. It is **not currently enforced**. A Web browser
+surface is not a child-task identity, and multiple child tasks may be admitted
+without consulting Tela's menu or local preferences.
+
+The official host owns child creation/acceptance (including its agent tools).
+Tela's [current-turn parser](../packages/codex/src/request.ts) receives the parent
+and child identities only in an accepted request; its [Native history reader](../packages/codex/src/app-server.ts)
+observes already-created `subAgent.thread_spawn` lineage. The [delegation service](../packages/codex-service/src/http-server.ts)
+only enrolls, acknowledges, or reconciles a *previously created* child for archival.
+These are post-acceptance operations, not a concurrency admission gate. The obsolete
+`webDelegationLimits` key is intentionally discarded by the [current preferences
+parser](../packages/product-config/src/preferences.ts); restoring that field alone
+would save an inert number.
+
+Before exposing a numeric control, the official app needs to provide a supported,
+atomic pre-acceptance limit (or a host-enforced configurable cap), the authoritative
+profile/child ownership and active/terminal lifecycle, and a readable maximum that
+covers every host child-creation route. Only then can each profile use
+`min(user choice ?? 3, host maximum)`, enforced **before child acceptance**.
+Until those contracts exist, no local queue, scheduler, daemon, or model
+instruction can claim to enforce the limit.
+
+**Proposed minimal Work-page copy (not yet wired into the menu):**
+
+| Element | English | 한국어 |
+| --- | --- | --- |
+| Title | Web tasks | Web 작업 |
+| Description | Start or delegate tasks with a Web model in ChatGPT. View active Web sessions below. | ChatGPT에서 Web 모델로 작업을 시작하거나 위임하세요. 아래에서 활성 Web 세션을 확인할 수 있습니다. |
+| Action | Open app | 앱 열기 |
+| Limit help | ChatGPT controls task admission; Tela cannot set per-profile delegation limits yet. | 작업 수락은 ChatGPT에서 관리하며, Tela는 아직 프로필별 위임 상한을 설정할 수 없습니다. |
+
+The integration point is the existing Work page's profile **Open app** action
+immediately above **Web activity** in
+[`control-center.swift`](../apps/menu-bar-macos/control-center.swift), with strings
+added through its localization owner. Reuse the existing `bridgeSurfaces` selection
+and preview actions; do not build a second session list or show a nonfunctional
+number selector. This copy and integration point are a proposal for the menu's
+current owner, not an installed UI feature.
+
 ## Delegated-chat retention
 
 The source implementation connects explicit registration and result acknowledgement

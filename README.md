@@ -42,8 +42,13 @@ launch-time proxy/overlay is used. See [explicit provider setup](docs/official-d
 This adapter remains pre-release; source verification and local acceptance do not establish a publicly supported release.
 For a large existing conversation, the official engine may first compact with the previous Native
 model before sending the first Web request. See [the first-transition limit](docs/context-continuity-contract.md#official-engine-pre-turn-compaction).
-Automatic delegation and conversation cleanup are not provided by the Desktop-owned
-adapter. Manage conversations in the official app; see [Web tasks](docs/web-delegation.md).
+The official app owns task creation and delegation. For a connected profile, open
+Work in ChatGPT and choose a Web model where offered; use the app's own delegation
+controls when available. On macOS, **Tela Control Center → Work → Web activity**
+shows existing active Web sessions with optional snapshots and browser access.
+Tela does not yet enforce a user-configurable three-per-profile delegation limit,
+and automatic conversation cleanup is not a supported consumer feature. Manage
+tasks and conversations in the official app; see [Web tasks](docs/web-delegation.md).
 
 ## Product goals
 
