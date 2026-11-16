@@ -34,6 +34,14 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
 
 ## External contracts and explicit limits
 
+- **Cross-profile delegation control.** The retired external session manager could
+  select a profile for thread creation and continuation. The current official
+  host tools expose no Desktop-profile selector, and Plura's target lifecycle
+  does not provide thread creation. Preserve this user capability as unfinished:
+  connect supported profile-scoped create/continue/interrupt control with exact
+  ownership before advertising cross-profile dispatch. Do not restore the old
+  engine, job manager, private provider or history handoff as a substitute.
+
 - **Per-profile Web delegation capacity.** The requested default is 3 concurrent
   child tasks per profile, user-adjustable but capped by the official app's maximum.
   The current Desktop-owned Responses route receives tasks after the official host
