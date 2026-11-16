@@ -46,22 +46,9 @@ covers every host child-creation route. Only then can each profile use
 Until those contracts exist, no local queue, scheduler, daemon, or model
 instruction can claim to enforce the limit.
 
-**Proposed minimal Work-page copy (not yet wired into the menu):**
-
-| Element | English | 한국어 |
-| --- | --- | --- |
-| Title | Web tasks | Web 작업 |
-| Description | Start or delegate tasks with a Web model in ChatGPT. View active Web sessions below. | ChatGPT에서 Web 모델로 작업을 시작하거나 위임하세요. 아래에서 활성 Web 세션을 확인할 수 있습니다. |
-| Action | Open app | 앱 열기 |
-| Limit help | ChatGPT controls task admission; Tela cannot set per-profile delegation limits yet. | 작업 수락은 ChatGPT에서 관리하며, Tela는 아직 프로필별 위임 상한을 설정할 수 없습니다. |
-
-The integration point is the existing Work page's profile **Open app** action
-immediately above **Web activity** in
-[`control-center.swift`](../apps/menu-bar-macos/control-center.swift), with strings
-added through its localization owner. Reuse the existing `bridgeSurfaces` selection
-and preview actions; do not build a second session list or show a nonfunctional
-number selector. This copy and integration point are a proposal for the menu's
-current owner, not an installed UI feature.
+The Work page includes a short **Web tasks / Web 작업** introduction beside the
+existing profile actions. It reuses Web activity; there is no second task inventory
+or nonfunctional concurrency selector.
 
 ## Delegated-chat retention
 

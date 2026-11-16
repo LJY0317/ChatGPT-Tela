@@ -1,3 +1,6 @@
+#if canImport(TelaLocalization)
+import TelaLocalization
+#endif
 import AppKit
 import Foundation
 
@@ -780,6 +783,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       } else if profiles.isEmpty {
         append(secondary("No ChatGPT profiles found."), to: card())
       }
+      let webTasks = card()
+      append(label("Web tasks", style: .headline), to: webTasks)
+      append(secondary("Start or delegate tasks with a Web model in ChatGPT."), to: webTasks)
       for profile in profiles {
         let profileCard = card()
         let account = profileAccounts[profile.slot]

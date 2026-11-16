@@ -58,11 +58,7 @@ behavior.
    See [context continuity](context-continuity-contract.md#official-engine-pre-turn-compaction).
 3. **Usage pools are externally defined.** Limits depend on plan, workspace,
    model, task, credits and reset period; no source fixture establishes real
-   account quota behavior or precise Web token/billing cost. OpenAI's November
-   2026 [usage notice](https://help.openai.com/en/articles/20001625-understanding-chatgpt-and-codex-usage-limits)
-   announces shared ChatGPT/Codex allowances for Plus, Pro and Business starting
-   in December 2026. Treat the account's actual usage display and response as
-   authoritative, rather than assuming an independent unlimited Web pool.
+   account quota behavior or precise Web token/billing cost. Treat the account’s actual usage display and response as authoritative; do not assume an independent unlimited Web pool.
 
 ## One-time acceptance when prerequisites exist
 

@@ -30,11 +30,7 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
 - **Physical device isolation.** On two owned computers sharing an account, use separate
   sentinel files and one local service offline. Verify local tools never discover or fall
   back to the other computer. Isolated service tests are not physical-device acceptance.
-- **Web task discovery.** Integrate the proposed short English/Korean **Web tasks / Web 작업**
-  explanation and existing **Open app** action into Control Center → Work. Reuse
-  **Web activity** for active session selection and snapshots. Do not build another
-  inventory or suggest that browser surfaces are delegated-task counts. See
-  [the current user path and UI copy](web-delegation.md#finding-web-tasks-today).
+
 
 ## External contracts and explicit limits
 

@@ -1,7 +1,7 @@
 import Foundation
 
 // The language choice belongs to Tela's interface, not the host OS or ChatGPT.
-enum TelaUILanguage: String, CaseIterable {
+public enum TelaUILanguage: String, CaseIterable {
   case english = "en"
   case korean = "ko"
   case system = "system"
@@ -25,7 +25,7 @@ private func telaPreferencesObject(at url: URL) throws -> [String: Any] {
   return object
 }
 
-func telaStoredUILanguage(at url: URL) -> TelaUILanguage {
+public func telaStoredUILanguage(at url: URL) -> TelaUILanguage {
   guard let preferences = try? telaPreferencesObject(at: url),
         let value = preferences["uiLanguage"] as? String,
         let language = TelaUILanguage(rawValue: value) else { return .english }
@@ -34,7 +34,7 @@ func telaStoredUILanguage(at url: URL) -> TelaUILanguage {
 
 // Update one preference without dropping fields owned by another runtime.
 // The other Swift settings controls use this too, so their writes retain uiLanguage.
-func telaWritePreference(_ key: String, value: Any, at url: URL) throws {
+public func telaWritePreference(_ key: String, value: Any, at url: URL) throws {
   var preferences = try telaPreferencesObject(at: url)
   preferences[key] = value
   var data = try JSONSerialization.data(withJSONObject: preferences, options: [.prettyPrinted, .sortedKeys])
@@ -71,11 +71,11 @@ private final class TelaLanguageState {
   }
 }
 
-func telaUILanguage() -> TelaUILanguage { TelaLanguageState.shared.language }
+public func telaUILanguage() -> TelaUILanguage { TelaLanguageState.shared.language }
 
-func telaReloadUILanguage(at url: URL) { TelaLanguageState.shared.reload(from: url) }
+public func telaReloadUILanguage(at url: URL) { TelaLanguageState.shared.reload(from: url) }
 
-func telaSetUILanguage(_ language: TelaUILanguage, at url: URL) throws {
+public func telaSetUILanguage(_ language: TelaUILanguage, at url: URL) throws {
   try TelaLanguageState.shared.update(language, at: url)
 }
 
@@ -95,7 +95,7 @@ private enum TelaLocalizations {
 
 // English source strings are localization keys. Call sites keep their own
 // interpolation/format arguments and translate only Tela-owned UI strings.
-func telaText(_ source: String) -> String {
+public func telaText(_ source: String) -> String {
   let language = telaUILanguage()
   let korean = language == .korean || (language == .system
     && Locale.preferredLanguages.first?.lowercased().hasPrefix("ko") == true)

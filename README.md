@@ -472,6 +472,12 @@ config/state/browser data unless `--remove-data` is explicit. `uninstall --apply
 the currently executing launcher is inside the installed Tela binary root; run it from a separately extracted
 package copy so Windows and other platforms are not asked to delete the executable that is still running.
 
+### Interface language
+
+On macOS, open **Tela → Settings → Appearance → Language** to choose **English**,
+**한국어**, or **Use system language**. The choice applies to Tela’s interface only
+and is kept across restarts. Existing installations retain English until changed.
+
 ### First use: device-local Chat (default)
 
 The macOS control center guides first use from the **installed** package; it needs no source checkout

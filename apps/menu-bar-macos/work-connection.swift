@@ -1,3 +1,6 @@
+#if canImport(TelaLocalization)
+import TelaLocalization
+#endif
 import Foundation
 
 // Launcher receipt describes only Tela's owned marketplace entry, never host installation.

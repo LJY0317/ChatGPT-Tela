@@ -13,6 +13,7 @@ const output = resolve(outputIndex >= 0 && process.argv[outputIndex + 1]
 mkdirSync(dirname(output), { recursive: true });
 if (testMode) {
   execFileSync("/usr/bin/xcrun", ["swiftc", "-parse-as-library",
+    resolve(repoRoot, "apps/menu-bar-macos/localization.swift"),
     resolve(repoRoot, "apps/menu-bar-macos/work-connection.swift"),
     resolve(repoRoot, "apps/menu-bar-macos/work-connection-tests.swift"),
     "-framework", "AppKit", "-o", output], { cwd: repoRoot, stdio: "inherit" });

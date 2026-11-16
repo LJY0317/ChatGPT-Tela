@@ -74,7 +74,7 @@ import Sparkle
     withExtendedLifetime(delegate) { app.run() }
   }
 }`);
-    const compile = spawnSync("/usr/bin/xcrun", ["swiftc", "-parse-as-library", resolve("apps/menu-bar-macos/diagnostic-retention.swift"), resolve("apps/menu-bar-macos/sparkle-update.swift"), harness,
+    const compile = spawnSync("/usr/bin/xcrun", ["swiftc", "-parse-as-library", resolve("apps/menu-bar-macos/localization.swift"), resolve("apps/menu-bar-macos/diagnostic-retention.swift"), resolve("apps/menu-bar-macos/sparkle-update.swift"), harness,
       "-F", frameworkRoot, "-framework", "Sparkle", "-framework", "AppKit", "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks", "-o", join(mac, "probe")], { encoding: "utf8" });
     expect(compile.status).toBe(0);
     expect(spawnSync("/usr/bin/mkfifo", [join(root, "release.fifo")]).status).toBe(0);

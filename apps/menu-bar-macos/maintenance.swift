@@ -1,3 +1,6 @@
+#if canImport(TelaLocalization)
+import TelaLocalization
+#endif
 import AppKit
 import Foundation
 
