@@ -337,3 +337,18 @@ test("profile readiness retires expired replaced-account results within its owne
   expect((await currentStore.readSuppliedResult(current))?.answer).toBe("current answer");
   expect(await readFile(otherFile, "utf8")).toBe(otherBefore);
 }));
+
+
+test("same-turn completion advances only from its exact delivered predecessor and retains one replay receipt", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options);
+  const first = { profileSlot: 2, accountFingerprint: hash("account"), threadId: "thread", turnId: "turn",
+    requestFingerprint: hash("first"), answer: "First completed answer" };
+  const next = { ...first, requestFingerprint: hash("next"), answer: "Coordinator follow-up answer" };
+  await journal.preserveSuppliedResult(first);
+  await expect(journal.preserveSuppliedResult(next, hash("stale predecessor"))).rejects.toThrow("Conflicting");
+  expect(await journal.preserveSuppliedResult(next, first.requestFingerprint)).toBe(true);
+  await expect(journal.preserveSuppliedResult({ ...next, answer: "Different accepted effect" }, first.requestFingerprint))
+    .rejects.toThrow("Conflicting");
+  expect((await new FileNativeVisiblePrefixStageJournal(options).readSuppliedResult(next))?.answer).toBe(next.answer);
+  await expect(journal.readSuppliedResult(first)).rejects.toThrow("changed");
+}));

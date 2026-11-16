@@ -158,6 +158,39 @@ test("input-only dispatch joins duplicate observers and reuses settled response 
   expect(f.closed).toBe(true);
 });
 
+test("a delivered final admits a coordinator follow-up in the same Native turn without replaying old work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-same-turn-follow-up-"));
+  const storage = () => ({ profileSlot: 2, accountFingerprint: "d".repeat(64),
+    store: new FileNativeVisiblePrefixStageJournal({ directory: join(root, "ledger"), initializationPath: join(root, "receipt") }) });
+  const followUp = request("turn-1", [...firstInput,
+    { type: "message", role: "assistant", content: "A inspected." },
+    { type: "function_call_output", call_id: "coordinator-message",
+      output: "<codex_delegation><input>Stop here and report the completed work.</input></codex_delegation>" },
+  ]);
+  const first = fixture({ completedResults: storage() });
+  try {
+    const final = await first.gateway.handle(request());
+    // A preserved answer alone is not proof the host consumed it.
+    await expect(first.gateway.handle(followUp)).rejects.toThrow("changed");
+    expect(first.submissions).toHaveLength(1);
+    first.gateway.commit!(final);
+    const [a, b] = await Promise.all([first.gateway.handle(followUp), first.gateway.handle(followUp)]);
+    expect(a).toEqual(b);
+    expect(a).toMatchObject({ type: "final", answer: "A inspected." });
+    expect(first.submissions).toHaveLength(2);
+    expect(JSON.stringify(first.submissions[1])).toContain("Stop here and report the completed work.");
+    first.gateway.commit!(a);
+    await expect(first.gateway.handle(request())).rejects.toThrow("superseded");
+    await first.gateway.close();
+    const restarted = fixture({ completedResults: storage() });
+    try {
+      expect(await restarted.gateway.handle(followUp)).toMatchObject({ type: "final", answer: "A inspected." });
+      await expect(restarted.gateway.handle(request())).rejects.toThrow("changed");
+      expect(restarted.submissions).toHaveLength(0);
+    } finally { await restarted.gateway.close(); }
+  } finally { await first.gateway.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("account reset releases retained context and prevents an earlier account's in-memory replay", async () => {
   const f = fixture();
   const server = await startLocalResponsesServer({ gateway: f.gateway });

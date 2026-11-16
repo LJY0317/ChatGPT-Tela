@@ -50,6 +50,17 @@ The Work page includes a short **Web tasks / Web 작업** introduction beside th
 existing profile actions. It reuses Web activity; there is no second task inventory
 or nonfunctional concurrency selector.
 
+## Responses within a Native turn
+
+A Native turn may contain several provider responses, including a coordinator
+message injected after an answer. Tela admits that follow-up only after the prior
+final was delivered; it does not treat every changed request as a replay of the
+first response. Active tool rounds still require their exact outstanding result.
+Completed receipts advance from the exact delivered predecessor in the existing
+journal, retaining one receipt per Native turn. Replays of replaced requests are
+rejected, including after restart; a retained answer alone does not authorize a
+new response. This does not add a scheduler or restore the retired engine.
+
 ## Delegated-chat retention
 
 The source implementation connects explicit registration and result acknowledgement

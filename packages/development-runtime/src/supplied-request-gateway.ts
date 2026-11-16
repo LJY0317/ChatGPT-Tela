@@ -21,7 +21,7 @@ import type { SuppliedCompletedResult } from "./native-visible-prefix-journal";
 
 export interface SuppliedResultStore {
   readSuppliedResult(identity: Omit<SuppliedCompletedResult, "answer">): Promise<SuppliedCompletedResult | undefined>;
-  preserveSuppliedResult(result: SuppliedCompletedResult): Promise<boolean>;
+  preserveSuppliedResult(result: SuppliedCompletedResult, previousRequestFingerprint?: string): Promise<boolean>;
 }
 export type SuppliedResultScope = {
   readonly profileSlot: number;
@@ -35,6 +35,7 @@ interface Operation {
   historyReleasedBytes?: number;
   readonly turnId: string;
   fingerprint: string;
+  readonly previousRequestFingerprint?: string;
   readonly capability: string;
   readonly listeners: Set<(summary: string) => void | boolean>;
   outcome: Promise<NativeGatewayOutcome>;
@@ -166,11 +167,22 @@ export function createSuppliedRequestGateway(input: {
       for (const [prior, retiredAt] of superseded) {
         if (Date.now() - retiredAt >= WEB_EPOCH_IDLE_RETENTION_MS) superseded.delete(prior);
       }
-      if (superseded.has(key)) throw new Error("This provider response operation has already been superseded");
+      if (superseded.has(key) || superseded.has(`${key}\u0000${hash}`)) throw new Error("This provider response operation has already been superseded");
       for (const [task, op] of operations) {
         if (op.finishedAt !== undefined && Date.now() - op.finishedAt >= WEB_EPOCH_IDLE_RETENTION_MS) operations.delete(task);
       }
       let operation = operations.get(identity.threadId);
+      let previousRequestFingerprint: string | undefined;
+      // One Native turn may request another response after consuming a final,
+      // e.g. an injected coordinator message. Only a delivered final ends a
+      // response operation; an active tool round still requires its exact result.
+      if (operation?.turnId === identity.turnId && operation.fingerprint !== hash
+        && operation.finishedAt !== undefined && operation.delivered && !operation.failed
+        && !operation.round.pending) {
+        previousRequestFingerprint = operation.fingerprint;
+        superseded.set(`${key}\u0000${operation.fingerprint}`, Date.now());
+        operation = undefined;
+      }
       if (operation?.turnId === identity.turnId) {
         if (operation.fingerprint !== hash) {
           const outstanding = operation.round.pending;
@@ -199,7 +211,7 @@ export function createSuppliedRequestGateway(input: {
             try {
               operation.preserved = await completedResults!.store.preserveSuppliedResult({
                 ...resultIdentity, answer: final.answer,
-              });
+              }, operation.previousRequestFingerprint);
             } catch (error) {
               emitDiagnosticEvent("chatgpt_tela_work", "provider_result_preservation_failed", {
                 scope_fingerprint: diagnosticFingerprint(identity.threadId), ...diagnosticFailureFields(error),
@@ -225,6 +237,7 @@ export function createSuppliedRequestGateway(input: {
         };
         const owned: Operation = {
           threadId: identity.threadId, turnId: identity.turnId, fingerprint: hash, capability, listeners, delivered: false,
+          ...(previousRequestFingerprint ? { previousRequestFingerprint } : {}),
           round: new ExactToolRound(), advertisedGoals, offer,
           outcome: Promise.resolve().then(async () => {
             const correlation = { scope_fingerprint: diagnosticFingerprint(identity.threadId),
@@ -242,7 +255,7 @@ export function createSuppliedRequestGateway(input: {
             try {
               // Register this operation before the durable lookup. Concurrent
               // requests join one outcome; a recovered final never resubmits.
-              if (resultIdentity) {
+              if (resultIdentity && !owned.previousRequestFingerprint) {
                 const saved = await completedResults!.store.readSuppliedResult(resultIdentity);
                 if (saved) {
                   owned.preserved = true;
@@ -302,7 +315,7 @@ export function createSuppliedRequestGateway(input: {
                   // turn. Preserve the final exact body, not its first frame.
                   owned.preserved = await completedResults!.store.preserveSuppliedResult({
                     ...resultIdentity, requestFingerprint: owned.fingerprint, answer,
-                  });
+                  }, owned.previousRequestFingerprint);
                 } catch (error) {
                   emitDiagnosticEvent("chatgpt_tela_work", "provider_result_preservation_failed", {
                     scope_fingerprint: diagnosticFingerprint(identity.threadId), ...diagnosticFailureFields(error),

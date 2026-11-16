@@ -331,12 +331,16 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
       await this.#write(state);
     });
   }
-  async preserveSuppliedResult(result: SuppliedCompletedResult): Promise<boolean> {
+  async preserveSuppliedResult(result: SuppliedCompletedResult, previousRequestFingerprint?: string): Promise<boolean> {
     if (!validSupplied(result)) return false;
     return this.#transaction(async state => {
       const key = suppliedKey(result);
       const existing = state.suppliedResults?.find(item => suppliedKey(item) === key);
-      if (existing && (existing.requestFingerprint !== result.requestFingerprint || existing.answerHash !== sha(result.answer))) {
+      // Advance the single turn receipt only from the final the caller actually
+      // delivered. Old request frames remain rejected after restart; no new ledger.
+      if (existing && (existing.requestFingerprint === result.requestFingerprint
+        ? existing.answerHash !== sha(result.answer)
+        : existing.requestFingerprint !== previousRequestFingerprint)) {
         throw Error("Conflicting supplied response completion");
       }
       state.suppliedResults = [...(state.suppliedResults ?? []).filter(item => suppliedKey(item) !== key),
