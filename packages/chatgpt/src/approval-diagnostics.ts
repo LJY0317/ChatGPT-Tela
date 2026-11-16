@@ -1,3 +1,5 @@
+import { approvalControlLabel } from "./approval-label";
+
 export interface ApprovalDiagnosticProbe {
   readonly controls: Record<string, number | boolean>;
   readonly buttons: readonly Record<string, string | number | boolean>[];
@@ -9,14 +11,14 @@ export function approvalDiagnosticProbe(
   card: HTMLElement | undefined,
   target: HTMLElement | null,
   hit: Element | null,
+  controlLabel: (value: string) => string = approvalControlLabel,
 ): ApprovalDiagnosticProbe {
   const visible = (node: Element) => {
     const style = getComputedStyle(node);
     return style.display !== "none" && style.visibility !== "hidden"
       && style.opacity !== "0" && node.getClientRects().length > 0;
   };
-  const label = (node: Element) => String(node.getAttribute("aria-label") || node.textContent || "")
-    .replace(/\s+/g, " ").trim();
+  const label = (node: Element) => controlLabel(node.getAttribute("aria-label") || node.textContent || "");
   const buttons = Array.from(card?.querySelectorAll('button,[role="button"]') ?? []).slice(0, 64);
   const menus = Array.from(document.querySelectorAll('[role="menu"]')).filter(visible).slice(0, 16);
   const disclosures = buttons.filter(node => node.getAttribute("aria-haspopup") === "menu");
@@ -84,7 +86,7 @@ export function approvalDiagnosticProbe(
     }
   }
   const decisions = (value: string) => value === "Approval options" ? "options"
-    : value === "Allow once" ? "allow_once" : /^Allow(?: .* for this conversation| for this conversation)$/.test(value)
+    : value === "Allow once" ? "allow_once" : value === "Allow for this conversation"
       ? "conversation" : value === "Allow" ? "allow" : value === "Deny" ? "deny" : "other";
   const controlEvidence = (node: Element, index: number, menu?: Element, menuIndex = -1) => ({
     index, menu_index: menuIndex, kind: decisions(label(node)), visible: visible(node), in_menu: !!menu,

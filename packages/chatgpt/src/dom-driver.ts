@@ -1,3 +1,4 @@
+import { approvalControlLabel } from "./approval-label";
 import { authorDiagnosticProbe } from "./author-diagnostics";
 import { approvalDiagnosticProbe, type ApprovalDiagnosticProbe } from "./approval-diagnostics";
 import { prepareApprovalWithinDeadline } from "./approval-preparation";
@@ -111,7 +112,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     && getComputedStyle(element).visibility !== "hidden"
     && getComputedStyle(element).opacity !== "0"
     && element.getClientRects().length > 0;
-  const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
+  const controlLabel = (${approvalControlLabel.toString()});
   const decideApproval = (${decideChatGptApproval.toString()});
   const accessibleText = node => {
     if (node instanceof HTMLElement && node.getAttribute("aria-hidden") === "true") return "";
@@ -122,21 +123,20 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   const registry = globalThis[registryKey] ||= { cards: new WeakMap(), prefix: crypto.randomUUID(), next: 0, receipt: null };
   // Candidate discovery: marked provider cards and accessible dialogs with Allow/Deny controls.
   // Prefer innermost provider cards; each pending card uses the same approval path.
-  const isAllowButton = label => ['Allow', 'Allow once', 'Allow for this conversation'].includes(label)
-    || /^Allow(?: once| .* for this conversation)?$/.test(label);
+  const isAllowButton = label => ['Allow', 'Allow once', 'Allow for this conversation'].includes(label);
   const discover = () => {
     const marked = [...document.querySelectorAll('${APPROVAL_SURFACE_SELECTOR}')].filter(visible);
     const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].filter(card => visible(card)
       && [...card.querySelectorAll('button,[role="button"]')].some(button =>
-        visible(button) && isAllowButton(normalize(button.getAttribute('aria-label') || button.textContent || button.innerText))));
+        visible(button) && isAllowButton(controlLabel(button.getAttribute('aria-label') || accessibleText(button)))));
     const candidates = [...new Set([...marked, ...dialogs])];
     const distinct = candidates.filter(card => !candidates.some(other => other !== card && card.contains(other)));
     // A trusted click is only an input receipt. The card stays pending until
     // the provider actually removes it; otherwise an old final can escape.
     return distinct.filter(card => [...card.querySelectorAll('button,[role="button"]')].some(button => visible(button)
         && !button.disabled && button.getAttribute('aria-disabled') !== 'true' && !button.closest('[inert]')
-        && (isAllowButton(normalize(button.getAttribute('aria-label') || accessibleText(button)))
-          || ['Deny', 'Always allow', 'Approval options'].includes(normalize(button.getAttribute('aria-label') || accessibleText(button))))));
+        && (isAllowButton(controlLabel(button.getAttribute('aria-label') || accessibleText(button)))
+          || ['Deny', 'Always allow', 'Approval options'].includes(controlLabel(button.getAttribute('aria-label') || accessibleText(button))))));
   };
   const cards = discover();
   const card = prepare?.cardKey
@@ -170,7 +170,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   const finish = () => {
     if (prepare?.diagnostics && card) {
       try {
-        result.diagnostics = diagnose(card, diagnosticTarget, diagnosticHit);
+        result.diagnostics = diagnose(card, diagnosticTarget, diagnosticHit, controlLabel);
         result.diagnostics.controls.hit_test_observed = diagnosticHitTested;
       }
       catch { result.diagnosticUnavailable = true; }
@@ -192,9 +192,9 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     if (!observed || observed.text !== card.textContent || !control || !visible(control)
       || control.disabled || control.getAttribute('aria-disabled') === 'true'
       || control.closest('[inert]')) return false;
-    const decision = normalize(control.getAttribute('aria-label') || control.textContent);
+    const decision = controlLabel(control.getAttribute('aria-label') || accessibleText(control));
     const allowed = ['Deny', 'Allow', 'Allow once', 'Always allow', 'Allow for this conversation'];
-    const isConsentChoice = allowed.includes(decision) || /^Allow .* for this conversation$/.test(decision);
+    const isConsentChoice = allowed.includes(decision);
     if (card.contains(control)) {
       return isConsentChoice
         || (decision === 'Approval options' && control.getAttribute('aria-haspopup') === 'menu')
@@ -210,7 +210,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     if (!menu || menus.length !== 1 || menus[0] !== menu || !menu.contains(control)) return false;
     const disclosures = [...card.querySelectorAll('button,[role="button"]')].filter(button =>
       visible(button) && button.getAttribute('aria-haspopup') === 'menu'
-      && normalize(button.getAttribute('aria-label') || button.textContent) === 'Approval options'
+      && controlLabel(button.getAttribute('aria-label') || accessibleText(button)) === 'Approval options'
       && !button.disabled && button.getAttribute('aria-disabled') !== 'true'
       && !button.closest('[inert]'));
     if (disclosures.length !== 1 || disclosures[0].getAttribute('aria-expanded') !== 'true') return false;
@@ -233,11 +233,10 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   // Use the control's accessible label, not visual shortcut decorations. A keyboard hint
   // is presentation, whereas an unknown decision remains an unknown decision.
   let optionsDisclosure = null;
-  const isConversationChoice = label => label === "Allow for this conversation"
-    || /^Allow .* for this conversation$/.test(label);
+  const isConversationChoice = label => label === "Allow for this conversation";
   for (const button of card.querySelectorAll('button,[role="button"]')) {
     if (!visible(button)) continue;
-    const label = normalize(button.getAttribute("aria-label") || accessibleText(button));
+    const label = controlLabel(button.getAttribute("aria-label") || accessibleText(button));
     // These explicitly identified disclosure controls do not grant or deny authority.
     if ((label === "See details" && button.getAttribute("aria-haspopup") === "dialog") || label === "Copy details") continue;
     if (label === "Approval options" && button.getAttribute("aria-haspopup") === "menu") {
@@ -289,7 +288,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
         const choices = [...new Set(menu.querySelectorAll('[role="menuitem"],button,[role="button"]'))];
         for (const item of choices) {
           if (!visible(item)) continue;
-          const label = normalize(item.getAttribute("aria-label") || accessibleText(item));
+          const label = controlLabel(item.getAttribute("aria-label") || accessibleText(item));
           if (!registry.manualInputTarget(item)) {
             result.unknownCount += 1;
           } else if (isConversationChoice(label)) {

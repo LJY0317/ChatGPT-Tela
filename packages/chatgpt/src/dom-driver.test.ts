@@ -1305,7 +1305,10 @@ describe("current ChatGPT DOM surface driver", () => {
     expect(await driver.processApprovalCard("full_access")).toMatchObject({ status: "dispatched", reason: "allow" });
     expect(clicks).toBe(1);
   });
-  test("accessible one-shot approval excludes hidden keyboard hints and explicit disclosures", async () => {
+  test.each([
+    ["English", "See details", "Deny", "Allow once", "Approval options"],
+    ["한국어", "자세히 보기", "거부", "한 번만 허용", "승인 옵션"],
+  ])("%s one-shot approval excludes hidden keyboard hints and explicit disclosures", async (_, detailsLabel, denyLabel, onceLabel, optionsLabel) => {
     const control = (label: string, hint: string) => {
       const button = new FixtureElement();
       const text = new FixtureElement(); text.textContent = label;
@@ -1314,12 +1317,13 @@ describe("current ChatGPT DOM surface driver", () => {
       button.textContent = label + hint;
       return button;
     };
-    const details = new FixtureElement({ "aria-haspopup": "dialog" }); details.textContent = "See details";
-    const options = new FixtureElement({ "aria-label": "Approval options", "aria-haspopup": "menu" });
-    const card = new FixtureElement({}, { button: [details, control("Deny", "Esc"), control("Allow once", "⏎"), options] });
+    const details = new FixtureElement({ "aria-haspopup": "dialog" }); details.textContent = detailsLabel;
+    const options = new FixtureElement({ "aria-label": optionsLabel, "aria-haspopup": "menu" });
+    const card = new FixtureElement({}, { button: [details, control(denyLabel!, "Esc"), control(onceLabel!, "⏎"), options] });
     const page = new RendererFixturePage(new FixtureElement({}, {
       '[data-codex-approval-surface="true"]': [card],
     }));
+    page.hitTest = () => card.selectors.button![2];
     let clicks = 0;
     page.pointerClick = async () => { clicks++; };
     const driver = new ChatGptDomSurfaceDriver(page);
