@@ -41,6 +41,7 @@ export interface PackagedPayloadBuildInput {
   readonly profileRuntime: PackagedPayloadBuildProfileRuntimeInput;
   readonly menuBarSourcePath?: string;
   readonly menuBarFrameworkSourcePath?: string;
+  readonly menuBarLocalizationSourcePath?: string;
   readonly noticesSourcePath?: string;
   readonly maintenanceUISourcePath?: string;
   readonly workspaceFilesSourcePath?: string;
@@ -198,6 +199,14 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
   const menuBarRelative = input.menuBarSourcePath ? "ui/ChatGPT Tela.app/Contents/MacOS/chatgpt-tela-menu-bar" : undefined;
   if (input.menuBarSourcePath && menuBarRelative) {
     copyFile(realRegularFile(input.menuBarSourcePath, "packaged menu bar source"), join(outputPath, ...menuBarRelative.split("/")));
+    if (input.menuBarLocalizationSourcePath) {
+      const localization = join(outputPath, "ui/ChatGPT Tela.app/Contents/Resources/TelaLocalizations.bundle");
+      mkdirSync(dirname(localization), { recursive: true });
+      copyBundlePreservingInternalLinks(input.menuBarLocalizationSourcePath, localization);
+      const maintenanceLocalization = join(outputPath, "ui/Tela Maintenance.app/Contents/Resources/TelaLocalizations.bundle");
+      mkdirSync(dirname(maintenanceLocalization), { recursive: true });
+      copyBundlePreservingInternalLinks(input.menuBarLocalizationSourcePath, maintenanceLocalization);
+    }
     if (input.menuBarFrameworkSourcePath) {
       const frameworks = join(outputPath, "ui/ChatGPT Tela.app/Contents/Frameworks");
       mkdirSync(frameworks, { recursive: true });

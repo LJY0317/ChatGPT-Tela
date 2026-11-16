@@ -150,7 +150,7 @@ async function main(): Promise<void> {
         entrypointSourcePath: profileRuntime,
         setupEntrypointSourcePath: profileSetup,
       },
-      ...(menuBar ? { menuBarSourcePath: menuBar, menuBarFrameworkSourcePath: join(temporary, "Sparkle.framework"), maintenanceUISourcePath: join(temporary, "chatgpt-tela-maintenance") } : {}),
+      ...(menuBar ? { menuBarSourcePath: menuBar, menuBarFrameworkSourcePath: join(temporary, "Sparkle.framework"), menuBarLocalizationSourcePath: join(temporary, "TelaLocalizations.bundle"), maintenanceUISourcePath: join(temporary, "chatgpt-tela-maintenance") } : {}),
       ...(workspaceFilesSourcePath ? { workspaceFilesSourcePath } : {}),
       ...(macCodesignIdentity
         ? { finalizeStagedPayload: ({ outputPath: staged, manifest }) => macCodesign(staged, macCodesignIdentity, manifest) }

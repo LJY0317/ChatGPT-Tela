@@ -34,6 +34,23 @@ describe("product preferences", () => {
       expect(approvalDelayMilliseconds("2s")).toBe(2_000);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+  test("interface language roundtrips, defaults to English, and survives unrelated preference updates", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-preferences-language-"));
+    const path = join(root, "preferences-v1.json");
+    try {
+      expect(readProductPreferences(path).uiLanguage ?? "en").toBe("en");
+      for (const uiLanguage of ["ko", "system", "en"] as const) {
+        writeProductPreferences({ ...readProductPreferences(path), uiLanguage }, path);
+        expect(readProductPreferences(path).uiLanguage).toBe(uiLanguage);
+      }
+      writeProductPreferences({ ...readProductPreferences(path), uiLanguage: "ko" }, path);
+      setWorkProfileConnection("default", true, path);
+      expect(readProductPreferences(path)).toMatchObject({
+        version: 1, approvalAutomation: "off", uiLanguage: "ko", workProfileConnections: ["default"],
+      });
+      expect(() => parseProductPreferences({ version: 1, uiLanguage: "fr" })).toThrow("language");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("existing enabled approval preferences normalize to full_access", () => {
     expect(parseProductPreferences({ version: 1, approvalAutomation: "recognized_conversation" }).approvalAutomation)
       .toBe("full_access");

@@ -249,6 +249,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var detailStack: NSStackView?
   private var detailScroll: NSScrollView?
   private var navigationButtons: [ControlCenterPage: NSButton] = [:]
+  private weak var sidebarFooter: NSTextField?
   private var selectedPage: ControlCenterPage = .home
   private var serviceStates: [String: String] = [:]
   private weak var updatesSection: NSView?
@@ -326,6 +327,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var selectedBridgeSurface: String?
   private var previewRevision = 0
   private var preferenceError = false
+  private var languageMessage: String?
 
   private var supportRoot: URL {
     home.appendingPathComponent("Library/Application Support/ChatGPT Tela", isDirectory: true)
@@ -433,11 +435,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     stack.addArrangedSubview(heading)
     stack.setCustomSpacing(20, after: heading)
     for page in ControlCenterPage.allCases {
-      let button = TelaNavigationButton(title: page.rawValue, target: self, action: #selector(selectPage(_:)))
+      let button = TelaNavigationButton(title: telaText(page.rawValue), target: self, action: #selector(selectPage(_:)))
       button.setButtonType(.momentaryChange)
       button.isBordered = false
       button.alignment = .left
-      button.title = "  " + page.rawValue
+      button.title = "  " + telaText(page.rawValue)
       button.font = .systemFont(ofSize: TelaStyle.bodySize, weight: .regular)
       button.image = NSImage(systemSymbolName: page.symbol, accessibilityDescription: nil)?
         .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: TelaStyle.bodySize, weight: .regular))
@@ -445,7 +447,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       button.imageScaling = .scaleProportionallyDown
       button.wantsLayer = true
       button.layer?.cornerRadius = TelaStyle.controlRadius
-      button.setAccessibilityLabel(page.rawValue)
+      button.setAccessibilityLabel(telaText(page.rawValue))
       button.identifier = NSUserInterfaceItemIdentifier(page.rawValue)
       stack.addArrangedSubview(button)
       button.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -453,7 +455,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       navigationButtons[page] = button
     }
     updateNavigation()
-    let footer = label("Tela runs in the background.", style: .caption1)
+    let footer = label(telaText("Tela runs in the background."), style: .caption1)
+    sidebarFooter = footer
     footer.textColor = .secondaryLabelColor
     footer.translatesAutoresizingMaskIntoConstraints = false
     container.addSubview(footer)
@@ -471,7 +474,31 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       button.state = .off
       (button as? TelaNavigationButton)?.selected = selected
       button.contentTintColor = .labelColor
-      button.setAccessibilityValue(selected ? "Selected" : "")
+      button.title = "  " + telaText(page.rawValue)
+      button.setAccessibilityLabel(telaText(page.rawValue))
+      button.setAccessibilityValue(selected ? telaText("Selected") : "")
+    }
+  }
+
+  private func refreshLanguagePresentation() {
+    updateNavigation()
+    sidebarFooter?.stringValue = telaText("Tela runs in the background.")
+    renderCurrentPage()
+  }
+
+  @objc private func changeUILanguage(_ sender: NSPopUpButton) {
+    guard let raw = sender.selectedItem?.representedObject as? String,
+          let selection = TelaUILanguage(rawValue: raw) else { return }
+    do {
+      try telaSetUILanguage(selection, at: preferencesURL)
+      languageMessage = nil
+      preferenceError = false
+      refreshLanguagePresentation()
+      onPreferencesChanged?()
+    } catch {
+      languageMessage = "Couldn't save the language setting."
+      sender.selectItem(at: TelaUILanguage.allCases.firstIndex(of: telaUILanguage()) ?? 0)
+      renderCurrentPage()
     }
   }
 
@@ -509,7 +536,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func label(_ text: String, style: NSFont.TextStyle = .body) -> NSTextField {
-    let field = NSTextField(wrappingLabelWithString: text)
+    let field = NSTextField(wrappingLabelWithString: telaText(text))
     field.font = .systemFont(ofSize: style == .caption1 ? TelaStyle.captionSize : TelaStyle.bodySize)
     field.maximumNumberOfLines = 0
     return field
@@ -568,7 +595,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func actionButton(_ title: String, action: Selector) -> NSButton {
-    let button = TelaActionButton(title: title, target: self, action: action)
+    let button = TelaActionButton(title: telaText(title), target: self, action: action)
     button.setButtonType(.momentaryPushIn)
     button.isBordered = false
     button.wantsLayer = true
@@ -576,7 +603,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     button.contentTintColor = .labelColor
     button.translatesAutoresizingMaskIntoConstraints = false
     button.heightAnchor.constraint(equalToConstant: 28).isActive = true
-    let width = (title as NSString).size(withAttributes: [.font: button.font!]).width + 24
+    let width = (button.title as NSString).size(withAttributes: [.font: button.font!]).width + 24
     button.widthAnchor.constraint(greaterThanOrEqualToConstant: ceil(width)).isActive = true
     return button
   }
@@ -622,7 +649,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func addStatus(_ title: String, value: String, subtitle: String? = nil, to stack: NSStackView) {
-    let state = label("● " + value)
+    let state = label("● " + telaText(value))
     state.font = .systemFont(ofSize: TelaStyle.captionSize, weight: .medium)
     state.textColor = value == "Needs attention" || value == "Unavailable" ? .systemOrange : .secondaryLabelColor
     row(title, subtitle: subtitle, control: state, in: stack)
@@ -770,7 +797,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         toggle.action = #selector(toggleProfile(_:))
         toggle.tag = profile.slot
         toggle.isEnabled = workInventory.error == nil && !operationInProgress && profile.connectionInProgress != true
-        toggle.setAccessibilityLabel("Connect \(profile.targetDisplayName) to Tela")
+        toggle.setAccessibilityLabel(String(format: telaText("Connect %@ to Tela"), profile.targetDisplayName))
         let connectionControls = NSStackView()
         connectionControls.orientation = .horizontal
         connectionControls.spacing = 8
@@ -794,7 +821,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           progress.style = .spinning
           progress.controlSize = .small
           progress.isIndeterminate = true
-          progress.setAccessibilityLabel("Checking Web connection")
+          progress.setAccessibilityLabel(telaText("Checking Web connection"))
           controls.addArrangedSubview(progress)
           progress.startAnimation(nil)
         }
@@ -955,18 +982,32 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       let interact = actionButton("Interact…", action: #selector(interactBridgeSurface))
       interact.isEnabled = selectedBridgeSurface != nil
       actions.addArrangedSubview(interact)
-      interact.toolTip = "Allow input in the browser. Changing chats can interrupt the task."
+      interact.toolTip = telaText("Allow input in the browser. Changing chats can interrupt the task.")
       previewPane.addArrangedSubview(actions)
       actions.bottomAnchor.constraint(equalTo: previewPane.bottomAnchor).isActive = true
       stack.addArrangedSubview(actionButton("Refresh status", action: #selector(refreshPage)))
     case .settings:
       pageHeader("")
+      let language = card("Appearance")
+      let languagePicker = NSPopUpButton()
+      for (value, title) in [(TelaUILanguage.english, "English"),
+                             (.korean, "한국어"), (.system, "Follow system language")] {
+        languagePicker.addItem(withTitle: telaText(title))
+        languagePicker.lastItem?.representedObject = value.rawValue
+      }
+      let selectedLanguage = telaUILanguage()
+      languagePicker.selectItem(at: TelaUILanguage.allCases.firstIndex(of: selectedLanguage) ?? 0)
+      languagePicker.target = self
+      languagePicker.action = #selector(changeUILanguage(_:))
+      languagePicker.isEnabled = !preferenceError
+      row("Language", subtitle: "Changes only the Tela app interface.", control: languagePicker, in: language)
+      if let languageMessage { append(secondary(languageMessage), to: language) }
       addLocalChatPluginSetup()
       let diagnostics = card("Detailed diagnostics")
       append(secondary("Includes conversation text, file paths, and screenshots. Stored on this Mac for up to 7 days / 64 MB."), to: diagnostics)
       let capturePicker = NSPopUpButton()
       for (value, title) in [("off", "Off"), ("15", "15 minutes"), ("until-disabled", "Until turned off")] {
-        capturePicker.addItem(withTitle: title)
+        capturePicker.addItem(withTitle: telaText(title))
         capturePicker.lastItem?.representedObject = value
       }
       capturePicker.selectItem(at: diagnosticCaptureStatus?.mode == "until-disabled" ? 2 : diagnosticCaptureStatus?.enabled == true ? 1 : 0)
@@ -974,7 +1015,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       capturePicker.action = #selector(changeDiagnosticCapture(_:))
       capturePicker.isEnabled = !operationInProgress && installedServiceControlsAvailable() && diagnosticCaptureStatus != nil
       row("Capture", subtitle: diagnosticCaptureStatus == nil ? "Status unavailable" :
-          diagnosticCaptureStatus?.mode == "timed" ? "Expires in about \(diagnosticCaptureStatus?.minutesRemaining ?? 0) min" : nil,
+          diagnosticCaptureStatus?.mode == "timed"
+            ? String(format: telaText("Expires in about %d min"), diagnosticCaptureStatus?.minutesRemaining ?? 0) : nil,
           control: capturePicker, in: diagnostics)
       if !diagnosticCaptureMessage.isEmpty { append(secondary(diagnosticCaptureMessage), to: diagnostics) }
       let folders = card("Chat · Local folders")
@@ -1002,7 +1044,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       approval.action = #selector(toggleApproval(_:))
       approval.state = approvalAutomation == "off" ? .off : .on
       approval.isEnabled = !preferenceError
-      approval.setAccessibilityLabel("Full access approval")
+      approval.setAccessibilityLabel(telaText("Full access approval"))
       row("Full access approval", subtitle: "Allow for this conversation when available; otherwise allow once.",
         control: approval, in: approvals)
       divider(in: approvals)
@@ -1013,7 +1055,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       ]
       let delayPicker = NSPopUpButton()
       for (preset, title) in delays {
-        delayPicker.addItem(withTitle: title)
+        delayPicker.addItem(withTitle: telaText(title))
         delayPicker.lastItem?.representedObject = preset
       }
       delayPicker.selectItem(at: delays.firstIndex(where: { $0.0 == approvalDelay }) ?? 0)
@@ -1038,9 +1080,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       let check = actionButton(updater?.recoveredPendingUpdate == true ? "Review Update…" : "Check for Updates…", action: #selector(checkForUpdates))
       check.isEnabled = updater?.canCheck == true && !operationInProgress
       let installed = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
-      row(updater?.preparationStatus ?? updater?.availableVersion.map { "Version \($0) available" } ?? "ChatGPT Tela",
-          subtitle: updater?.problem ?? "Installed: \(installed)", control: check, in: updates)
-      let automatic = NSButton(checkboxWithTitle: "Automatically check for updates", target: self, action: #selector(setAutomaticUpdateChecks(_:)))
+      row(updater?.preparationStatus ?? updater?.availableVersion.map { String(format: telaText("Version %@ available"), $0) } ?? "ChatGPT Tela",
+          subtitle: updater?.problem ?? String(format: telaText("Installed: %@"), installed), control: check, in: updates)
+      let automatic = NSButton(checkboxWithTitle: telaText("Automatically check for updates"), target: self, action: #selector(setAutomaticUpdateChecks(_:)))
       automatic.state = updater?.automaticallyChecksForUpdates == true ? .on : .off
       updates.addArrangedSubview(automatic)
       let maintain = actionButton("Manage…", action: #selector(openMaintenance))
@@ -1068,10 +1110,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           let value = sender.selectedItem?.representedObject as? String else { return }
     if value != "off" {
       let alert = NSAlert()
-      alert.messageText = "Enable detailed diagnostics?"
-      alert.informativeText = "Save conversation text, file paths, and screenshots on this Mac for up to 7 days / 64 MB."
-      alert.addButton(withTitle: "Enable")
-      alert.addButton(withTitle: "Cancel")
+      alert.messageText = telaText("Enable detailed diagnostics?")
+      alert.informativeText = telaText("Save conversation text, file paths, and screenshots on this Mac for up to 7 days / 64 MB.")
+      alert.addButton(withTitle: telaText("Enable"))
+      alert.addButton(withTitle: telaText("Cancel"))
       if alert.runModal() != .alertFirstButtonReturn { renderCurrentPage(); return }
     }
     let args = value == "until-disabled" ? ["diagnostics", "capture", "--mode", "until-disabled"]
@@ -1101,7 +1143,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     guard installedServiceControlsAvailable() else { return }
     let local = card("Chat on This Mac")
     let chatReady = serviceStates["chat"] == "Ready"
-    append(secondary("Tela Chat: \(TelaLocalChatPresentation(serviceState: serviceStates["chat"] ?? "Checking…").status)"), to: local)
+    append(secondary(String(format: telaText("Tela Chat: %@"),
+      telaText(TelaLocalChatPresentation(serviceState: serviceStates["chat"] ?? "Checking…").status))), to: local)
     if !chatReady {
       let start = actionButton("Start Tela Chat", action: #selector(startLocalChat))
       start.isEnabled = !operationInProgress
@@ -1166,23 +1209,23 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   @objc private func chooseChatFolder() {
     guard !operationInProgress else { return }
     let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false
-    panel.message = "Approve this folder and its subfolders for reading and editing through Tela Chat."
+    panel.message = telaText("Approve this folder and its subfolders for reading and editing through Tela Chat.")
     guard panel.runModal() == .OK, let path = panel.url?.path else { return }
     changeChatFolders(["chat","allow-root","--path",path])
   }
   @objc private func removeChatFolder(_ sender: NSButton) {
     guard !operationInProgress, chatFolders.indices.contains(sender.tag) else { return }
-    let alert = NSAlert(); alert.messageText = "Remove Chat access to this folder?"
-    alert.informativeText = "Apply Chat settings to remove access. Parent-folder permissions still apply."
-    alert.addButton(withTitle:"Remove access"); alert.addButton(withTitle:"Cancel")
+    let alert = NSAlert(); alert.messageText = telaText("Remove Chat access to this folder?")
+    alert.informativeText = telaText("Apply Chat settings to remove access. Parent-folder permissions still apply.")
+    alert.addButton(withTitle:telaText("Remove access")); alert.addButton(withTitle:telaText("Cancel"))
     guard alert.runModal() == .alertFirstButtonReturn else { return }
     changeChatFolders(["chat","disallow-root","--path",chatFolders[sender.tag]])
   }
   @objc private func applyChatFolders() {
     guard !operationInProgress else { return }
-    let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "Apply Chat folder access?"
-    alert.informativeText = "Tela Chat will restart. Running Chat commands will stop."
-    alert.addButton(withTitle:"Apply settings"); alert.addButton(withTitle:"Cancel")
+    let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = telaText("Apply Chat folder access?")
+    alert.informativeText = telaText("Tela Chat will restart. Running Chat commands will stop.")
+    alert.addButton(withTitle:telaText("Apply settings")); alert.addButton(withTitle:telaText("Cancel"))
     guard alert.runModal() == .alertFirstButtonReturn else { return }
     changeChatFolders(["services","restart","chat"])
   }
@@ -1223,14 +1266,14 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       launchingMaintenance = false; renderCurrentPage()
       if result.0 != 0 {
         if !arguments.isEmpty {
-          let alert = NSAlert(); alert.messageText = "Couldn't open the update"
-          alert.informativeText = "Choose the package again or prepare a new update. Nothing was installed."
-          alert.addButton(withTitle: "OK"); alert.runModal()
+          let alert = NSAlert(); alert.messageText = telaText("Couldn't open the update")
+          alert.informativeText = telaText("Choose the package again or prepare a new update. Nothing was installed.")
+          alert.addButton(withTitle: telaText("OK")); alert.runModal()
           return
         }
-        let alert = NSAlert(); alert.messageText = "Couldn't open Tela maintenance"
-        alert.informativeText = "This package may need updating, or its installed files couldn't be verified. Use a trusted extracted package for repair."
-        alert.addButton(withTitle: "Choose repair package…"); alert.addButton(withTitle: "Cancel")
+        let alert = NSAlert(); alert.messageText = telaText("Couldn't open Tela maintenance")
+        alert.informativeText = telaText("This package may need updating, or its installed files couldn't be verified. Use a trusted extracted package for repair.")
+        alert.addButton(withTitle: telaText("Choose repair package…")); alert.addButton(withTitle: telaText("Cancel"))
         if alert.runModal() == .alertFirstButtonReturn { openMaintenanceFromRepairPackage(launcher) }
       }
     }
@@ -1238,16 +1281,16 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func openMaintenanceFromRepairPackage(_ launcher: String) {
     let package = NSOpenPanel(); package.canChooseFiles = true; package.canChooseDirectories = false; package.allowedContentTypes = [.applicationBundle]
-    package.allowsMultipleSelection = false; package.message = "Select a Tela app matching the installed version."
+    package.allowsMultipleSelection = false; package.message = telaText("Select a Tela app matching the installed version.")
     guard package.runModal() == .OK, let source = package.url else { return }
     launchingMaintenance = true; renderCurrentPage()
     Task {
       let result = await Task.detached { Self.runLauncher(launcher, arguments: ["maintenance-open", "--payload", source.path]) }.value
       launchingMaintenance = false; renderCurrentPage()
       if result.0 != 0 {
-        let alert = NSAlert(); alert.messageText = "Couldn't verify the repair package"
-        alert.informativeText = "Check its version and source. If Tela's launcher is missing too, use a separately extracted trusted installer. No changes were applied."
-        alert.addButton(withTitle: "OK"); alert.runModal()
+        let alert = NSAlert(); alert.messageText = telaText("Couldn't verify the repair package")
+        alert.informativeText = telaText("Check its version and source. If Tela's launcher is missing too, use a separately extracted trusted installer. No changes were applied.")
+        alert.addButton(withTitle: telaText("OK")); alert.runModal()
       }
     }
   }
@@ -1477,8 +1520,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       alert.informativeText = chatOnly
         ? "Running Chat commands will stop. Work connections will stay open."
         : "Chat and Web models will disconnect. Finish any work before continuing."
-      alert.addButton(withTitle: "Stop")
-      alert.addButton(withTitle: "Cancel")
+      alert.addButton(withTitle: telaText("Stop"))
+      alert.addButton(withTitle: telaText("Cancel"))
       guard alert.runModal() == .alertFirstButtonReturn else { return }
     }
     changingServices = true
@@ -1500,9 +1543,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       serviceAction = nil
       if !success {
         let alert = NSAlert()
-        alert.messageText = "Some background services couldn't be changed"
-        alert.informativeText = "Refresh connection details to check their current state."
-        alert.addButton(withTitle: "OK")
+        alert.messageText = telaText("Some background services couldn't be changed")
+        alert.informativeText = telaText("Refresh connection details to check their current state.")
+        alert.addButton(withTitle: telaText("OK"))
         alert.runModal()
       }
       await refreshCurrentPage()
@@ -1597,10 +1640,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   @objc private func toggleApproval(_ sender: NSSwitch) {
     do {
-      var preferences = try TelaPreferencesStore.read(at: preferencesURL)
-      preferences.approvalAutomation = sender.state == .on ? "full_access" : "off"
-      try TelaPreferencesStore.write(preferences, at: preferencesURL)
-      approvalAutomation = preferences.approvalAutomation
+      let selection = sender.state == .on ? "full_access" : "off"
+      try telaWritePreference("approvalAutomation", value: selection, at: preferencesURL)
+      approvalAutomation = selection
       preferenceError = false
       onPreferencesChanged?()
       renderCurrentPage()
@@ -1614,9 +1656,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     guard let preset = sender.selectedItem?.representedObject as? String,
           TelaPreferencesStore.delays.contains(preset) else { return }
     do {
-      var preferences = try TelaPreferencesStore.read(at: preferencesURL)
-      preferences.approvalDelay = preset
-      try TelaPreferencesStore.write(preferences, at: preferencesURL)
+      try telaWritePreference("approvalDelay", value: preset, at: preferencesURL)
       approvalDelay = preset
       preferenceError = false
       onPreferencesChanged?()
@@ -1640,11 +1680,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   private func setConnectionWanted(_ profile: TelaWorkProfile, enabled: Bool) throws {
     guard let target = profile.targetId else { throw NSError(domain: "TelaConnection", code: 1) }
-    var preferences = try TelaPreferencesStore.read(at: preferencesURL)
+    let preferences = try TelaPreferencesStore.read(at: preferencesURL)
     var wanted = Set(preferences.workProfileConnections ?? [])
     if enabled { wanted.insert(target) } else { wanted.remove(target) }
-    preferences.workProfileConnections = wanted.sorted()
-    try TelaPreferencesStore.write(preferences, at: preferencesURL)
+    try telaWritePreference("workProfileConnections", value: wanted.sorted(), at: preferencesURL)
   }
 
   private func toggleConnection(slot: Int) {
@@ -1750,7 +1789,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           : "ChatGPT will close. Finish any work before continuing."
       alert.addButton(withTitle: action == "restart" ? "Reopen with Tela"
         : profile.targetSessionState == "independent" ? "Turn Off Web Models" : "Turn Off and Close")
-      alert.addButton(withTitle: "Cancel")
+      alert.addButton(withTitle: telaText("Cancel"))
       let decision = action == "restart" ? "web_reopen" : "web_disconnect"
       let decisionId = UUID().uuidString
       onDecisionStateChanged?("decision_\(decision)_pending", slot, decisionId)
@@ -1956,6 +1995,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     if let preferences = try? TelaPreferencesStore.read(at: preferencesURL) {
       approvalAutomation = preferences.approvalAutomation
       approvalDelay = preferences.approvalDelay ?? "instant"
+      telaReloadUILanguage(at: preferencesURL)
       preferenceError = false
     } else {
       preferenceError = true

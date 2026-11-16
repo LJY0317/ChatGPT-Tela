@@ -38,6 +38,9 @@ export function assembleMacApplication(input: {
   if (existsSync(join(root, "ui/ChatGPT Tela.app/Contents/Frameworks/Sparkle.framework"))) {
     move("ui/ChatGPT Tela.app/Contents/Frameworks/Sparkle.framework", "Contents/Frameworks/Sparkle.framework");
   }
+  if (existsSync(join(root, "ui/ChatGPT Tela.app/Contents/Resources/TelaLocalizations.bundle"))) {
+    move("ui/ChatGPT Tela.app/Contents/Resources/TelaLocalizations.bundle", "Contents/Resources/TelaLocalizations.bundle");
+  }
   move("runtime", "Contents/Resources/runtime");
   if (existsSync(join(root, "third-party-notices"))) {
     move("third-party-notices", "Contents/Resources/ThirdPartyNotices");

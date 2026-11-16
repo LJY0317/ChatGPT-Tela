@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { assembleMacApplication } from "./mac-application";
 import { buildPackagedPayload } from "./packaged-build";
 import { createPackagedInstallBlueprint } from "./packaged-install";
@@ -27,6 +27,7 @@ function fixture(root: string) {
   }
   writeFileSync(join(input, "profile-runtime.cjs"), "module.exports = {};\n");
   writeFileSync(join(input, "menu-bar"), "menu-bar\n", { mode: 0o755 });
+  writeFileSync(join(input, "maintenance"), "maintenance\n", { mode: 0o755 });
   writeFileSync(join(input, "electron", "bin", "electron"), "electron\n", { mode: 0o755 });
   return input;
 }
@@ -114,7 +115,7 @@ describe("packaged payload builder", () => {
           arguments: shared ? ["--tela-daemon", service] : [],
         }])) as Record<"gateway" | "chat" | "codex", { executableSourcePath: string; arguments: string[] }>,
         profileRuntime: { electronBundleSourcePath: join(input, "electron"), electronExecutableRelativePath: "Electron.app/Contents/MacOS/Electron", entrypointSourcePath: join(input, "profile-runtime.cjs") },
-        menuBarSourcePath: join(input, "menu-bar"), workspaceFilesSourcePath: join(input, "chat") });
+        menuBarSourcePath: join(input, "menu-bar"), menuBarLocalizationSourcePath: resolve("apps/menu-bar-macos/TelaLocalizations.bundle"), maintenanceUISourcePath: join(input, "maintenance"), workspaceFilesSourcePath: join(input, "chat") });
       const options = { payloadPath: output, buildVersion: "123", feedURL: "https://example.com/updates.xml", publicKey: Buffer.alloc(32).toString("base64"), finalizeBundle: () => {} };
       writeFileSync(join(output, ".chatgpt-tela-owner.json"), "owned");
       expect(() => assembleMacApplication(options)).toThrow("installed payload");
@@ -138,6 +139,9 @@ describe("packaged payload builder", () => {
       }
       expect(readFileSync(join(output, "Contents/Info.plist"), "utf8")).toContain("<key>CFBundleVersion</key><string>123</string>");
       expect(readFileSync(join(output, "Contents/Info.plist"), "utf8")).toContain("<key>LSMinimumSystemVersion</key><string>13.0</string>");
+      const translated = readFileSync(join(output, "Contents/Resources/TelaLocalizations.bundle/ko.lproj/Localizable.strings"), "utf8");
+      expect(translated).toContain('"Language" = "언어";');
+      expect(readFileSync(join(output, "Contents/Helpers/Tela Maintenance.app/Contents/Resources/TelaLocalizations.bundle/ko.lproj/Localizable.strings"), "utf8")).toBe(translated);
       expect(packagedPayloadFingerprint(output)).toBe(result.payloadFingerprint);
       expect(readdirSync(output)).toEqual(["Contents"]);
       expect(readFileSync(join(output, "Contents/Resources/ThirdPartyNotices/Electron.txt"), "utf8")).toBe("electron notice");

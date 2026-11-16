@@ -23,6 +23,9 @@ if (testMode) {
     "--package-path", resolve(repoRoot, "apps/menu-bar-macos"), "-c", "release"], { cwd: repoRoot, stdio: "inherit" });
   copyFileSync(resolve(repoRoot, "apps/menu-bar-macos/.build/release/ChatGPTTela"), output);
   copyFileSync(resolve(repoRoot, "apps/menu-bar-macos/.build/release/TelaMaintenance"), resolve(dirname(output), "chatgpt-tela-maintenance"));
+  const localization = resolve(dirname(output), "TelaLocalizations.bundle");
+  rmSync(localization, { recursive: true, force: true });
+  cpSync(resolve(repoRoot, "apps/menu-bar-macos/TelaLocalizations.bundle"), localization, { recursive: true });
   const framework = resolve(dirname(output), "Sparkle.framework");
   rmSync(framework, { recursive: true, force: true });
   cpSync(resolve(repoRoot, "apps/menu-bar-macos/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"), framework,

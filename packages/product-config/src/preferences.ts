@@ -12,6 +12,8 @@ import { resolveProductPaths, type ProductPathOptions } from "@chatgpt-tela/prod
 
 export type ProductApprovalAutomationMode = "off" | "full_access";
 export type ProductApprovalDelayPreset = "instant" | "250ms" | "500ms" | "1s" | "2s" | "5s" | "10s" | "15s";
+/** App-owned interface language. An absent value retains the original English UI. */
+export type ProductUILanguage = "en" | "ko" | "system";
 
 const APPROVAL_DELAY_MS: Readonly<Record<ProductApprovalDelayPreset, number>> = Object.freeze({
   instant: 0,
@@ -28,6 +30,7 @@ export interface ProductPreferences {
   readonly version: 1;
   readonly approvalAutomation: ProductApprovalAutomationMode;
   readonly approvalDelay?: ProductApprovalDelayPreset;
+  readonly uiLanguage?: ProductUILanguage;
   /** Target identities chosen by the user; never evidence of live route ownership. */
   readonly workProfileConnections?: readonly string[];
   /** Explicit owner-only acceptance window; never enables saved Web chats by default. */
@@ -62,6 +65,10 @@ export function parseProductPreferences(value: unknown): ProductPreferences {
   if (typeof approvalDelay !== "string" || !Object.hasOwn(APPROVAL_DELAY_MS, approvalDelay)) {
     throw new Error("ChatGPT Tela approval delay preset is invalid");
   }
+  const uiLanguage = item.uiLanguage;
+  if (uiLanguage !== undefined && uiLanguage !== "en" && uiLanguage !== "ko" && uiLanguage !== "system") {
+    throw new Error("ChatGPT Tela interface language is invalid");
+  }
   const connections = item.workProfileConnections;
   if (connections !== undefined && (!Array.isArray(connections) || connections.length > 32
     || connections.some(id => typeof id !== "string" || !/^[a-zA-Z0-9._-]{1,160}$/.test(id))
@@ -82,6 +89,7 @@ export function parseProductPreferences(value: unknown): ProductPreferences {
     version: 1,
     approvalAutomation,
     approvalDelay: approvalDelay as ProductApprovalDelayPreset,
+    ...(uiLanguage === undefined ? {} : { uiLanguage: uiLanguage as ProductUILanguage }),
     ...(connections === undefined ? {} : { workProfileConnections: Object.freeze([...connections as string[]]) }),
     ...(acceptance === undefined ? {} : { savedChatAcceptance: Object.freeze({
       slot: (acceptance as { slot: number }).slot,
