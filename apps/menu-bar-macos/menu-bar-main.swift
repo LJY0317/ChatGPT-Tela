@@ -59,7 +59,6 @@ enum TelaPreferencesStore {
 }
 
 private struct MenuSnapshot {
-  let services: [(String, String)]
   let localChatState: String
   let start: TelaStartPresentation
   let workInventory: TelaWorkInventory
@@ -261,9 +260,10 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private func updateConnectionProgress(_ message: String?) {
     connectionProgress = message
     guard let button = statusItem.button else { return }
-    let visibleProgress = updater.preparationStatus ?? message ?? (workInventory.error == nil && workInventory.profiles.contains { $0.connectionInProgress == true || ($0.connected && $0.webState == "preparing") } ? "Connecting ChatGPT…" : nil)
+    let visibleProgress = updater.preparationStatus ?? message ?? (workInventory.error == nil && workInventory.profiles.contains { $0.connectionInProgress == true || ($0.connected && $0.webState == "preparing") } ? telaText("Connecting ChatGPT…") : nil)
     button.toolTip = visibleProgress ?? "ChatGPT Tela"
-    button.setAccessibilityLabel(visibleProgress.map { "Tela: \($0)" } ?? (updater.availableVersion == nil ? "ChatGPT Tela" : "ChatGPT Tela, update available"))
+    button.setAccessibilityLabel(visibleProgress.map { String(format: telaText("Tela: %@"), $0) }
+      ?? (updater.availableVersion == nil ? "ChatGPT Tela" : telaText("ChatGPT Tela, update available")))
     if visibleProgress != nil {
       if connectionSpinner == nil {
         let spinner = NSProgressIndicator()
@@ -308,7 +308,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         let presentation = TelaProfilePresentation(profile: profile, inventoryError: workInventory.error,
           localProgress: controlCenter.connectionProgressSlot == slot ? connectionProgress : nil)
         let connection = controlCenter.webConnectionPresentation(for: profile)
-        let state = workInventory.error != nil ? "Status unavailable" : presentation.busy ? "Connecting…" : connection.menuStatus
+        let state = workInventory.error != nil ? telaText("Status unavailable") : presentation.busy ? telaText("Connecting…") : connection.menuStatus
         item.title = "\(profile.targetDisplayName) — \(state)"
         item.state = connection.enabled ? .on : .off
         profileToggleRows[slot]?.update(title: item.title,
@@ -376,11 +376,11 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       pendingLaunchPids.remove(pid)
       showingLaunchNotice = true
       let alert = NSAlert()
-      alert.messageText = "Reopen \(profile.targetDisplayName)?"
-      alert.informativeText = "Reopen with Tela to enable Web models.\nFinish any ongoing work first."
+      alert.messageText = String(format: telaText("Reopen %@?"), profile.targetDisplayName)
+      alert.informativeText = telaText("Reopen with Tela to enable Web models.\nFinish any ongoing work first.")
       alert.icon = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
-      alert.addButton(withTitle: "Reopen with Tela")
-      alert.addButton(withTitle: "Later").keyEquivalent = "\u{1b}"
+      alert.addButton(withTitle: telaText("Reopen with Tela"))
+      alert.addButton(withTitle: telaText("Later")).keyEquivalent = "\u{1b}"
       // A modeless window bypasses NSAlert's usual presentation-time layout.
       alert.layout()
       alert.window.level = .floating
@@ -522,9 +522,6 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     let chatState = await chat
     let codexState = await codex
     return MenuSnapshot(
-      services: [
-        ("Chat", TelaLocalChatPresentation(serviceState: chatState).status)
-      ],
       localChatState: chatState,
       start: TelaStartPresentation(webConfigured: controlCenter.webSetupConfigured,
         chatReady: chatState == "Ready", gatewayReady: gatewayState == "Ready", codexReady: codexState == "Ready"),
@@ -571,22 +568,17 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     profileToggleRows.removeAll()
     profileConnectionItems.removeAll(); profileOpenItems.removeAll()
     menu.removeAllItems()
-    let computers = NSMenuItem(title: "This Mac", action: nil, keyEquivalent: "")
-    let computerMenu = NSMenu(title: "This Mac")
-    addDisabled("Local Chat: \(snapshot?.localChatState ?? "Not checked")", to: computerMenu)
-    addDisabled("ChatGPT execution: Not verified", to: computerMenu)
-    computerMenu.items.last?.toolTip = "Local service status does not identify where a ChatGPT conversation executes."
+    let computers = NSMenuItem(title: telaText("This Mac"), action: nil, keyEquivalent: "")
+    let computerMenu = NSMenu(title: telaText("This Mac"))
+    let localChat = snapshot.map { TelaLocalChatPresentation(serviceState: $0.localChatState).status } ?? telaText("Not checked")
+    addDisabled(String(format: telaText("Local Chat: %@"), localChat), to: computerMenu)
     computers.submenu = computerMenu
     menu.addItem(computers)
     menu.addItem(.separator())
     if let connectionProgress {
       addDisabled(connectionProgress, to: menu)
     } else if loading || snapshot == nil {
-      addDisabled("Checking status…", to: menu)
-    } else if let snapshot {
-      for (name, state) in snapshot.services {
-        addDisabled("\(name): \(state)", to: menu)
-      }
+      addDisabled(telaText("Checking status…"), to: menu)
     }
     if let snapshot {
       if snapshot.start.shouldOfferStart {
@@ -644,15 +636,15 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
         item.isEnabled = false
         menu.addItem(item)
       } else {
-        let item = actionItem(updater.recoveredPendingUpdate ? "Review Update…" : "Check for Updates…", action: #selector(openUpdates))
+        let item = actionItem(updater.recoveredPendingUpdate ? telaText("Review Update…") : telaText("Check for Updates…"), action: #selector(openUpdates))
         item.isEnabled = updater.canCheck
         if #available(macOS 14.4, *), let problem = updater.problem { item.subtitle = problem }
         menu.addItem(item)
       }
     }
     menu.addItem(.separator())
-    menu.addItem(actionItem("Open Tela…", action: #selector(openControlCenter), keyEquivalent: "o"))
-    menu.addItem(actionItem("Quit Tela Menu", action: #selector(quitMenuBar), keyEquivalent: "q"))
+    menu.addItem(actionItem(telaText("Open Tela…"), action: #selector(openControlCenter), keyEquivalent: "o"))
+    menu.addItem(actionItem(telaText("Quit Tela Menu"), action: #selector(quitMenuBar), keyEquivalent: "q"))
     updateProfileProgress()
   }
 
@@ -683,7 +675,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   }
 
   private func addProfileOpen(_ slot: Int, name: String, to menu: NSMenu) {
-    let item = actionItem("Open \(name)", action: #selector(openWorkProfile(_:)))
+    let item = actionItem(String(format: telaText("Open %@"), name), action: #selector(openWorkProfile(_:)))
     item.tag = slot
     item.isEnabled = workInventory.profiles.first(where: { $0.slot == slot })?.connected == true
       || !controlCenter.connectionOperationInProgress

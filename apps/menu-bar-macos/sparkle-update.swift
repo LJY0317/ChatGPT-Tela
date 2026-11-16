@@ -136,7 +136,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       reopenDesktop(profile) { [weak self] error in
         guard error != nil else { return }
         Task { @MainActor in
-          self?.problem = "Couldn't reopen ChatGPT. Open it from Applications."
+          self?.problem = telaText("Couldn't reopen ChatGPT. Open it from Applications.")
           self?.changed?()
         }
       }
@@ -158,24 +158,24 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     set { controller.updater.automaticallyChecksForUpdates = newValue }
   }
 
-  var preparationStatus: String? { idleObservation != nil ? "Waiting to update…" : preparingTermination ? "Preparing update…" : nil }
+  var preparationStatus: String? { idleObservation != nil ? telaText("Waiting to update…") : preparingTermination ? telaText("Preparing update…") : nil }
   var canCheck: Bool { !preparingTermination && idleObservation == nil && (controller.updater.canCheckForUpdates || controller.updater.sessionInProgress) }
   func checkForUpdates(_ sender: Any?) { controller.checkForUpdates(sender) }
 
   private static func makePreparationWindow(waiting: Bool = false) -> NSPanel {
     let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 110),
                         styleMask: [.titled], backing: .buffered, defer: false)
-    panel.title = "Updating Tela"
+    panel.title = telaText("Updating Tela")
     panel.isReleasedWhenClosed = false
     let progress = NSProgressIndicator()
     progress.style = .spinning
     progress.isIndeterminate = true
     progress.controlSize = .small
     progress.sizeToFit()
-    progress.setAccessibilityLabel(waiting ? "Waiting to update" : "Preparing update")
-    let title = NSTextField(labelWithString: waiting ? "Waiting to update…" : "Preparing update…")
+    progress.setAccessibilityLabel(waiting ? telaText("Waiting to update") : telaText("Preparing update"))
+    let title = NSTextField(labelWithString: waiting ? telaText("Waiting to update…") : telaText("Preparing update…"))
     title.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-    let detail = NSTextField(labelWithString: waiting ? "Waiting for Tela services to be ready." : "Tela will restart automatically.")
+    let detail = NSTextField(labelWithString: waiting ? telaText("Waiting for Tela services to be ready.") : telaText("Tela will restart automatically."))
     detail.textColor = .secondaryLabelColor
     let text = NSStackView(views: [title, detail])
     text.orientation = .vertical
@@ -199,12 +199,12 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       try controller.updater.start()
       if result.ready { restoreDesktopApps() }
       recoveredPendingUpdate = !result.ready && result.prepared
-      problem = recoveredPendingUpdate ? "An update is prepared. Review it in Sparkle to see whether it can continue." : result.ready ? nil : "Finish the pending update to restart Tela."
+      problem = recoveredPendingUpdate ? telaText("An update is prepared. Review it in Sparkle to see whether it can continue.") : result.ready ? nil : telaText("Finish the pending update to restart Tela.")
       if recoveredPendingUpdate { NSLog("Tela update startup found a prepared Sparkle handoff; awaiting a new user-initiated update session") }
       changed?()
       return result.ready && !result.restored
     } catch {
-      problem = "Tela recovery needs attention before updating."
+      problem = telaText("Tela recovery needs attention before updating.")
       changed?()
       return false
     }
@@ -243,10 +243,10 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
           if let error = failure as NSError?, error.domain == "TelaUpdateBusy", !arguments.contains("--interrupt-work") {
             self.preparationWindow?.orderOut(nil)
             let alert = NSAlert()
-            alert.messageText = "Close ChatGPT and update?"
-            alert.informativeText = "Finish any work before continuing."
-            alert.addButton(withTitle: "Close and Update")
-            alert.addButton(withTitle: "Later")
+            alert.messageText = telaText("Close ChatGPT and update?")
+            alert.informativeText = telaText("Finish any work before continuing.")
+            alert.addButton(withTitle: telaText("Close and Update"))
+            alert.addButton(withTitle: telaText("Later"))
             if alert.runModal() == .alertFirstButtonReturn {
               self.preparationWindow?.makeKeyAndOrderFront(nil)
               self.prepareTermination(arguments + ["--interrupt-work"], app: app, started: started)
@@ -264,9 +264,9 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
           self.changed?()
           if let error = failure, !(error is CancellationError) {
             let alert = NSAlert()
-            alert.messageText = "Update postponed"
+            alert.messageText = telaText("Update postponed")
             alert.informativeText = error.localizedDescription
-            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: telaText("OK"))
             alert.runModal()
           }
         }
@@ -301,15 +301,15 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     if let service = value?["blockedService"] as? String,
       let name = ["chat": "Tela Chat", "codex": "Work / Codex", "gateway": "Tela Gateway"][service] {
       let detail = value?["blockedReason"] as? String == "native_activity_unobservable"
-        ? "ChatGPT is open, but Tela cannot check whether its Native work is idle. This does not mean running work was detected."
-        : "\(name) is not ready for this update. Finish any work before continuing; ChatGPT may need to close."
+        ? telaText("ChatGPT is open, but Tela cannot check whether its Native work is idle. This does not mean running work was detected.")
+        : String(format: telaText("%@ is not ready for this update. Finish any work before continuing; ChatGPT may need to close."), name)
       throw NSError(domain: "TelaUpdateBusy", code: 1,
         userInfo: [NSLocalizedDescriptionKey: detail])
     }
     guard outcome.0 == 0, let value,
       value["ready"] as? Bool == true || value["prepared"] as? Bool == true else {
       throw NSError(domain: "TelaUpdate", code: 2,
-        userInfo: [NSLocalizedDescriptionKey: "Tela could not prepare its services for updating. Check service status and try again. Your conversations are kept."])
+        userInfo: [NSLocalizedDescriptionKey: telaText("Tela could not prepare its services for updating. Check service status and try again. Your conversations are kept.")])
     }
     return (value["ready"] as? Bool == true, value["restored"] as? Bool == true, value["prepared"] as? Bool == true)
   }
@@ -381,7 +381,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
         _ = try await lifecycle(["cancel"]); recoveredPendingUpdate = false
         if let build = abortedBuild { restoreDesktopApps(forBuild: build) }
       }
-      catch { problem = "Tela recovery needs attention before updating." }
+      catch { problem = telaText("Tela recovery needs attention before updating.") }
       changed?()
     }
   }

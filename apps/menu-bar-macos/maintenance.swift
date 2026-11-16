@@ -38,19 +38,19 @@ private struct TelaMaintenanceProcesses: Decodable { let processes: [TelaMainten
 @MainActor
 final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private var window: NSWindow!
-  private let version = NSTextField(labelWithString: "Checking installation…")
+  private let version = NSTextField(labelWithString: telaText("Checking installation…"))
   private let message = NSTextField(wrappingLabelWithString: "")
   private let nextStep = NSTextField(wrappingLabelWithString: "")
-  private let planText = NSTextField(wrappingLabelWithString: "Review an operation before applying it.")
-  private let packageLabel = NSTextField(labelWithString: "No package selected")
+  private let planText = NSTextField(wrappingLabelWithString: telaText("Review an operation before applying it."))
+  private let packageLabel = NSTextField(labelWithString: telaText("No package selected"))
   private let picker = NSPopUpButton()
-  private let pluginManagement = NSButton(title: "Open ChatGPT Plugins", target: nil, action: nil)
-  private let removeData = NSButton(checkboxWithTitle: "Also remove Tela settings, saved logins, and credentials", target: nil, action: nil)
-  private let reviewButton = NSButton(title: "Review changes", target: nil, action: nil)
-  private let applyButton = NSButton(title: "Apply…", target: nil, action: nil)
-  private let packageButton = NSButton(title: "Choose package…", target: nil, action: nil)
+  private let pluginManagement = NSButton(title: telaText("Open ChatGPT Plugins"), target: nil, action: nil)
+  private let removeData = NSButton(checkboxWithTitle: telaText("Also remove Tela settings, saved logins, and credentials"), target: nil, action: nil)
+  private let reviewButton = NSButton(title: telaText("Review changes"), target: nil, action: nil)
+  private let applyButton = NSButton(title: telaText("Apply…"), target: nil, action: nil)
+  private let packageButton = NSButton(title: telaText("Choose package…"), target: nil, action: nil)
   private let processPicker = NSPopUpButton()
-  private let cancelProcessButton = NSButton(title: "Cancel selected execution…", target: nil, action: nil)
+  private let cancelProcessButton = NSButton(title: telaText("Cancel selected execution…"), target: nil, action: nil)
   private let processInfo = NSTextField(wrappingLabelWithString: "")
   private var unresolvedProcesses: [TelaMaintenanceProcess] = []
   private let progress = NSProgressIndicator()
@@ -70,7 +70,7 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     NSApp.setActivationPolicy(.regular)
     window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 660),
       styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-    window.title = "Tela Maintenance"
+    window.title = telaText("Tela Maintenance")
     window.minSize = NSSize(width: 560, height: 520)
     window.delegate = self
     window.isReleasedWhenClosed = false
@@ -89,25 +89,25 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     document.addSubview(content)
     root.addSubview(scroll)
 
-    let title = NSTextField(labelWithString: "Repair or remove Tela")
+    let title = NSTextField(labelWithString: telaText("Repair or remove Tela"))
     title.font = .systemFont(ofSize: 22, weight: .semibold)
     version.font = .systemFont(ofSize: 12)
     version.textColor = .secondaryLabelColor
-    let intro = NSTextField(wrappingLabelWithString: "Review the changes before applying them. Your projects and original ChatGPT data are preserved.")
+    let intro = NSTextField(wrappingLabelWithString: telaText("Review the changes before applying them. Your projects and original ChatGPT data are preserved."))
     intro.textColor = .secondaryLabelColor
     let heading = NSStackView(views: [title, version, intro])
     heading.orientation = .vertical; heading.alignment = .leading; heading.spacing = 6
     content.addArrangedSubview(heading)
 
-    picker.addItems(withTitles: ["Repair this installation", "Remove Tela"])
+    picker.addItems(withTitles: [telaText("Repair this installation"), telaText("Remove Tela")])
     picker.target = self; picker.action = #selector(selectionChanged)
     for (button, selector) in [(packageButton, #selector(choosePackage)),
       (reviewButton, #selector(reviewChanges)), (applyButton, #selector(applyChanges))] {
       button.bezelStyle = .rounded; button.target = self; button.action = selector
     }
-    packageButton.setAccessibilityLabel("Choose Tela package")
+    packageButton.setAccessibilityLabel(telaText("Choose Tela package"))
     operationHelp.textColor = .secondaryLabelColor
-    let actionSection = section("Action", views: [picker, operationHelp])
+    let actionSection = section(telaText("Action"), views: [picker, operationHelp])
     content.addArrangedSubview(actionSection)
 
     for field in [packageLabel] {
@@ -116,25 +116,25 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       field.lineBreakMode = .byTruncatingMiddle
       field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
-    let trust = NSTextField(wrappingLabelWithString: "Choose a trusted Tela app matching the installed version.")
+    let trust = NSTextField(wrappingLabelWithString: telaText("Choose a trusted Tela app matching the installed version."))
     trust.font = .systemFont(ofSize: 12); trust.textColor = .secondaryLabelColor
-    configureSection(packageSection, title: "Package", views: [
-      selectionRow("Tela package", value: packageLabel, button: packageButton),
+    configureSection(packageSection, title: telaText("Package"), views: [
+      selectionRow(telaText("Tela package"), value: packageLabel, button: packageButton),
       trust,
     ])
     content.addArrangedSubview(packageSection)
     removeData.target = self; removeData.action = #selector(selectionChanged); removeData.state = .off
     pluginManagement.bezelStyle = .rounded
     pluginManagement.target = self; pluginManagement.action = #selector(openChatGPTPlugins)
-    let pluginHelp = NSTextField(wrappingLabelWithString: "Removing Tela from this computer does not remove its ChatGPT plugin. You can remove that separately in ChatGPT.")
+    let pluginHelp = NSTextField(wrappingLabelWithString: telaText("Removing Tela from this computer does not remove its ChatGPT plugin. You can remove that separately in ChatGPT."))
     pluginHelp.textColor = .secondaryLabelColor
-    configureSection(removalSection, title: "Removal", views: [removeData, pluginHelp, pluginManagement])
+    configureSection(removalSection, title: telaText("Removal"), views: [removeData, pluginHelp, pluginManagement])
     content.addArrangedSubview(removalSection)
     planText.font = .systemFont(ofSize: 13)
-    content.addArrangedSubview(section("Changes to review", views: [planText]))
+    content.addArrangedSubview(section(telaText("Changes to review"), views: [planText]))
     cancelProcessButton.target = self; cancelProcessButton.action = #selector(cancelSelectedProcess)
     processPicker.target = self
-    configureSection(processSection, title: "Running tasks", views: [processInfo, processPicker, cancelProcessButton])
+    configureSection(processSection, title: telaText("Running tasks"), views: [processInfo, processPicker, cancelProcessButton])
     content.addArrangedSubview(processSection)
 
     message.font = .systemFont(ofSize: 12); message.textColor = .secondaryLabelColor
@@ -202,7 +202,7 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     details.orientation = .vertical; details.alignment = .leading; details.spacing = 3
     details.setContentHuggingPriority(.defaultLow, for: .horizontal)
     value.widthAnchor.constraint(equalTo: details.widthAnchor).isActive = true
-    button.title = "Choose…"
+    button.title = telaText("Choose…")
     button.setContentHuggingPriority(.required, for: .horizontal)
     button.setContentCompressionResistancePriority(.required, for: .horizontal)
     let row = NSStackView(views: [details, button])
@@ -235,14 +235,14 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
   }
 
   private func updateControls() {
-    packageButton.title = "Choose…"
+    packageButton.title = telaText("Choose…")
     operationHelp.stringValue = operation == "repair"
-      ? "Choose a Tela app matching the installed version. Your settings and logins are kept."
-      : "Remove Tela and its background services. Your projects and original ChatGPT data are kept."
+      ? telaText("Choose a Tela app matching the installed version. Your settings and logins are kept.")
+      : telaText("Remove Tela and its background services. Your projects and original ChatGPT data are kept.")
     packageSection.isHidden = operation == "uninstall"
     removalSection.isHidden = operation != "uninstall"
-    applyButton.title = operation == "uninstall" ? "Remove Tela…" : "Repair Tela…"
-    reviewButton.title = "Review changes"
+    applyButton.title = operation == "uninstall" ? telaText("Remove Tela…") : telaText("Repair Tela…")
+    reviewButton.title = telaText("Review changes")
     window.defaultButtonCell = (review == nil ? reviewButton : applyButton).cell as? NSButtonCell
     picker.isEnabled = !busy && !completedRemoval
     packageButton.isEnabled = !busy && operation != "uninstall" && !completedRemoval
@@ -252,19 +252,19 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     processPicker.isEnabled = !busy && !unresolvedProcesses.isEmpty
     cancelProcessButton.isEnabled = !busy && !unresolvedProcesses.isEmpty
     if completedRemoval {
-      nextStep.stringValue = "If you also want to remove the ChatGPT plugin, open ChatGPT Plugins."
+      nextStep.stringValue = telaText("If you also want to remove the ChatGPT plugin, open ChatGPT Plugins.")
     } else if busy {
       nextStep.stringValue = ""
     } else if let review {
       nextStep.stringValue = review.blockers.isEmpty
-        ? "Check the changes above, then \(operation == "uninstall" ? "remove" : "repair") Tela."
-        : "Resolve the issues shown above, then review again."
+        ? (operation == "uninstall" ? telaText("Check the changes above, then remove Tela.") : telaText("Check the changes above, then repair Tela."))
+        : telaText("Resolve the issues shown above, then review again.")
     } else if operation == "uninstall" {
-      nextStep.stringValue = "Choose whether to keep your Tela data, then review the removal."
+      nextStep.stringValue = telaText("Choose whether to keep your Tela data, then review the removal.")
     } else if package == nil {
-      nextStep.stringValue = "Choose a package to begin."
+      nextStep.stringValue = telaText("Choose a package to begin.")
     } else {
-      nextStep.stringValue = "Ready to review. No changes will be made during review."
+      nextStep.stringValue = telaText("Ready to review. No changes will be made during review.")
     }
     nextStep.isHidden = nextStep.stringValue.isEmpty
     message.isHidden = message.stringValue.isEmpty
@@ -275,12 +275,12 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
   }
 
   @objc private func selectionChanged() {
-    review = nil; planText.stringValue = "Review changes before applying them."; message.stringValue = ""; updateControls()
+    review = nil; planText.stringValue = telaText("Review changes before applying them."); message.stringValue = ""; updateControls()
   }
   @objc private func choosePackage() {
     let panel = NSOpenPanel(); panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowedContentTypes = [.applicationBundle]
-    panel.allowsMultipleSelection = false; panel.message = "Select a Tela app matching the installed version."
-    if panel.runModal() == .OK { package = panel.url; packageLabel.stringValue = package?.lastPathComponent ?? "No package selected"; selectionChanged() }
+    panel.allowsMultipleSelection = false; panel.message = telaText("Select a Tela app matching the installed version.")
+    if panel.runModal() == .OK { package = panel.url; packageLabel.stringValue = package?.lastPathComponent ?? telaText("No package selected"); selectionChanged() }
   }
   private func arguments(_ mode: String) -> [String] {
     var result = ["maintenance", mode, operation]
@@ -301,17 +301,17 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
     let path = launcher
     let result = await Task.detached { Self.execute(path, ["maintenance", "status"]) }.value
     if result.0 == 0, let status = try? JSONDecoder().decode(TelaMaintenanceStatus.self, from: result.1) {
-      version.stringValue = "Installed: \(status.installedVersion)"
+      version.stringValue = String(format: telaText("Installed: %@"), status.installedVersion)
       if status.pendingTransition != "none" {
         let recovery = status.pendingTransition == "uninstall"
-          ? "An earlier removal is unfinished. Select Remove Tela and review the remaining changes to continue."
+          ? telaText("An earlier removal is unfinished. Select Remove Tela and review the remaining changes to continue.")
           : status.pendingTransition == "application-update"
-          ? "Finish the pending update in Tela before maintenance."
-          : "An earlier installation is unfinished. Use its original installer to finish recovery."
+          ? telaText("Finish the pending update in Tela before maintenance.")
+          : telaText("An earlier installation is unfinished. Use its original installer to finish recovery.")
         message.stringValue = preservingOutcome && !message.stringValue.isEmpty
           ? message.stringValue + "\n" + recovery : recovery
       }
-    } else { version.stringValue = "Installation status unavailable" }
+    } else { version.stringValue = telaText("Installation status unavailable") }
     updateControls()
   }
   @discardableResult
@@ -324,13 +324,13 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       processPicker.removeAllItems()
       for entry in unresolvedProcesses {
         let started = try? Date.ISO8601FormatStyle().parse(entry.startedAt)
-        let when = started.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? "Unknown start time"
-        processPicker.addItem(withTitle: "\(entry.workspaceName) · \(when) · task \(entry.sessionId)")
+        let when = started.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .short) } ?? telaText("Unknown start time")
+        processPicker.addItem(withTitle: String(format: telaText("%@ · %@ · task %@"), entry.workspaceName, when, String(entry.sessionId)))
       }
-      processInfo.stringValue = unresolvedProcesses.isEmpty ? "No unfinished Chat commands found. Review changes to check maintenance readiness." : "Wait for commands to finish, then choose Review changes again. To stop one, select it and choose Cancel selected execution."
+      processInfo.stringValue = unresolvedProcesses.isEmpty ? telaText("No unfinished Chat commands found. Review changes to check maintenance readiness.") : telaText("Wait for commands to finish, then choose Review changes again. To stop one, select it and choose Cancel selected execution.")
     } else {
       unresolvedProcesses = []; processPicker.removeAllItems()
-      processInfo.stringValue = "Couldn't verify Chat execution status. Choose Review changes to check maintenance readiness again."
+      processInfo.stringValue = telaText("Couldn't verify Chat execution status. Choose Review changes to check maintenance readiness again.")
     }
     updateControls()
     return observed != nil
@@ -340,9 +340,9 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       processPicker.indexOfSelectedItem < unresolvedProcesses.count else { return }
     let selected = unresolvedProcesses[processPicker.indexOfSelectedItem]
     let alert = NSAlert(); alert.alertStyle = .warning
-    alert.messageText = "Cancel task \(selected.sessionId) in \(selected.workspaceName)?"
-    alert.informativeText = "This command may still be running. Only the selected task will be cancelled. Maintenance remains blocked until the command's completion and service readiness are verified."
-    alert.addButton(withTitle: "Cancel execution"); alert.addButton(withTitle: "Keep running")
+    alert.messageText = String(format: telaText("Cancel task %@ in %@?"), String(selected.sessionId), selected.workspaceName)
+    alert.informativeText = telaText("This command may still be running. Only the selected task will be cancelled. Maintenance remains blocked until the command's completion and service readiness are verified.")
+    alert.addButton(withTitle: telaText("Cancel execution")); alert.addButton(withTitle: telaText("Keep running"))
     guard alert.runModal() == .alertFirstButtonReturn else { return }
     busy = true; updateControls()
     let path = launcher
@@ -353,17 +353,17 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       let statusVerified = await refreshProcesses()
       if result.0 == 0 && statusVerified {
         message.stringValue = unresolvedProcesses.contains(where: { $0.operationId == selected.operationId })
-          ? "Cancellation was requested, but completion is not yet confirmed. Review the status before updating."
-          : "The selected command is no longer unfinished. Review the update again to verify service readiness."
+          ? telaText("Cancellation was requested, but completion is not yet confirmed. Review the status before updating.")
+          : telaText("The selected command is no longer unfinished. Review the update again to verify service readiness.")
       } else {
-        message.stringValue = "Cancellation outcome is uncertain. Current status was checked where available; review it before another request."
+        message.stringValue = telaText("Cancellation outcome is uncertain. Current status was checked where available; review it before another request.")
       }
       updateControls()
     }
   }
   @objc private func reviewChanges() {
     guard !busy else { return }; busy = true; review = nil
-    message.stringValue = "Checking package, ownership, and planned changes…"; updateControls()
+    message.stringValue = telaText("Checking package, ownership, and planned changes…"); updateControls()
     let path = launcher, args = arguments("review")
     Task {
       let result = await Task.detached { Self.execute(path, args) }.value
@@ -374,11 +374,11 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
         let lines = observed.resources.map { "\($0.name): \($0.action.replacingOccurrences(of: "-", with: " "))" }
         planText.stringValue = versionText + lines.joined(separator: "\n")
         if !observed.blockers.isEmpty {
-          planText.stringValue += "\n\nBefore continuing:\n" + observed.blockers.joined(separator: "\n")
+          planText.stringValue += "\n\n" + telaText("Before continuing:") + "\n" + observed.blockers.joined(separator: "\n")
         }
-        message.stringValue = observed.blockers.isEmpty ? "Review complete. No changes applied."
-          : "These changes cannot be applied yet. No changes applied."
-      } else { message.stringValue = "Couldn't review these changes. Repair needs the installed version. No changes applied." }
+        message.stringValue = observed.blockers.isEmpty ? telaText("Review complete. No changes applied.")
+          : telaText("These changes cannot be applied yet. No changes applied.")
+      } else { message.stringValue = telaText("Couldn't review these changes. Repair needs the installed version. No changes applied.") }
       updateControls()
       await refreshProcesses()
     }
@@ -386,13 +386,13 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
   @objc private func applyChanges() {
     guard !busy, let review, review.blockers.isEmpty else { return }
     let alert = NSAlert(); alert.alertStyle = .warning
-    alert.messageText = operation == "uninstall" ? "Remove ChatGPT Tela?" : "Repair ChatGPT Tela?"
-    alert.informativeText = "Active work must finish before maintenance. "
-      + (operation == "uninstall" ? (removeData.state == .on ? "Tela settings and saved logins will also be removed. " : "Tela settings and saved logins will be kept. ") : "Tela settings and logins will be kept. ")
-      + "Your projects and original ChatGPT data are preserved."
-    alert.addButton(withTitle: operation == "uninstall" ? "Remove Tela" : "Repair Tela"); alert.addButton(withTitle: "Cancel")
+    alert.messageText = operation == "uninstall" ? telaText("Remove ChatGPT Tela?") : telaText("Repair ChatGPT Tela?")
+    alert.informativeText = telaText("Active work must finish before maintenance. ")
+      + (operation == "uninstall" ? (removeData.state == .on ? telaText("Tela settings and saved logins will also be removed. ") : telaText("Tela settings and saved logins will be kept. ")) : telaText("Tela settings and logins will be kept. "))
+      + telaText("Your projects and original ChatGPT data are preserved.")
+    alert.addButton(withTitle: operation == "uninstall" ? telaText("Remove Tela") : telaText("Repair Tela")); alert.addButton(withTitle: telaText("Cancel"))
     if alert.runModal() != .alertFirstButtonReturn { return }
-    busy = true; message.stringValue = "Applying changes and verifying the result…"; updateControls()
+    busy = true; message.stringValue = telaText("Applying changes and verifying the result…"); updateControls()
     let path = launcher, args = arguments("apply") + ["--review-token", review.reviewToken], removing = operation == "uninstall"
     Task {
       let result = await Task.detached { Self.execute(path, args) }.value
@@ -400,13 +400,13 @@ final class TelaMaintenanceController: NSObject, NSApplicationDelegate, NSWindow
       if result.0 == 0, let applied = try? JSONDecoder().decode(TelaMaintenanceResult.self, from: result.1) {
         completedRemoval = removing && applied.success
         message.stringValue = if let blockers = applied.blockers, !blockers.isEmpty {
-          blockers.joined(separator: "\n") + "\nMaintenance did not complete. Resolve the blocker, then review again."
-        } else if applied.success { removing ? "Tela removed from this computer. Preserved resources: \(applied.preservedCount)."
-          : "Changes verified. Tela control center refresh completed."
+          blockers.joined(separator: "\n") + "\n" + telaText("Maintenance did not complete. Resolve the blocker, then review again.")
+        } else if applied.success { removing ? String(format: telaText("Tela removed from this computer. Preserved resources: %@."), String(applied.preservedCount))
+          : telaText("Changes verified. Tela control center refresh completed.")
         } else {
-          "Some changes couldn't finish. Failed resources: \(applied.failedCount). Preserved resources: \(applied.preservedCount). Review again to recover."
+          String(format: telaText("Some changes couldn't finish. Failed resources: %@. Preserved resources: %@. Review again to recover."), String(applied.failedCount), String(applied.preservedCount))
         }
-      } else { message.stringValue = "Changes couldn't complete or the reviewed plan changed. Check the unfinished transition status and review with its matching package before resuming or cancelling. Running services may still need recovery." }
+      } else { message.stringValue = telaText("Changes couldn't complete or the reviewed plan changed. Check the unfinished transition status and review with its matching package before resuming or cancelling. Running services may still need recovery.") }
       await loadStatus(preservingOutcome: true); updateControls()
     }
   }

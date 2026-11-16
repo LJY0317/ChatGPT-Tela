@@ -6,13 +6,13 @@ struct TelaMaintenanceMain {
     let app = NSApplication.shared
     let menu = NSMenu()
     let applicationItem = NSMenuItem()
-    let applicationMenu = NSMenu(title: "Tela Maintenance")
-    applicationMenu.addItem(withTitle: "Quit Tela Maintenance", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    let applicationMenu = NSMenu(title: telaText("Tela Maintenance"))
+    applicationMenu.addItem(withTitle: telaText("Quit Tela Maintenance"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     applicationItem.submenu = applicationMenu
     menu.addItem(applicationItem)
     let windowItem = NSMenuItem()
-    let windowMenu = NSMenu(title: "Window")
-    windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+    let windowMenu = NSMenu(title: telaText("Window"))
+    windowMenu.addItem(withTitle: telaText("Close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
     windowItem.submenu = windowMenu
     menu.addItem(windowItem)
     app.mainMenu = menu

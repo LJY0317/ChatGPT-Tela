@@ -6,11 +6,11 @@ struct TelaLocalPluginRegistration: Decodable {
   var guidance: String? {
     switch result {
     case "registered":
-      return "Source ready. Install Tela Local Chat in ChatGPT’s Plugins Directory."
+      return telaText("Source ready. Install Tela Local Chat in ChatGPT’s Plugins Directory.")
     case "already-registered":
-      return "Source already added. Manage installation in ChatGPT’s Plugins Directory."
+      return telaText("Source already added. Manage installation in ChatGPT’s Plugins Directory.")
     case "preserved-user-change":
-      return "Custom source kept. Manage it in ChatGPT’s Plugins Directory."
+      return telaText("Custom source kept. Manage it in ChatGPT’s Plugins Directory.")
     default: return nil
     }
   }
@@ -69,49 +69,55 @@ struct TelaWorkProfile: Decodable, Equatable {
     return targetState == "running" || controlState == "restart-required" ? "restart" : "start"
   }
   var connectionLabel: String {
-    if connected && accountManagementActive == true { return "Finish account management" }
-    if connected && webState == "preparing" { return "Connecting…" }
-    if needsWebSignIn { return "Web sign-in required" }
-    if connected && webState == "failed" { return "Connection failed" }
-    if connected && webState == "ready" && webModelsReady != false { return "Connected" }
-    return connected && webModelsReady == false ? "Models unavailable" : connected ? "Connected" : (action == "restart" ? "Reconnect required" : "Off")
+    if connected && accountManagementActive == true { return telaText("Finish account management") }
+    if connected && webState == "preparing" { return telaText("Connecting…") }
+    if needsWebSignIn { return telaText("Web sign-in required") }
+    if connected && webState == "failed" { return telaText("Connection failed") }
+    if connected && webState == "ready" && webModelsReady != false { return telaText("Connected") }
+    return connected && webModelsReady == false ? telaText("Models unavailable") : connected ? telaText("Connected")
+      : (action == "restart" ? telaText("Reconnect required") : telaText("Off"))
   }
 }
 
 // Saved intent controls the switch; observed readiness controls the short status.
 struct TelaWebConnectionPresentation {
   let enabled: Bool
-  let status: String
-  let buttonTitle: String?
-  var menuStatus: String { ["Off", "Ready", "Paused"].contains(status) ? "Web models: \(status)" : status }
+  private let statusSource: String
+  private let buttonTitleSource: String?
+  var status: String { telaText(statusSource) }
+  var buttonTitle: String? { buttonTitleSource.map(telaText) }
+  var menuStatus: String { ["Off", "Ready", "Paused"].contains(statusSource)
+    ? String(format: telaText("Web models: %@"), status) : status }
 
   init(profile: TelaWorkProfile, wantedTargets: [String], failed: Bool = false) {
     enabled = profile.connected || profile.targetId.map { wantedTargets.contains($0) } == true
     if profile.connectionInProgress == true || (profile.webState == "preparing" && profile.accountManagementActive != true) {
-      status = "Connecting…"; buttonTitle = nil
+      statusSource = "Connecting…"; buttonTitleSource = nil
     } else if profile.accountManagementActive == true {
-      status = "Paused"; buttonTitle = nil
+      statusSource = "Paused"; buttonTitleSource = nil
     } else if profile.needsWebSignIn {
-      status = "Sign-in required"; buttonTitle = nil
+      statusSource = "Sign-in required"; buttonTitleSource = nil
     } else if failed || profile.webState == "failed" || (profile.connected && (profile.webState != "ready" || profile.webModelsReady == false)) {
-      status = "Connection failed"; buttonTitle = "Try Again"
+      statusSource = "Connection failed"; buttonTitleSource = "Try Again"
     } else if profile.connected {
-      status = "Ready"; buttonTitle = nil
+      statusSource = "Ready"; buttonTitleSource = nil
     } else if enabled {
-      status = "Reconnect required"; buttonTitle = profile.action == "restart" ? "Reopen with Tela" : "Try Again"
+      statusSource = "Reconnect required"; buttonTitleSource = profile.action == "restart" ? "Reopen with Tela" : "Try Again"
     } else {
-      status = "Off"; buttonTitle = nil
+      statusSource = "Off"; buttonTitleSource = nil
     }
   }
 }
 
 struct TelaWebPresentation {
   enum Action { case none, account, reconnect, finish }
-  let status: String
+  private let statusSource: String
   let action: Action
-  let buttonTitle: String?
+  private let buttonTitleSource: String?
+  var status: String { telaText(statusSource) }
+  var buttonTitle: String? { buttonTitleSource.map(telaText) }
 
-  var menuButtonTitle: String? { ["Connected", "Verified"].contains(status) ? nil : buttonTitle }
+  var menuButtonTitle: String? { ["Connected", "Verified"].contains(statusSource) ? nil : buttonTitle }
 
   init(profile: TelaWorkProfile, account: TelaAccountDisplay? = nil) {
     let result: (String, Action, String?)
@@ -134,7 +140,7 @@ struct TelaWebPresentation {
     } else {
       result = ("Not verified", .account, "Verify…")
     }
-    status = result.0; action = result.1; buttonTitle = result.2
+    statusSource = result.0; action = result.1; buttonTitleSource = result.2
   }
 }
 
@@ -166,8 +172,8 @@ struct TelaWorkInventory {
   mutating func failed(_ error: Error) {
     let code = (error as NSError).code
     self.error = code == NSURLErrorTimedOut
-      ? "ChatGPT is taking longer to respond. Check again in a moment."
-      : "Couldn't check your ChatGPT apps. Please try again."
+      ? telaText("ChatGPT is taking longer to respond. Check again in a moment.")
+      : telaText("Couldn't check your ChatGPT apps. Please try again.")
   }
 }
 
@@ -214,17 +220,17 @@ struct TelaConnectionFrame: Decodable {
 }
 func telaConnectionProgress(_ phase: String) -> String {
   switch phase {
-  case "browser": return "Opening Web connection…"
-  case "account": return "Checking Web sign-in…"
-  case "connector": return "Checking Tela connection…"
-  case "models": return "Loading available models…"
-  case "opening": return "Opening ChatGPT…"
-  case "checking": return "Checking ChatGPT…"
-  case "closing": return "Waiting for ChatGPT to close…"
-  case "preparing": return "Getting Web models ready…"
-  case "connecting": return "Connecting ChatGPT…"
-  case "ready": return "Finishing up…"
-  default: return "Connecting…"
+  case "browser": return telaText("Opening Web connection…")
+  case "account": return telaText("Checking Web sign-in…")
+  case "connector": return telaText("Checking Tela connection…")
+  case "models": return telaText("Loading available models…")
+  case "opening": return telaText("Opening ChatGPT…")
+  case "checking": return telaText("Checking ChatGPT…")
+  case "closing": return telaText("Waiting for ChatGPT to close…")
+  case "preparing": return telaText("Getting Web models ready…")
+  case "connecting": return telaText("Connecting ChatGPT…")
+  case "ready": return telaText("Finishing up…")
+  default: return telaText("Connecting…")
   }
 }
 
@@ -247,7 +253,8 @@ struct TelaProfilePresentation {
   init(profile: TelaWorkProfile, inventoryError: String?, localProgress: String?) {
     busy = localProgress != nil || (inventoryError == nil && (profile.connectionInProgress == true
       || (profile.connected && profile.webState == "preparing" && profile.accountManagementActive != true)))
-    label = localProgress ?? (busy ? (profile.connected ? profile.connectionLabel : "Connecting…") : (inventoryError == nil ? profile.connectionLabel : "Connection status unavailable"))
+    label = localProgress ?? (busy ? (profile.connected ? profile.connectionLabel : telaText("Connecting…"))
+      : (inventoryError == nil ? profile.connectionLabel : telaText("Connection status unavailable")))
   }
 }
 
@@ -257,10 +264,10 @@ struct TelaLocalChatPresentation {
   let serviceState: String
   var status: String {
     switch serviceState {
-    case "Ready": return "Running"
-    case "Stopped": return "Off"
-    case "Unavailable": return "Unavailable"
-    default: return "Checking…"
+    case "Ready": return telaText("Running")
+    case "Stopped": return telaText("Off")
+    case "Unavailable": return telaText("Unavailable")
+    default: return telaText("Checking…")
     }
   }
 }
@@ -271,5 +278,5 @@ struct TelaStartPresentation {
   let gatewayReady: Bool
   let codexReady: Bool
   var shouldOfferStart: Bool { !chatReady || (webConfigured && (!gatewayReady || !codexReady)) }
-  var title: String { webConfigured ? "Start Tela" : "Start Tela Chat" }
+  var title: String { webConfigured ? telaText("Start Tela") : telaText("Start Tela Chat") }
 }
