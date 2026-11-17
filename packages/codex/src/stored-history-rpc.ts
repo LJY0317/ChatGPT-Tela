@@ -1,12 +1,14 @@
+import { nativeThreadDisplayTitle } from "./thread-title";
 import { capturePrivateDiagnosticValue, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { spawn } from "node:child_process";
 import type { CodexAppServerRpc } from "./app-server";
 
 /** Shared transport; each exported client below has an independent, exact-thread method scope. */
 async function connectScopedRpc(input: {
-  executable: string; codexHome: string; threadId: string; signal?: AbortSignal; lifecycle?: boolean;
+  executable: string; codexHome: string; threadId: string; signal?: AbortSignal; lifecycle?: boolean; metadataThreadIds?: readonly string[];
 }): Promise<CodexAppServerRpc> {
   input.signal?.throwIfAborted();
+  const metadataIds = input.metadataThreadIds ? new Set(input.metadataThreadIds) : undefined;
   const child = spawn(input.executable, ["app-server", "--stdio"], {
     env: { ...process.env, CODEX_HOME: input.codexHome }, stdio: ["pipe", "pipe", "ignore"], windowsHide: true,
   });
@@ -64,8 +66,9 @@ async function connectScopedRpc(input: {
   } catch (error) { await close(); throw error; }
   let leased = false;
   return { close, request(method, params, signal) {
-    const p = params as Record<string, unknown> | undefined;
-    const read = ["thread/read", "thread/items/list", "thread/turns/list"].includes(method);
+    const p = (params ?? {}) as Record<string, unknown>;
+    const read = metadataIds ? method === "thread/read"
+      : ["thread/read", "thread/items/list", "thread/turns/list"].includes(method);
     const mutation = input.lifecycle && (method === "thread/resume" || method === "thread/archive");
     // archive cascades through spawned descendants. The lifecycle owner may
     // inspect only whether this exact thread has one, not browse the catalog.
@@ -74,7 +77,7 @@ async function connectScopedRpc(input: {
       && typeof p.archived === "boolean" && Array.isArray(p.modelProviders) && p.modelProviders.length === 0
       && Array.isArray(p.sourceKinds) && p.sourceKinds.length === 1 && p.sourceKinds[0] === "subAgentThreadSpawn"
       && Object.keys(p).every(k => ["ancestorThreadId", "limit", "useStateDbOnly", "archived", "modelProviders", "sourceKinds"].includes(k));
-    if ((!read && !mutation && !descendants) || !descendants && p?.threadId !== input.threadId
+    if ((!read && !mutation && !descendants) || !descendants && !(metadataIds ? typeof p?.threadId === "string" && metadataIds.has(p.threadId) : p?.threadId === input.threadId)
       || method === "thread/read" && p.includeTurns !== false
       || method === "thread/turns/list" && p.itemsView !== "notLoaded"
       || method === "thread/resume" && (p.excludeTurns !== true || Object.keys(p).some(k => !["threadId", "excludeTurns"].includes(k)))
@@ -100,4 +103,24 @@ export function connectDormantThreadRpc(input: {
   executable: string; codexHome: string; threadId: string; signal?: AbortSignal;
 }): Promise<CodexAppServerRpc> {
   return connectScopedRpc({ ...input, lifecycle: true });
+}
+
+/** One short-lived, metadata-only reader for the already-owned surface IDs. */
+export async function readStoredThreadTitles(input: {
+  executable: string; codexHome: string; threadIds: readonly string[]; signal?: AbortSignal;
+}): Promise<Readonly<Record<string, string>>> {
+  const ids = [...new Set(input.threadIds)].filter(id => /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id));
+  if (!ids.length) return {};
+  const rpc = await connectScopedRpc({ ...input, threadId: ids[0]!, metadataThreadIds: ids });
+  const titles: Record<string, string> = {};
+  try {
+    for (const threadId of ids) {
+      try {
+        const result = await rpc.request("thread/read", { threadId, includeTurns: false }, input.signal);
+        const title = nativeThreadDisplayTitle(result, threadId);
+        if (title) titles[threadId] = title;
+      } catch { input.signal?.throwIfAborted(); /* A missing title does not hide other owned sessions. */ }
+    }
+    return titles;
+  } finally { await rpc.close(); }
 }

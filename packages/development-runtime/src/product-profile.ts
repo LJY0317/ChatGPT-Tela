@@ -1,4 +1,4 @@
-import { connectStoredHistoryRpc } from "@chatgpt-tela/codex";
+import { connectStoredHistoryRpc, readStoredThreadTitles } from "@chatgpt-tela/codex";
 import { readProductConfig } from "@chatgpt-tela/product-config";
 import { createSuppliedHistorySource } from "./supplied-history";
 import { CHATGPT_TEMPORARY_CHAT_URL, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
@@ -105,6 +105,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   readonly webModelIds: readonly string[];
   readonly accountManagementActive: boolean;
   readonly accountRevision: number;
+  readBridgeTitles(signal?: AbortSignal): Promise<Readonly<Record<string, string>>>;
   openWebAccountBrowser(): Promise<void>;
   closeWebAccountBrowser(): Promise<void>;
   reconnectWeb(): Promise<void>;
@@ -327,6 +328,13 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     let mcpClosed = false;
     let runtimeClosed = false;
     return Object.freeze({
+      readBridgeTitles(signal?: AbortSignal) {
+        return installation && historyHome ? readStoredThreadTitles({
+          executable: installation.codexExecutable, codexHome: historyHome,
+          threadIds: owned.bridgeSurfaces().surfaces.map(surface => surface.taskId),
+          ...(signal ? { signal } : {}),
+        }) : Promise.resolve({});
+      },
       runtime: owned,
       responses: owned.responses,
       internalMcp: ownedMcp,

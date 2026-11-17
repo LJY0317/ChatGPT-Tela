@@ -48,6 +48,7 @@ export async function startProfileBridgePreviewServer(input: {
   readonly recoverSyntheticSavedChat?: () => Promise<Omit<CodexSyntheticRecoveryContract, "slot">>;
   readonly reveal?: (id: string, interactive?: boolean) => Promise<void>;
   readonly surfaces?: () => { readonly revision: number; readonly surfaces: readonly { readonly id: string; readonly label: string; readonly taskId?: string; readonly title?: string }[] };
+  readonly surfaceTitles?: (signal: AbortSignal) => Promise<Readonly<Record<string, string>>>;
   readonly onSurfacesChanged?: (listener: () => void) => () => void;
   readonly observe: (id?: string, threadId?: string) => Promise<{ readonly activeSurfaceCount: number; readonly retention?: import("@chatgpt-tela/core").BrowserRetentionObservation; readonly surfaces?: readonly {readonly id: string; readonly label: string}[]; readonly selectedSurfaceId?: string; readonly jpeg?: Uint8Array; readonly approvalState?: "pending" | "none" | "unavailable"; readonly approvalObservationReason?: "automation_unavailable" | "dom_observation_failed"; readonly approvalWait?: CodexApprovalWaitContract }>;
   readonly probeModelSelection?: () => Promise<{
@@ -243,8 +244,13 @@ export async function startProfileBridgePreviewServer(input: {
           });
         }
         if (request.signal.aborted) return new Response(null, { status: 499 });
-        return Response.json({ contractVersion: 1, slot: input.slot, ...input.surfaces() },
-          { headers: { "cache-control": "no-store" } });
+        const inventory = input.surfaces();
+        const titles = await input.surfaceTitles?.(request.signal).catch(() => ({} as Readonly<Record<string, string>>));
+        return Response.json({ contractVersion: 1, slot: input.slot, ...inventory,
+          surfaces: inventory.surfaces.map(surface => ({ ...surface,
+            ...(surface.taskId && titles?.[surface.taskId] ? { title: titles[surface.taskId] } : {}),
+          })),
+        }, { headers: { "cache-control": "no-store" } });
       }
       if (request.method !== "GET" || url.pathname !== "/v1/bridge-preview") return new Response(null, { status: 404 });
       const observed = await input.observe(url.searchParams.get("surfaceId") ?? undefined, url.searchParams.get("threadId") ?? undefined);
@@ -304,6 +310,7 @@ export function startAppOwnedProfileBridge(config: ProductProfileRuntimeConfig,
       return { responsesRouteFingerprint: createHash("sha256").update(owned.responses.baseUrl.href).digest("hex") };
     },
     surfaces: () => web.bridgeSurfaces(),
+    surfaceTitles: signal => owned.readBridgeTitles(signal),
     onSurfacesChanged: listener => web.onBridgeSurfacesChanged(listener),
     observe: (id, threadId) => web.observeBridgePreview(id, threadId),
     reveal: (id, interactive) => web.revealBridgeSurface(id, interactive),

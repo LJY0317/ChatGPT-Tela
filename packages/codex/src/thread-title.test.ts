@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { nativeThreadDisplayTitle } from "./bridge-surface-title";
+import { nativeThreadDisplayTitle } from "./thread-title";
 
 const threadId = "12345678-1234-4234-8234-123456789abc";
 

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectDormantThreadRpc, connectStoredHistoryRpc } from "./stored-history-rpc";
+import { connectDormantThreadRpc, connectStoredHistoryRpc, readStoredThreadTitles } from "./stored-history-rpc";
 import { readIndexedNativeItemsPage } from "./native-history-items";
 import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 
@@ -79,4 +79,19 @@ import { observeDiagnosticEvents } from "@chatgpt-tela/core";
     lifecycle.abort(Error("Service is stopping"));
     await expect(page).rejects.toThrow("Service is stopping");
   } finally { await rpc?.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+(process.platform === "win32" ? test.skip : test)("owned surface titles use one metadata-only reader without a live terminal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-title-reader-")), file = join(root, "reader"), trace = join(root, "trace");
+  const a = "12345678-1234-4234-8234-123456789abc", b = "12345678-1234-4234-8234-123456789abd";
+  writeFileSync(file, `#!${process.execPath}\nimport {appendFileSync} from 'node:fs';let b='';for await(const c of process.stdin){b+=c.toString();let n;while((n=b.indexOf('\\n'))>=0){const m=JSON.parse(b.slice(0,n));b=b.slice(n+1);appendFileSync(${JSON.stringify(trace)},JSON.stringify(m)+'\\n');if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='thread/read'?{thread:{id:m.params.threadId,name:m.params.threadId===${JSON.stringify(a)}?'[Tela Agent] Owned task':'Second task'}}:{}})+'\\n');}}`, {mode:0o755});
+  try {
+    expect(await readStoredThreadTitles({ executable: file, codexHome: root, threadIds: [a, b, a, "not-a-thread"] }))
+      .toEqual({ [a]: "Owned task", [b]: "Second task" });
+    const requests = readFileSync(trace, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(requests.map(r => r.method)).toEqual(["initialize", "initialized", "thread/read", "thread/read"]);
+    expect(requests.filter(r => r.method === "thread/read").map(r => r.params)).toEqual([
+      {threadId:a,includeTurns:false}, {threadId:b,includeTurns:false},
+    ]);
+  } finally { rmSync(root, {recursive:true,force:true}); }
 });

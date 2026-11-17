@@ -498,3 +498,20 @@ test("metadata subscription waits for events, cancels cleanly and never captures
     expect(captures).toBe(0);
   } finally { await server.close(); }
 });
+
+test("app-owned surface inventory joins exact Native titles without inspecting browser content", async () => {
+  const id = "surface_" + "a".repeat(32), threadId = "12345678-1234-4234-8234-123456789abc";
+  const token = "t".repeat(48); let unavailable = false, captures = 0;
+  const server = await startProfileBridgePreviewServer({ slot: 2, bearerToken: token,
+    surfaces: () => ({ revision: 1, surfaces: [{ id, label: "Web session 1", taskId: threadId }] }),
+    async surfaceTitles() { if (unavailable) throw Error("private reader failure"); return { [threadId]: "Actual task", foreign: "Do not display" }; },
+    async observe() { captures++; return { activeSurfaceCount: 0 }; },
+  });
+  try {
+    const read = () => fetch(new URL("v1/bridge-surfaces", server.endpoint), { headers: { authorization: `Bearer ${token}` } });
+    expect((await (await read()).json()).surfaces).toEqual([{ id, label: "Web session 1", taskId: threadId, title: "Actual task" }]);
+    unavailable = true;
+    expect((await (await read()).json()).surfaces).toEqual([{ id, label: "Web session 1", taskId: threadId }]);
+    expect(captures).toBe(0);
+  } finally { await server.close(); }
+});

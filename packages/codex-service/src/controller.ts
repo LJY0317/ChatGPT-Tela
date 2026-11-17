@@ -45,7 +45,6 @@ import {
 import { profileLaunch, verifyProfileRuntimeProcess } from "./profile-launch";
 import { RoutedCodexTurnBridge } from "./routed-turn-bridge";
 import { createProfileSupervisorLease, type ProfileSupervisorLease } from "./profile-supervision";
-import { nativeThreadDisplayTitle } from "./bridge-surface-title";
 
 // Native and Web preparation share an authenticated startup lease and bounded deadline.
 const CHILD_START_TIMEOUT_MS = 5 * 60_000;
@@ -1168,26 +1167,9 @@ export async function startCodexService(input: {
         || new Set(result.surfaces.map(row => row.id)).size !== result.surfaces.length) {
         throw new Error("invalid browser surface inventory");
       }
-      let rpc: Awaited<ReturnType<typeof connectCodexAppServerWebSocket>> | undefined;
-      const deadline = signal ? AbortSignal.any([signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000);
-      try {
-        if (profile.terminalEndpoint && result.surfaces.some(row => row.taskId
-          && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(row.taskId))) {
-          rpc = await connectCodexAppServerWebSocket(profile.terminalEndpoint, { signal: deadline });
-        }
-      } catch { /* Native metadata is optional; keep the established session labels. */ }
-      const surfaces = [] as { id: string; label: string; title?: string }[];
-      for (const [index, row] of result.surfaces.entries()) {
-        let title: string | undefined;
-        if (rpc && row.taskId && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(row.taskId)) {
-          try {
-            const response = await rpc.request("thread/read", { threadId: row.taskId, includeTurns: false }, deadline);
-            title = nativeThreadDisplayTitle(response, row.taskId);
-          } catch { /* Missing metadata uses this surface's own fallback label. */ }
-        }
-        surfaces.push({ id: row.id, label: row.label, ...(title ? { title } : {}) });
-      }
-      await rpc?.close().catch(() => {});
+      const surfaces = result.surfaces.map(row => ({ id: row.id, label: row.label,
+        ...(typeof row.title === "string" && row.title.trim() ? { title: row.title.trim().slice(0, 1000) } : {}),
+      }));
       return { contractVersion: 1 as const, slot, revision: result.revision, surfaces };
     },
     async bridgePreview(slotValue: number, surfaceId?: string, threadId?: string) {
