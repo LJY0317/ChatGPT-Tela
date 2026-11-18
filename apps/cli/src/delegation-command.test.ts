@@ -24,3 +24,13 @@ test("invalid Native context or result cannot invoke or start a service", async 
   await expect(runDelegationCommand(["acknowledge-result", "--thread", "child", "--turn", "turn", "--outcome", "failed", "--item", "final"], { ...input, environment: { CODEX_THREAD_ID: "parent" } })).rejects.toThrow("Use --item");
   expect(calls).toBe(0);
 });
+
+
+test("lifecycle reconciliation covers enrolled profiles without an unavailable Desktop PID", async () => {
+  const requests: unknown[] = [];
+  const input = { client: { async manageDelegation(value: any) { requests.push(value); return {}; } } };
+  await runDelegationCommand(["reconcile-delegations", "--all"], input);
+  expect(requests).toEqual([{ action: "reconcile" }]);
+  await expect(runDelegationCommand(["reconcile-delegations", "--all", "--slot", "2"], input)).rejects.toThrow("--all");
+  await expect(runDelegationCommand(["retain-delegation", "--all"], input)).rejects.toThrow("--all");
+});

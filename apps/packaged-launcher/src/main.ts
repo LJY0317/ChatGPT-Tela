@@ -41,7 +41,7 @@ Usage:
   chatgpt-tela local-mcp [package <destination>|register]
   chatgpt-tela retain-delegation --thread <child-id> [--slot N]
   chatgpt-tela acknowledge-result --thread <id> --turn <id> (--item <id> | --outcome failed|interrupted) [--slot N]
-  chatgpt-tela reconcile-delegations [--slot N]
+  chatgpt-tela reconcile-delegations [--slot N|--all]
   chatgpt-tela chat <allow-root|disallow-root> --path <folder>
   chatgpt-tela install (--dry-run | --apply) [--payload <package-directory>]
   chatgpt-tela repair  (--dry-run | --apply) [--payload <package-directory>]

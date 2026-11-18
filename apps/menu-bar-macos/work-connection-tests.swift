@@ -187,14 +187,4 @@ precondition(webStart.shouldOfferStart && webStart.title == "Start Tela")
 precondition(!TelaStartPresentation(webConfigured: true, chatReady: true, gatewayReady: true, codexReady: true).shouldOfferStart)
 precondition(TelaRequestBudget.seconds(path: "v1/ingress?public=1", method: "GET") == 30)
 
-// An exact known Desktop exit wakes only its profile; unrelated apps and ambiguous
-// inventories never turn into an archive request for another profile.
-var exitedDesktopInventory = TelaWorkInventory()
-exitedDesktopInventory.loaded([unconnected, managed])
-precondition(exitedDesktopInventory.releasedDesktopSlot(pid: 123) == 1)
-precondition(exitedDesktopInventory.releasedDesktopSlot(pid: 456) == 2)
-precondition(exitedDesktopInventory.releasedDesktopSlot(pid: 999) == nil)
-exitedDesktopInventory.loaded([unconnected, unconnected])
-precondition(exitedDesktopInventory.releasedDesktopSlot(pid: 123) == nil)
-
 } }

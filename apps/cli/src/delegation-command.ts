@@ -21,17 +21,19 @@ export async function runDelegationCommand(args: readonly string[], input: {
     return value;
   };
   const required = (name: string) => { const value = option(name); if (!value) throw Error(`${command} requires ${name}`); return value; };
-  const slot = profileSlotFromArguments(args.slice(1));
+  const all = args.includes("--all");
+  if (all && (command !== "reconcile-delegations" || args.includes("--slot"))) throw Error("--all is only for reconciliation without --slot");
+  const slot = all ? undefined : profileSlotFromArguments(args.slice(1));
   const parentThreadId = (input.environment ?? process.env).CODEX_THREAD_ID;
   if (command !== "reconcile-delegations" && !parentThreadId) throw Error(`Run ${command} from the coordinating Native chat`);
   let request: Parameters<CodexServiceClient["manageDelegation"]>[0];
-  if (command === "reconcile-delegations") request = { action: "reconcile", slot };
-  else if (command === "retain-delegation") request = { action: "enroll", slot, parentThreadId: parentThreadId!, threadId: required("--thread") };
+  if (command === "reconcile-delegations") request = { action: "reconcile", ...(slot === undefined ? {} : { slot }) };
+  else if (command === "retain-delegation") request = { action: "enroll", slot: slot!, parentThreadId: parentThreadId!, threadId: required("--thread") };
   else {
     const outcome = option("--outcome") ?? "answer";
     if (!["answer", "failed", "interrupted"].includes(outcome)
       || outcome !== "answer" && option("--item")) throw Error("Use --item for an answer, or --outcome failed|interrupted");
-    request = { action: "acknowledge", slot, parentThreadId: parentThreadId!, threadId: required("--thread"), turnId: required("--turn"),
+    request = { action: "acknowledge", slot: slot!, parentThreadId: parentThreadId!, threadId: required("--thread"), turnId: required("--turn"),
       ...(outcome === "answer" ? { outcome, itemId: required("--item") } : { outcome: outcome as "failed" | "interrupted" }) };
   }
   if (input.client) return input.client.manageDelegation(request);

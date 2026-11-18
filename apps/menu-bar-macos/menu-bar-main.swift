@@ -192,8 +192,8 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     desktopLifecycleObserver = TelaDesktopLifecycleObserver(emit: { [weak self] event, fields in
       guard let self else { return }
       recordMenuDiagnostic(event, fields: fields, home: self.home)
-    }, terminated: { [weak self] pid in
-      self?.controlCenter.reconcileDelegationsAfterDesktopExit(pid: pid)
+    }, terminated: { [weak self] in
+      self?.controlCenter.reconcileDelegationsAfterDesktopExit()
     })
     DistributedNotificationCenter.default().addObserver(self, selector: #selector(reopenInstalledMenu),
       name: Notification.Name("com.openai.chatgpt-tela.menu-bar.reopen"), object: nil)

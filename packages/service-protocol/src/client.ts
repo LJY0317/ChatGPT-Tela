@@ -161,13 +161,14 @@ export class CodexServiceClient extends LocalServiceClient {
     })).result;
   }
 
-  async manageDelegation(input: { slot: number } & (
-    { action: "reconcile" }
-    | { action: "observe-web-child"; parentThreadId: string; threadId: string; turnId: string }
-    | { action: "enroll"; parentThreadId: string; threadId: string }
-    | ({ action: "acknowledge"; parentThreadId: string; threadId: string; turnId: string }
-      & ({ outcome: "answer"; itemId: string } | { outcome: "failed" | "interrupted" }))
-  ), signal?: AbortSignal): Promise<unknown> {
+  async manageDelegation(input:
+    | { action: "reconcile"; slot?: number }
+    | ({ slot: number } & (
+      { action: "observe-web-child"; parentThreadId: string; threadId: string; turnId: string }
+      | { action: "enroll"; parentThreadId: string; threadId: string }
+      | ({ action: "acknowledge"; parentThreadId: string; threadId: string; turnId: string }
+        & ({ outcome: "answer"; itemId: string } | { outcome: "failed" | "interrupted" }))
+    )), signal?: AbortSignal): Promise<unknown> {
     return this.request("v1/codex/delegations", "POST", input, signal);
   }
 

@@ -581,7 +581,7 @@ test("owned management client connects observed Web creation, acknowledgement an
     expect(await client.manageDelegation({ action: "acknowledge", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer" }))
       .toMatchObject({ enrolled: true, automaticArchiveEnabled: true, automaticDeleteEnabled: false });
     now += 12 * 3_600_000;
-    expect(await client.manageDelegation({ action: "reconcile", slot: 2 })).toEqual({ outcomes: [{ threadId: "child", status: "archived" }], automaticDeleteEnabled: false });
+    expect(await client.manageDelegation({ action: "reconcile" })).toEqual({ outcomes: [{ threadId: "child", status: "archived" }], automaticDeleteEnabled: false });
     expect(methods).not.toContain("turn/start"); expect(methods).not.toContain("thread/delete");
     const unauthorized = await fetch(new URL("v1/codex/delegations", server.endpoint), { method: "POST", body: JSON.stringify({ action: "reconcile", slot: 2 }) });
     expect(unauthorized.status).toBe(401);

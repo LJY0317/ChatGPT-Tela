@@ -1081,7 +1081,7 @@ async function main(): Promise<void> {
     + "  diagnostics trace [--minutes <1-120>]\n"
     + "  diagnostics desktop [--seconds <5-60>] (macOS)\n"
     + "  retain-delegation --thread <child-id> [--slot <n>]\n"
-    + "  reconcile-delegations [--slot <n>]\n"
+    + "  reconcile-delegations [--slot <n>|--all]\n"
     + "  retention-canary [--minutes <1-120>]\n"
     + "  acknowledge-result --thread <id> --turn <id> (--item <id> | --outcome failed|interrupted) [--slot <n>]\n"
     + "  uninstall (--dry-run | --apply) [--remove-data]\n"

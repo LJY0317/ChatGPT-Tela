@@ -122,8 +122,10 @@ export async function startCodexServiceHttpServer(input: {
           const manager = input.delegatedRetention;
           if (!manager) return error(503, "Delegated-chat retention is unavailable");
           const body: any = await request.json();
-          if (!body || typeof body !== "object" || !Number.isInteger(body.slot) || body.slot < 1 || body.slot > 99) return error(400, "Invalid delegation request");
-          if (body.action === "reconcile") return Response.json(await manager.reconcile(body.slot));
+          if (!body || typeof body !== "object") return error(400, "Invalid delegation request");
+          const validSlot = Number.isInteger(body.slot) && body.slot >= 1 && body.slot <= 99;
+          if (body.action === "reconcile" && (body.slot === undefined || validSlot)) return Response.json(await manager.reconcile(body.slot));
+          if (!validSlot) return error(400, "Invalid delegation profile");
           if (typeof body.parentThreadId !== "string" || typeof body.threadId !== "string") return error(400, "Invalid delegation identity");
           if (body.action === "observe-web-child" && typeof body.turnId === "string") {
             return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId, body.turnId));

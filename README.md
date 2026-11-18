@@ -491,6 +491,10 @@ Desktop's Plugins Directory. Finally, in a **local Desktop thread**, invoke a Ch
 an approved workspace and read a file to verify actual access. Service readiness and plugin
 preparation do **not** prove host installation or permission. Neither public HTTPS nor Tailscale
 nor Web account setup is required for this local path.
+The installed plugin can also recheck delegated-chat retention after an agent closes.
+Review this optional background hook in **ChatGPT Settings → Hooks**. Preparing or
+registering the plugin does not approve hooks; see [retention behavior and limits](docs/web-delegation.md#delegated-chat-retention).
+
 Basic read-only Chat use of the standard local plugin has user acceptance on both macOS
 accounts. Clean installation on a new OS account, two-physical-device isolation and access
 from a separate Web worker remain distinct verification scopes.

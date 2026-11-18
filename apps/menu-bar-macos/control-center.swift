@@ -1934,19 +1934,25 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     return value
   }
 
-  private var retentionWakeups = Set<Int>()
+  private var retentionWakeup: Task<Void, Never>?
+  private var retentionWakeupPending = false
 
-  func reconcileDelegationsAfterDesktopExit(pid: Int) {
-    guard let slot = workState.inventory.releasedDesktopSlot(pid: pid),
-          retentionWakeups.insert(slot).inserted else { return }
-    Task {
-      defer { retentionWakeups.remove(slot) }
-      do {
-        guard let descriptor = try readDescriptor("codex") else { return }
-        _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
-                              body: ["action": "reconcile", "slot": slot])
-      } catch {
-        recordMenuDiagnostic("delegation_retention_wakeup_failed", fields: ["slot": slot], home: home)
+  func reconcileDelegationsAfterDesktopExit() {
+    // App-owned Web profiles deliberately omit Desktop PIDs. The registry, not
+    // an app/PID guess, scopes eligibility to enrolled chats in this installation.
+    retentionWakeupPending = true
+    guard retentionWakeup == nil else { return }
+    retentionWakeup = Task {
+      defer { retentionWakeup = nil }
+      while retentionWakeupPending {
+        retentionWakeupPending = false
+        do {
+          guard let descriptor = try readDescriptor("codex") else { break }
+          _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
+                                body: ["action": "reconcile"])
+        } catch {
+          recordMenuDiagnostic("delegation_retention_wakeup_failed", fields: [:], home: home)
+        }
       }
     }
   }

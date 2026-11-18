@@ -143,14 +143,25 @@ or error bodies. A wait wakeup is not a collection receipt.
   chatgpt-tela reconcile-delegations --slot 1
   ```
 
-  On macOS, the menu's existing Desktop lifecycle observer also reconciles the
-  exact known profile when its app actually terminates. Concurrent exit hints are
-  coalesced; the request neither starts a stopped service nor waits for other work
-  to release. The service still acquires the canonical writer and checks eligibility.
-  This is an app-exit wakeup, not a complete per-thread owner-release subscription:
-  release while Desktop stays alive, unavailable profile identity, or a later engine
-  exit can still defer until another supported event or explicit reconciliation.
-  A due time never justifies interrupting live work.
+  On macOS, the menu's existing Desktop lifecycle observer reconciles enrolled
+  records when an official Desktop app actually terminates. App-owned profiles omit
+  Desktop PIDs, so this wakeup uses the registry's installation/profile scope rather
+  than an unavailable PID-to-profile mapping. Concurrent exit hints are coalesced;
+  a new hint during a pass schedules another pass, without polling or starting services.
+
+  The installed local plugin also offers an asynchronous `PostToolUse` command hook
+  for `close_agent`. Once installed, enabled and explicitly trusted in the host's
+  **Settings > Hooks**, it invokes the same reconciliation after a child-close tool
+  result, including while Desktop stays open. It adds no MCP tool or model context;
+  unavailable Tela is a no-op for Native work. A disabled plugin or untrusted hook
+  does not supply this event. Packaging or registration does not grant hook trust.
+  The explicit all-profile equivalent is `chatgpt-tela reconcile-delegations --all`.
+
+  Both events are maintenance hints. They never enroll an ordinary chat, acknowledge
+  a result, interrupt work or authorize deletion. The service still acquires the
+  canonical writer and checks the due time. Arbitrary per-thread unloading outside
+  supported close hooks remains without a verified Desktop event subscription; a
+  late owner release can still defer until another event or explicit reconciliation.
 - An archive request has a durable pending intent followed by a confirmed archive
   timestamp. A crash or ambiguous failure between them reports `archive_unconfirmed`
   and never automatically repeats the mutation. Confirmed records are never
@@ -175,6 +186,13 @@ installed CLI/app-server observations, not universal guarantees across versions 
 consumer Desktop acceptance. An isolated product-source run also excluded a Native
 container, archived a selected leaf, and left that leaf active after manual restore
 and reconciliation. Its clock was advanced in the fixture; no real profile was changed.
+
+A current installed-engine isolated trial loaded the generated plugin through the
+public marketplace CLI, observed its asynchronous close hook, then used the product
+hook handler, authenticated service HTTP route and lifecycle reader to archive an
+enrolled leaf while its parent process remained open. Only the fixture's retention
+clock advanced; no external model request or consumer profile change occurred.
+This does not prove consumer Desktop hook installation/trust or every unload path.
 
 Deletion needs an additional restore-aware serialized contract: the installed engine
 accepted `thread/delete` after `thread/unarchive`. A current 0.169.0-alpha.11.1 isolated
