@@ -200,6 +200,20 @@ test("canonical hydration cannot promote unavailable payload, and commits only a
   expect(resolveAssistantLineage(snapshot([user, answer]), tracked).assistants).toEqual([answer]);
   expect(tracked.conversationRoute).toBe("https://chatgpt.com/c/owned");
 });
+
+test.each(["canonical transition", "already canonical"])("exact author rekeys its parent and anchor together after %s", mode => {
+  const tracked = { ...owner(), observationInputState: () => "changed" as const };
+  if (mode === "canonical transition") tracked.conversationRoute = "https://chatgpt.com/";
+  const canonicalUser = { ...user, key: "user:canonical", lineageAnchor: "document/canonical" };
+  const canonicalAnswer = { ...answer, key: "assistant:canonical", parentUserTurnKey: canonicalUser.key,
+    lineageAnchor: canonicalUser.lineageAnchor };
+  const current = snapshot([canonicalUser, canonicalAnswer]);
+  expect(resolveAssistantLineage(current, tracked).assistants).toEqual([canonicalAnswer]);
+  expect(tracked.userTurnKey).toBe(canonicalUser.key);
+  expect(tracked.acceptedLineageAnchor).toBe(canonicalUser.lineageAnchor);
+  expect(resolveAssistantLineage(snapshot([canonicalAnswer]), { ...tracked, observationInputState: () => "unchanged" as const }).assistants)
+    .toEqual([canonicalAnswer]);
+});
 test("a different conversation suspends observation and return requires fresh author proof", () => {
   const tracked = owner();
   expect(resolveAssistantLineage(snapshot([user, answer], "https://chatgpt.com/c/other"), tracked))

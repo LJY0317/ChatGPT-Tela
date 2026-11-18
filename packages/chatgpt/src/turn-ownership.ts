@@ -19,7 +19,7 @@ export function authorFingerprint(turn: ChatGptTurnObservation | undefined, expe
 export interface TurnOwnership {
   userTurnKey: string;
   readonly acceptedUserFingerprint: string;
-  readonly acceptedLineageAnchor?: string;
+  acceptedLineageAnchor?: string;
   /** A receipt made from an exact composer/send and a unique paired logical turn.
    * This is not authority to ignore later request edits after outside input. */
   readonly causalReceipt?: boolean;
@@ -231,6 +231,12 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
       && /^\/c\/[^/]+$/.test(next.pathname) && !isChatGptProvisionalConversationUrl(next.href);
     if (canonicalTransition && acceptedUser && (sameKey || provenRekey)) {
       tracked.conversationRoute = route;
+      // Commit the canonical parent together with the route: renderer hydration
+      // replaces both keys. The exact author and unique new lineage above already
+      // prove the request; retaining its provisional anchor would reject it again.
+      tracked.userTurnKey = acceptedUser.key;
+      if (acceptedUser.lineageAnchor) tracked.acceptedLineageAnchor = acceptedUser.lineageAnchor;
+      else delete tracked.acceptedLineageAnchor;
       delete tracked.pendingConversationRoute;
       emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rebound", {
         reason_class: "canonical_route", renderer_key_changed: !sameKey,
@@ -277,7 +283,7 @@ function assertTurnOwnership(snapshot: ChatGptSurfaceSnapshot, tracked: TurnOwne
   }
   // An input change is not evidence of a send, but it retires the sole
   // author-unmounted causal shortcut until exact author identity is visible.
-  if (!current && !observationUnchanged(tracked) && (tracked.inputUnchanged || tracked.observationInputState)) return false;
+  if (!current && accepted.length !== 1 && !observationUnchanged(tracked) && (tracked.inputUnchanged || tracked.observationInputState)) return false;
   // Missing author content is inconclusive, not evidence of a foreign request.
   // Do not deliver progress/results or accept a completed answer until proof returns.
   if (current && payloadState === "unavailable") return false;
@@ -322,8 +328,7 @@ export function resolveAssistantLineage(
     throw new WebObservationUnproven("lineage_conflict", "ChatGPT renderer request identity conflicts with the accepted request");
   }
   const rekeyCandidate = newUsers.length === 1
-    && ownedAuthorFingerprint(newUsers[0], tracked) === tracked.acceptedUserFingerprint
-    && (!tracked.acceptedLineageAnchor || newUsers[0]!.lineageAnchor === tracked.acceptedLineageAnchor);
+    && ownedAuthorFingerprint(newUsers[0], tracked) === tracked.acceptedUserFingerprint;
   const identityPending = !routeProven || !acceptedUserPresent && !anchored && !rekeyCandidate;
   if (tracked.identityPending !== identityPending) {
     tracked.identityPending = identityPending;
@@ -376,8 +381,7 @@ export function resolveAssistantLineage(
   const user = snapshot.turns.find(item => item.role === "user" && item.key === nextKey);
   const matchingUsers = snapshot.turns.filter(item => item.role === "user"
     && ownedAuthorFingerprint(item, tracked) === tracked.acceptedUserFingerprint);
-  if (!user || ownedAuthorFingerprint(user, tracked) !== tracked.acceptedUserFingerprint || matchingUsers.length !== 1
-    || tracked.acceptedLineageAnchor && user.lineageAnchor !== tracked.acceptedLineageAnchor) {
+  if (!user || ownedAuthorFingerprint(user, tracked) !== tracked.acceptedUserFingerprint || matchingUsers.length !== 1) {
     emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rejected", {
       reason_class: "unproven_rekey", parent_user_present: user !== undefined,
       parent_fingerprint_matches: ownedAuthorFingerprint(user, tracked) === tracked.acceptedUserFingerprint,
@@ -390,5 +394,7 @@ export function resolveAssistantLineage(
   }
   emitDiagnosticEvent("chatgpt_tela_work", "web_turn_identity_rebound", { reason_class: "same_request" });
   tracked.userTurnKey = nextKey;
+  if (user.lineageAnchor) tracked.acceptedLineageAnchor = user.lineageAnchor;
+  else delete tracked.acceptedLineageAnchor;
   return { assistants, ambiguous: false };
 }
