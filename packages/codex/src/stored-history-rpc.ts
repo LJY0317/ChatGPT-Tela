@@ -5,7 +5,7 @@ import type { CodexAppServerRpc } from "./app-server";
 
 /** Shared transport; each exported client below has an independent, exact-thread method scope. */
 async function connectScopedRpc(input: {
-  executable: string; codexHome: string; threadId: string; signal?: AbortSignal; lifecycle?: boolean; metadataThreadIds?: readonly string[];
+  executable: string; codexHome: string; threadId?: string; hooksCwd?: string; signal?: AbortSignal; lifecycle?: boolean; metadataThreadIds?: readonly string[];
 }): Promise<CodexAppServerRpc> {
   input.signal?.throwIfAborted();
   const metadataIds = input.metadataThreadIds ? new Set(input.metadataThreadIds) : undefined;
@@ -67,6 +67,14 @@ async function connectScopedRpc(input: {
   let leased = false;
   return { close, request(method, params, signal) {
     const p = (params ?? {}) as Record<string, unknown>;
+    if (input.hooksCwd !== undefined) {
+      const hooks = method === "hooks/list" && Object.keys(p).every(k => k === "cwds")
+        && JSON.stringify(p.cwds) === JSON.stringify([input.hooksCwd]);
+      const config = method === "config/read" && p.cwd === input.hooksCwd && p.includeLayers === false
+        && Object.keys(p).every(k => ["cwd", "includeLayers"].includes(k));
+      if (!hooks && !config) return Promise.reject(Error("Hook metadata reader permits only configured hook/config reads"));
+      return send(method, params, signal ?? input.signal);
+    }
     const read = metadataIds ? method === "thread/read"
       : ["thread/read", "thread/items/list", "thread/turns/list"].includes(method);
     const mutation = input.lifecycle && (method === "thread/resume" || method === "thread/archive");
@@ -123,4 +131,13 @@ export async function readStoredThreadTitles(input: {
     }
     return titles;
   } finally { await rpc.close(); }
+}
+
+
+/** Public host metadata only; no thread, plugin mutation or trust approval. */
+export function connectHookMetadataRpc(input: {
+  executable: string; codexHome: string; cwd: string; signal?: AbortSignal;
+}): Promise<CodexAppServerRpc> {
+  return connectScopedRpc({ executable: input.executable, codexHome: input.codexHome,
+    hooksCwd: input.cwd, ...(input.signal ? { signal: input.signal } : {}) });
 }

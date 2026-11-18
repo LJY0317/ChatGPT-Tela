@@ -79,7 +79,10 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   asynchronous `close_agent` hook now wake the existing registered-record reconciliation,
   without requiring Desktop PIDs in independent Web-profile status. Isolated generated
   plugin/official-engine tests reached actual leaf archival while the parent stayed open.
-  Consumer Desktop hook trust/acceptance, other per-thread unload paths and complete
+  Existing install/repair/update now refresh owned source and an already installed enabled
+  plugin through the official manager; Settings distinguishes installation, approval and
+  disabled configuration without granting trust. Consumer Desktop hook trust/acceptance,
+  Windows/Linux host activation, other per-thread unload paths and complete
   manual-restore observation remain. Automatic deletion stays disabled pending a
   restore-aware serialized contract: the installed engine still deletes a restored
   active thread through its unconditional delete API. Do not revive the retired engine

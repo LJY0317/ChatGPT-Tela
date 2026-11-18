@@ -1,3 +1,4 @@
+import { refreshInstalledLocalPluginOwned } from "./local-plugin";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -139,6 +140,7 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
           manifest = readOwnershipManifest(paths.installManifest)!;
         });
       }
+      const localPlugin = await step("local_plugin_refresh", () => refreshInstalledLocalPluginOwned({ ...options, launcherExecutablePath: join(blueprint.payload.resource.path, readPackagedProductManifest(root).launcher!.executable) }));
       // Unknown stop settlement never authorizes replacing a service owner. Restore only acknowledged peers.
       const admitted = state.pendingStop ? state.stoppedServices : startOrder;
       for (const service of admitted) {
@@ -158,7 +160,7 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
       if (state.pendingStop) throw Error(`application update is postponed: ${state.pendingStop} shutdown has not been settled; acknowledged peers were restored`);
       if (fingerprint !== state.sourceFingerprint) await step("menu_registration", () => installPackagedMenuBarRegistration({ blueprint, manifest, ...(options.runner ? { runner: options.runner } : {}) }));
       rmSync(path);
-      return { ready: true, restored: true, productVersion: spec.productVersion, buildVersion: build };
+      return { ready: true, restored: true, productVersion: spec.productVersion, buildVersion: build, localPlugin };
     };
     if (action === "cancel" && previous) {
       if (fingerprint !== previous.sourceFingerprint) throw Error("a replaced application cannot be cancelled back to source");

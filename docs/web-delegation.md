@@ -155,6 +155,16 @@ or error bodies. A wait wakeup is not a collection receipt.
   result, including while Desktop stays open. It adds no MCP tool or model context;
   unavailable Tela is a no-op for Native work. A disabled plugin or untrusted hook
   does not supply this event. Packaging or registration does not grant hook trust.
+  Normal installation, repair and Sparkle completion reuse one refresh operation: update
+  the owned generated source, then use the official CLI to upgrade an already installed,
+  enabled plugin identified by its exact local source. Missing/disabled plugins and edited
+  sources/marketplace entries stay untouched. This never writes host hook trust or changes
+  per-plugin MCP overrides. Optional refresh failure is diagnosed without failing the app update.
+  Settings reads official plugin and hook/config metadata on demand, without model requests
+  or polling. Only an exact enabled, trusted hook is shown ready; unknown is not ready.
+  Configuration applies to new chats; existing-chat reload is not asserted. macOS isolated
+  CLI acceptance covers cache upgrade and disabled/MCP-override preservation; Windows/Linux
+  host execution and consumer hook approval remain unverified.
   The explicit all-profile equivalent is `chatgpt-tela reconcile-delegations --all`.
 
   Both events are maintenance hints. They never enroll an ordinary chat, acknowledge

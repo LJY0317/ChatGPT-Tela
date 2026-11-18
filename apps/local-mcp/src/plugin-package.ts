@@ -44,14 +44,20 @@ export function prepareLocalChatPlugin(destination: string, launcher?: string) {
   return { root, plugin, marketplace };
 }
 
-function localPluginManifest(executable?: string) {
+export function localChatRetentionHookCommand(executable: string): string {
   // Hook commands use the host shell, not JSON or shell interpolation of tool input.
-  const command = !executable ? undefined : process.platform === "win32"
+  return process.platform === "win32"
     ? "powershell.exe -NoProfile -NonInteractive -EncodedCommand " + Buffer.from(
       "[Console]::In.ReadToEnd() | & '" + executable.replaceAll("'", "''") + "' delegation-hook", "utf16le").toString("base64")
     : "'" + executable.replaceAll("'", `'"'"'`) + "' delegation-hook";
+}
+
+export const LOCAL_CHAT_PLUGIN_VERSION = "0.0.3";
+
+function localPluginManifest(executable?: string) {
+  const command = executable ? localChatRetentionHookCommand(executable) : undefined;
   return { $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-    name: "tela-local-chat", version: "0.0.3", description: "Device-local Tela Chat MCP",
+    name: "tela-local-chat", version: LOCAL_CHAT_PLUGIN_VERSION, description: "Device-local Tela Chat MCP",
     ...(command ? { hooks: { hooks: { PostToolUse: [{ matcher: "close_agent$", hooks: [{
       type: "command", command, async: true,
     }] }] } } } : {}) };
@@ -64,22 +70,35 @@ function localMcpManifest(executable?: string) {
       args: executable ? ["local-mcp"] : ["${PLUGIN_ROOT}/server.cjs"], cwd: "${PLUGIN_ROOT}" } } };
 }
 
-/** Refresh the generated manifest without replacing edited hooks or other files. */
-export function refreshOwnedLocalChatPlugin(destination: string, launcher: string): void {
+/** Inspect generated files once; custom manifests or MCP settings are never overwritten. */
+export function inspectOwnedLocalChatPlugin(destination: string, launcher: string) {
   validateOwnedLocalChatPlugin(destination);
-  const path = join(resolve(destination), "plugins", "tela-local-chat", ".codex-plugin", "plugin.json");
-  const before = readFileSync(path, "utf8");
-  let current: unknown;
-  try { current = JSON.parse(before); } catch { return; }
+  const plugin = join(resolve(destination), "plugins", "tela-local-chat");
+  const path = join(plugin, ".codex-plugin", "plugin.json"), before = readFileSync(path, "utf8");
   const next = localPluginManifest(resolve(launcher));
   const previous = { $schema: next.$schema, name: next.name, version: "0.0.2", description: next.description };
-  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-  if (same(current, next)) return;
-  if (!same(current, previous)) return;
+  let state: "current" | "outdated" | "customized" = "customized";
+  try {
+    const current = JSON.stringify(JSON.parse(before));
+    const mcp = JSON.stringify(JSON.parse(readFileSync(join(plugin, ".mcp.json"), "utf8")));
+    if (mcp === JSON.stringify(localMcpManifest(resolve(launcher)))) {
+      if (current === JSON.stringify(next)) state = "current";
+      else if (current === JSON.stringify(previous)) state = "outdated";
+    }
+  } catch { /* Edited/unreadable contents remain outside automatic replacement. */ }
+  return { path, before, next, state };
+}
+
+/** Refresh the generated manifest without replacing edited hooks or other files. */
+export function refreshOwnedLocalChatPlugin(destination: string, launcher: string): "current" | "updated" | "customized" {
+  const { path, before, next, state } = inspectOwnedLocalChatPlugin(destination, launcher);
+  if (state !== "outdated") return state;
   const temporary = path + "." + randomUUID() + ".tmp";
   try {
     writeFileSync(temporary, JSON.stringify(next, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-    if (readFileSync(path, "utf8") === before) renameSync(temporary, path);
+    if (readFileSync(path, "utf8") !== before) return "customized";
+    renameSync(temporary, path);
+    return "updated";
   } finally { rmSync(temporary, { force: true }); }
 }
 

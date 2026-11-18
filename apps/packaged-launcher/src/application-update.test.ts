@@ -12,6 +12,7 @@ import {
 } from "@chatgpt-tela/product-lifecycle";
 import { LaunchdUpgradeRunner } from "../../../tests/support/launchd-upgrade-runner";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
+import { registerDeviceLocalChatPlugin } from "../../local-mcp/src/main";
 import { runApplicationUpdate } from "./application-update";
 import type { CodexNativeTargetAdapter } from "../../../packages/codex-service/src/native-target";
 import { verifyInstalledPackage } from "./runtime";
@@ -94,7 +95,15 @@ test("Sparkle replacement restores only prior running services and promotes exte
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-settlement-"));
   try {
     const f = await fixture(root);
+    const launcher = join(f.sourceRoot, f.manifest.launcher.executable);
+    await registerDeviceLocalChatPlugin({ paths: f.paths, launcherExecutablePath: launcher,
+      marketplacePath: join(root, "personal", "marketplace.json") });
+    const pluginManifest = join(f.paths.stateRoot, "install/local-chat-plugin/plugins/tela-local-chat/.codex-plugin/plugin.json");
+    const old = JSON.parse(readFileSync(pluginManifest, "utf8"));
+    old.version = "0.0.2"; delete old.hooks;
+    writeFileSync(pluginManifest, JSON.stringify(old));
     expect(await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" })).toMatchObject({ prepared: true });
+    expect(JSON.parse(readFileSync(pluginManifest, "utf8")).version).toBe("0.0.2");
     expect(readMacApplicationUpdate(f.paths)?.phase).toBe("ready");
     expect([...f.runner.jobs.keys()]).toEqual(["com.openai.chatgpt-tela.menu-bar"]);
     const before = [...f.runner.calls];
@@ -105,8 +114,9 @@ test("Sparkle replacement restores only prior running services and promotes exte
     // Simulates Sparkle's already authenticated replacement at the same app path.
     writeFileSync(packagedProductManifestPath(f.sourceRoot), JSON.stringify({ ...f.manifest, productVersion: "2.0.0" }));
     writeFileSync(join(f.sourceRoot, "Contents/Resources/build.txt"), "2");
-    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true, restored: true, productVersion: "2.0.0" });
+    expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true, restored: true, productVersion: "2.0.0", localPlugin: "updated" });
     expect(readOwnershipManifest(f.paths.installManifest)?.productVersion).toBe("2.0.0");
+    expect(JSON.parse(readFileSync(pluginManifest, "utf8"))).toMatchObject({ version: "0.0.3", hooks: expect.any(Object) });
     expect(f.runner.jobs.get("com.openai.chatgpt-tela.codex")?.running).toBe(false);
     expect(f.runner.jobs.get("com.openai.chatgpt-tela.chat")?.running).toBe(true);
     expect(f.runner.jobs.get("com.openai.chatgpt-tela.gateway")?.running).toBe(true);

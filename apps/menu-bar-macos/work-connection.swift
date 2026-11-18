@@ -3,18 +3,27 @@ import TelaLocalization
 #endif
 import Foundation
 
-// Launcher receipt describes only Tela's owned marketplace entry, never host installation.
-struct TelaLocalPluginRegistration: Decodable {
-  let result: String
-  var guidance: String? {
-    switch result {
-    case "registered":
-      return telaText("Source ready. Install Tela Local Chat in ChatGPT’s Plugins Directory.")
-    case "already-registered":
-      return telaText("Source already added. Manage installation in ChatGPT’s Plugins Directory.")
-    case "preserved-user-change":
-      return telaText("Custom source kept. Manage it in ChatGPT’s Plugins Directory.")
-    default: return nil
+// On-demand official CLI/hook metadata, scoped to this installation's local source.
+struct TelaLocalPluginStatus: Decodable {
+  struct Profile: Decodable { let slot: Int; let state: String }
+  let source: String
+  let profiles: [Profile]
+}
+
+struct TelaLocalPluginPresentation {
+  let label: String
+  let guidance: String?
+  let openApp: Bool
+  init(state: String) {
+    switch state {
+    case "prepare": (label, guidance, openApp) = ("Plugin: Not prepared", nil, false)
+    case "install": (label, guidance, openApp) = ("Plugin: Not installed", "Install Tela Local Chat in ChatGPT’s Plugins Directory.", true)
+    case "update": (label, guidance, openApp) = ("Plugin: Update needed", "Update Tela Local Chat in ChatGPT’s Plugins Directory.", true)
+    case "review": (label, guidance, openApp) = ("Automatic cleanup: Approval needed", "ChatGPT → Settings → Hooks", true)
+    case "disabled": (label, guidance, openApp) = ("Automatic cleanup: Off", "Manage the plugin and hooks in ChatGPT.", true)
+    case "ready": (label, guidance, openApp) = ("Automatic cleanup: Ready", "Applies to new chats.", false)
+    case "customized": (label, guidance, openApp) = ("Plugin: Custom source kept", "Manage the plugin in ChatGPT.", true)
+    default: (label, guidance, openApp) = ("Plugin: Couldn't check", "Check the plugin and hooks in ChatGPT.", true)
     }
   }
 }

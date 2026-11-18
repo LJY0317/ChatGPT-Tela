@@ -1,12 +1,14 @@
+import { refreshInstalledLocalPlugin } from "./local-plugin";
 import { ownedServiceShutdown } from "./service-shutdown";
 import {
   existsSync,
   lstatSync,
   realpathSync,
 } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
   resolveProductPaths,
+  readPackagedProductManifest,
   cancelPackagedUpgrade,
   PackagedServiceShutdownNotStartedError,
   packagedRepairJournalPath,
@@ -131,6 +133,8 @@ export async function runPackagedLifecycleCommand(
     "packaged payload",
   );
   const environment = lifecycleEnvironment(options);
+  const refreshPlugin = (root: string) => refreshInstalledLocalPlugin({ ...environment,
+    launcherExecutablePath: join(root, readPackagedProductManifest(root).launcher!.executable) });
 
   if (parsed.command === "cancel-upgrade") {
     const input = { sourcePayloadPath: payloadSourcePath, ...environment };
@@ -167,9 +171,11 @@ export async function runPackagedLifecycleCommand(
       payloadSourcePath,
       ...environment,
     });
+    const localPlugin = await refreshPlugin(planned.blueprint.payload.resource.path);
     return Object.freeze({
       command: parsed.command,
       mode: parsed.mode,
+      localPlugin,
       productVersion: result.manifest.productVersion,
       installId: result.manifest.installId,
       apply: result.apply,
@@ -203,7 +209,8 @@ export async function runPackagedLifecycleCommand(
       services,
       ...environment,
     });
-    return Object.freeze({ command: parsed.command, mode: parsed.mode, ...result });
+    const localPlugin = await refreshPlugin(plan.blueprint.payload.resource.path);
+    return Object.freeze({ command: parsed.command, mode: parsed.mode, ...result, localPlugin });
   }
 
   const plan = await planPackagedUpgradeFromPayload({
@@ -238,5 +245,6 @@ export async function runPackagedLifecycleCommand(
     ...environment,
   };
   const result = await applyPackagedUpgradeWithRecovery(upgradeInput);
-  return Object.freeze({ command: parsed.command, mode: parsed.mode, ...result });
+  const localPlugin = await refreshPlugin(plan.targetBlueprint.payload.resource.path);
+  return Object.freeze({ command: parsed.command, mode: parsed.mode, ...result, localPlugin });
 }

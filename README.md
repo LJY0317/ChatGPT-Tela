@@ -493,7 +493,11 @@ preparation do **not** prove host installation or permission. Neither public HTT
 nor Web account setup is required for this local path.
 The installed plugin can also recheck delegated-chat retention after an agent closes.
 Review this optional background hook in **ChatGPT Settings → Hooks**. Preparing or
-registering the plugin does not approve hooks; see [retention behavior and limits](docs/web-delegation.md#delegated-chat-retention).
+registering the plugin does not approve hooks. Existing install, repair and update flows
+refresh an owned generated source and upgrade its already installed, enabled local plugin
+through the official plugin manager. Missing or disabled plugins and user edits are preserved.
+Settings shows installation, approval and disabled states separately; approved configuration
+applies to new chats, not proof that an existing chat reloaded it. See [retention behavior and limits](docs/web-delegation.md#delegated-chat-retention).
 
 Basic read-only Chat use of the standard local plugin has user acceptance on both macOS
 accounts. Clean installation on a new OS account, two-physical-device isolation and access

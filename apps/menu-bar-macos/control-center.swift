@@ -298,6 +298,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var setupMessage: String?
   private var preparingLocalPlugin = false
   private var localPluginMessage: String?
+  private var localPluginStatus: TelaLocalPluginStatus?
   private var endpointField: NSTextField?
   private var portField: NSTextField?
   private var exposurePicker: NSPopUpButton?
@@ -361,7 +362,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     ["visible": window?.isVisible == true, "key": window?.isKeyWindow == true,
       "main": window?.isMainWindow == true, "onscreen": window?.occlusionState.contains(.visible) == true]
   }
-  func windowDidBecomeKey(_ notification: Notification) { onWindowStateChanged?("window_key") }
+  func windowDidBecomeKey(_ notification: Notification) {
+    onWindowStateChanged?("window_key")
+    if selectedPage == .settings || bootstrapState == "missing" { Task { await refreshCurrentPage() } }
+  }
   func windowDidResignKey(_ notification: Notification) { onWindowStateChanged?("window_not_key") }
   func windowDidChangeOcclusionState(_ notification: Notification) {
     onWindowStateChanged?("window_visibility_changed")
@@ -1168,7 +1172,22 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let folders = actionButton("Manage Folders…", action: #selector(openLocalFolderSettings))
     folders.isEnabled = !operationInProgress
     local.addArrangedSubview(folders)
-    append(secondary("Prepare the plugin, then install Tela Local Chat from your personal marketplace in ChatGPT’s Plugins Directory."), to: local)
+    if let status = localPluginStatus {
+      let rows = status.source == "prepared" ? status.profiles
+        : [TelaLocalPluginStatus.Profile(slot: 1, state: status.source)]
+      for profile in rows {
+        let presentation = TelaLocalPluginPresentation(state: profile.state)
+        let title = profile.slot == 1 ? "ChatGPT" : "ChatGPT Profile \(profile.slot)"
+        append(secondary(title + " · " + telaText(presentation.label)), to: local)
+        if let guidance = presentation.guidance { append(secondary(guidance), to: local) }
+        if presentation.openApp {
+          let open = actionButton("Open app", action: #selector(openProfileButton(_:)))
+          open.tag = profile.slot
+          open.isEnabled = !operationInProgress && (profile.slot == 1 || profiles.contains(where: { $0.slot == profile.slot && $0.targetId != nil }))
+          local.addArrangedSubview(open)
+        }
+      }
+    } else { append(secondary("Checking plugin…"), to: local) }
   }
 
   @objc private func openLocalFolderSettings() {
@@ -1187,14 +1206,18 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     Task {
       let result = await Task.detached { Self.runLauncher(launcher, arguments: ["local-mcp", "register"], capture: true) }.value
       preparingLocalPlugin = false
-      if result.0 == 0, let receipt = try? JSONDecoder().decode(TelaLocalPluginRegistration.self, from: result.1),
-         let message = receipt.guidance {
-        localPluginMessage = message
-      } else {
-        localPluginMessage = "Couldn't prepare the local plugin source. Check Tela's installation and personal marketplace."
-      }
+      localPluginMessage = result.0 == 0 ? nil : "Couldn't prepare the plugin. Check Tela's installation."
+      await loadLocalPluginStatus()
       renderCurrentPage()
     }
+  }
+
+  private func loadLocalPluginStatus() async {
+    guard installedServiceControlsAvailable(),
+          let launcher = ProcessInfo.processInfo.environment["CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE"] else { return }
+    let result = await Task.detached { Self.runLauncher(launcher, arguments: ["local-mcp", "status"], capture: true) }.value
+    localPluginStatus = result.0 == 0 ? try? JSONDecoder().decode(TelaLocalPluginStatus.self, from: result.1) : nil
+    if localPluginStatus == nil { localPluginStatus = TelaLocalPluginStatus(source: "unavailable", profiles: []) }
   }
 
   private nonisolated static func runChatFolderCommand(_ launcher: String, _ args: [String]) -> (Int32, Data) {
@@ -1991,6 +2014,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       for waiter in waiters { waiter.resume() }
     }
     await loadBootstrapStatus()
+    if selectedPage == .settings || bootstrapState == "missing" { await loadLocalPluginStatus() }
     let previousChatFolders = chatFolders
     let previousChatFoldersApplied = chatFoldersApplied
     let previousChatFoldersAvailable = chatFoldersAvailable

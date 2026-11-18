@@ -207,7 +207,7 @@ test("installed hook uses its exact launcher with shell-special paths and no ext
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("explicit registration refreshes a generated manifest but preserves edited hooks", () => {
+test("generated refresh preserves edited hooks and MCP settings", () => {
   const root = mkdtempSync(join(tmpdir(), "tela-hook-refresh-"));
   try {
     const launcher = join(root, "tela"), { plugin } = prepareLocalChatPlugin(root, launcher);
@@ -221,5 +221,12 @@ test("explicit registration refreshes a generated manifest but preserves edited 
     writeFileSync(path, edited);
     refreshOwnedLocalChatPlugin(root, launcher);
     expect(readFileSync(path, "utf8")).toBe(edited);
+    writeFileSync(path, JSON.stringify(previous));
+    const mcpPath = join(plugin, ".mcp.json"), mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
+    mcp.mcpServers["tela-local-chat"].args = ["custom-server"];
+    writeFileSync(mcpPath, JSON.stringify(mcp));
+    expect(refreshOwnedLocalChatPlugin(root, launcher)).toBe("customized");
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(previous);
+    expect(JSON.parse(readFileSync(mcpPath, "utf8"))).toEqual(mcp);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

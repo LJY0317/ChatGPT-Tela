@@ -38,7 +38,7 @@ Usage:
   chatgpt-tela services stop chat
   chatgpt-tela services restart chat
   chatgpt-tela chat roots
-  chatgpt-tela local-mcp [package <destination>|register]
+  chatgpt-tela local-mcp [package <destination>|register|status]
   chatgpt-tela retain-delegation --thread <child-id> [--slot N]
   chatgpt-tela acknowledge-result --thread <id> --turn <id> (--item <id> | --outcome failed|interrupted) [--slot N]
   chatgpt-tela reconcile-delegations [--slot N|--all]

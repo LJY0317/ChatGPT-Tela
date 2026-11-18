@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildPackagedPayload,
-  resolveProductPaths,
+  resolveProductPaths, readPackagedProductManifest,
   type ServiceRegistrationCommandResult,
   type ServiceRegistrationCommandRunner,
 } from "@chatgpt-tela/product-lifecycle";
+import { registerDeviceLocalChatPlugin } from "../../local-mcp/src/main";
 import { parsePackagedLifecycleCommand, runPackagedLifecycleCommand } from "./lifecycle";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
 
@@ -105,6 +106,16 @@ describe("packaged lifecycle CLI", () => {
       expect(applied.apply.failedCount).toBe(0);
       expect(applied.verify.ready).toBe(true);
       expect(existsSync(resolveProductPaths({ platform: "linux", home, environment: {} }).installManifest)).toBe(true);
+      const paths = resolveProductPaths(options);
+      await registerDeviceLocalChatPlugin({ paths, launcherExecutablePath: join(paths.binaryRoot, readPackagedProductManifest(paths.binaryRoot).launcher!.executable),
+        marketplacePath: join(home, ".agents/plugins/marketplace.json") });
+      const pluginManifest = join(paths.stateRoot, "install/local-chat-plugin/plugins/tela-local-chat/.codex-plugin/plugin.json");
+      const old = JSON.parse(readFileSync(pluginManifest, "utf8")); old.version = "0.0.2"; delete old.hooks;
+      writeFileSync(pluginManifest, JSON.stringify(old));
+      await runPackagedLifecycleCommand(["repair", "--dry-run"], options);
+      expect(JSON.parse(readFileSync(pluginManifest, "utf8")).version).toBe("0.0.2");
+      await runPackagedLifecycleCommand(["repair", "--apply"], options);
+      expect(JSON.parse(readFileSync(pluginManifest, "utf8")).version).toBe("0.0.3");
     } finally {
       removeFixture(root);
     }

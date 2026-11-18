@@ -25,6 +25,9 @@ if (process.argv[2] === "--tela-operation-owner-v1") {
     // The explicit output directory must be new; do not overwrite a user's existing catalog or README.
     mkdirSync(args[1]!);
     process.stdout.write(JSON.stringify(prepareLocalChatPlugin(args[1]!, process.execPath)) + "\n");
+  } else if (args[0] === "status" && args.length === 1) {
+    const { readLocalPluginStatus } = await import("./local-plugin");
+    process.stdout.write(JSON.stringify(await readLocalPluginStatus({ launcherExecutablePath: process.execPath })) + "\n");
   } else if (args[0] === "register" && args.length === 1) {
     const { join } = await import("node:path");
     const { homedir } = await import("node:os");
@@ -32,8 +35,10 @@ if (process.argv[2] === "--tela-operation-owner-v1") {
     const { registerDeviceLocalChatPlugin } = await import("../../local-mcp/src/main");
     const result = await registerDeviceLocalChatPlugin({ paths: resolveProductPaths(), launcherExecutablePath: process.execPath,
       marketplacePath: join(homedir(), ".agents", "plugins", "marketplace.json") });
-    process.stdout.write(JSON.stringify({ result }) + "\n");
-  } else throw new Error("usage: chatgpt-tela local-mcp [package <destination>|register]");
+    const { refreshInstalledLocalPlugin } = await import("./local-plugin");
+    const refresh = await refreshInstalledLocalPlugin({ launcherExecutablePath: process.execPath });
+    process.stdout.write(JSON.stringify({ result, refresh }) + "\n");
+  } else throw new Error("usage: chatgpt-tela local-mcp [package <destination>|register|status]");
 } else {
   await import("./main");
 }
