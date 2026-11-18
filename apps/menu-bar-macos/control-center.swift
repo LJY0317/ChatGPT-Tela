@@ -1960,7 +1960,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var retentionWakeup: Task<Void, Never>?
   private var retentionWakeupPending = false
 
-  func reconcileDelegationsAfterDesktopExit() {
+  func reconcileDelegationsAfterLifecycleEvent() {
     // App-owned Web profiles deliberately omit Desktop PIDs. The registry, not
     // an app/PID guess, scopes eligibility to enrolled chats in this installation.
     retentionWakeupPending = true

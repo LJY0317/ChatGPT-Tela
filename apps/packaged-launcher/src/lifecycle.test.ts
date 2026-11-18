@@ -110,7 +110,7 @@ describe("packaged lifecycle CLI", () => {
       await registerDeviceLocalChatPlugin({ paths, launcherExecutablePath: join(paths.binaryRoot, readPackagedProductManifest(paths.binaryRoot).launcher!.executable),
         marketplacePath: join(home, ".agents/plugins/marketplace.json") });
       const pluginManifest = join(paths.stateRoot, "install/local-chat-plugin/plugins/tela-local-chat/.codex-plugin/plugin.json");
-      const old = JSON.parse(readFileSync(pluginManifest, "utf8")); old.version = "0.0.2"; delete old.hooks;
+      const old = JSON.parse(readFileSync(pluginManifest, "utf8")); old.version = "0.0.2";
       writeFileSync(pluginManifest, JSON.stringify(old));
       await runPackagedLifecycleCommand(["repair", "--dry-run"], options);
       expect(JSON.parse(readFileSync(pluginManifest, "utf8")).version).toBe("0.0.2");

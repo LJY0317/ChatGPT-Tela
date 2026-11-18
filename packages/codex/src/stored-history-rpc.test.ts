@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectHookMetadataRpc, connectDormantThreadRpc, connectStoredHistoryRpc, readStoredThreadTitles } from "./stored-history-rpc";
+import { connectDormantThreadRpc, connectStoredHistoryRpc, readStoredThreadTitles } from "./stored-history-rpc";
 import { readIndexedNativeItemsPage } from "./native-history-items";
 import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 
@@ -94,20 +94,4 @@ import { observeDiagnosticEvents } from "@chatgpt-tela/core";
       {threadId:a,includeTurns:false}, {threadId:b,includeTurns:false},
     ]);
   } finally { rmSync(root, {recursive:true,force:true}); }
-});
-
-(process.platform === "win32" ? test.skip : test)("hook metadata reader cannot start turns, approve hooks or read another scope", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "tela-hooks-rpc-")), file = join(directory, "reader");
-  writeFileSync(file, `#!${process.execPath}\nlet b='';for await(const c of process.stdin){b+=c.toString();let n;while((n=b.indexOf('\\n'))>=0){const m=JSON.parse(b.slice(0,n));b=b.slice(n+1);if(m.id!==undefined)process.stdout.write(JSON.stringify({id:m.id,result:{method:m.method}})+'\\n');}}`, { mode: 0o755 });
-  let rpc: Awaited<ReturnType<typeof connectHookMetadataRpc>> | undefined;
-  try {
-    rpc = await connectHookMetadataRpc({ executable: file, codexHome: directory, cwd: directory });
-    expect(await rpc.request("hooks/list", { cwds: [directory] })).toEqual({ method: "hooks/list" });
-    expect(await rpc.request("config/read", { cwd: directory, includeLayers: false })).toEqual({ method: "config/read" });
-    for (const [method, params] of [
-      ["turn/start", {}], ["thread/read", { threadId: "other" }], ["config/value/write", {}],
-      ["hooks/list", { cwds: [directory, "other"] }], ["hooks/list", { cwds: [directory], trustStatus: "trusted" }],
-      ["config/read", { cwd: "other", includeLayers: false }],
-    ] as const) await expect(rpc.request(method, params)).rejects.toThrow("configured hook/config reads");
-  } finally { await rpc?.close(); rmSync(directory, { recursive: true, force: true }); }
 });

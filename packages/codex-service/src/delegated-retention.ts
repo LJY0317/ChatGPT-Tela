@@ -6,11 +6,12 @@ import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core
 import { acknowledgeNativeResult, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
 
 const DAY = 86_400_000, MAX_BYTES = 4 * 1024 * 1024;
+const HALF_DAY = DAY / 2;
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 type State = {
   version: 1; scope: string; slot: number; parentThreadId: string; threadId: string;
   enrolledAt: number; dueAt: number; acknowledgement?: ResultAcknowledgement;
-  archivedAt?: number; archivePending?: true; deferred?: string;
+  archivedAt?: number; archivePending?: true; reviewAfter?: number;
 };
 export interface DelegatedRetentionProfile {
   /** Install identity + exact configured profile/home; never a model-supplied label. */
@@ -87,7 +88,8 @@ export function createDelegatedRetention(input: {
     const record = JSON.parse(readFileSync(join(input.directory, file), "utf8")) as State;
     if (record.version !== 1 || !Number.isInteger(record.slot) || record.slot < 1 || record.slot > 99
       || !/^[a-f0-9]{64}$/.test(record.scope) || !Number.isFinite(record.enrolledAt)
-      || !Number.isFinite(record.dueAt) || record.archivedAt != null && !Number.isFinite(record.archivedAt)
+      || !Number.isFinite(record.dueAt) || record.reviewAfter != null && !Number.isFinite(record.reviewAfter)
+      || record.archivedAt != null && !Number.isFinite(record.archivedAt)
       || key(record.scope, id(record.threadId)) + ".json" !== file) throw Error("Invalid delegation state");
     id(record.parentThreadId);
     if (record.archivedAt != null && now() - record.archivedAt > 60 * DAY) unlinkSync(join(input.directory, file));
@@ -105,9 +107,9 @@ export function createDelegatedRetention(input: {
   const schedule = () => {
     if (timer) clearTimeout(timer);
     if (closed || input.automatic === false) return;
-    const due = Math.min(...[...records.values()].filter(r => r.archivedAt == null && !r.archivePending && !r.deferred).map(r => r.dueAt));
+    const due = Math.min(...[...records.values()].filter(r => r.archivedAt == null && !r.archivePending).map(r => Math.max(r.dueAt, r.reviewAfter ?? r.dueAt)));
     if (!Number.isFinite(due)) return;
-    timer = setTimeout(() => { void api.reconcile().catch(report); }, Math.min(Math.max(0, due - now()), 2_147_483_647));
+    timer = setTimeout(() => { void api.reconcile(undefined, true).catch(report); }, Math.min(Math.max(0, due - now()), 2_147_483_647));
     timer.unref?.();
   };
   const serial = <T>(work: () => Promise<T>): Promise<T> => {
@@ -175,8 +177,8 @@ export function createDelegatedRetention(input: {
             if (record.parentThreadId !== result.parentThreadId) throw Error("Acknowledgement parent changed");
             const turn = await latest(rpc, result.threadId), activity = terminalTime(turn);
             if (turn?.id === result.turnId && activity != null) {
-              const next = { ...record, acknowledgement, dueAt: Math.max(activity, Date.parse(acknowledgement.acknowledgedAt)) + DAY / 2 };
-              delete next.deferred;
+              const next = { ...record, acknowledgement, dueAt: Math.max(activity, Date.parse(acknowledgement.acknowledgedAt)) + HALF_DAY };
+              delete next.reviewAfter;
               save(k, next);
               if (record.acknowledgement?.acknowledgedAt !== acknowledgement.acknowledgedAt
                 || record.acknowledgement?.result.turnId !== acknowledgement.result.turnId) event("delegation_retention_acknowledged", next);
@@ -186,13 +188,15 @@ export function createDelegatedRetention(input: {
         } finally { await rpc.close(); }
       });
     },
-    reconcile(slot?: number) {
+    // Scheduled checks honor a deferred review deadline. Real lifecycle/user
+    // events can check sooner without changing the original retention clock.
+    reconcile(slot?: number, scheduled = false) {
       return serial(async () => {
         const outcomes: { threadId: string; status: string }[] = [];
         for (const [k, record] of records) {
           if (slot != null && record.slot !== slot || record.archivedAt != null) continue;
           if (record.archivePending) { outcomes.push({ threadId: record.threadId, status: "archive_unconfirmed" }); continue; }
-          if (record.dueAt > now()) continue;
+          if (record.dueAt > now() || scheduled && (record.reviewAfter ?? 0) > now()) continue;
           let rpc: CodexAppServerRpc | undefined;
           try {
             const profile = input.profile(record.slot);
@@ -208,10 +212,10 @@ export function createDelegatedRetention(input: {
             const ack = record.acknowledgement;
             const confirmed = ack?.scope === record.scope && ack.result.parentThreadId === record.parentThreadId
               && ack.result.threadId === record.threadId && ack.result.turnId === turn.id;
-            const dueAt = confirmed ? Math.max(activity, Date.parse(ack!.acknowledgedAt)) + DAY / 2 : activity + 7 * DAY;
+            const dueAt = confirmed ? Math.max(activity, Date.parse(ack!.acknowledgedAt)) + HALF_DAY : activity + 7 * DAY;
             if (!Number.isFinite(dueAt)) throw Error("Invalid result acknowledgement time");
             const next = { ...record, dueAt };
-            delete next.deferred;
+            delete next.reviewAfter;
             if (dueAt > now()) { save(k, next); outcomes.push({ threadId: record.threadId, status: "not_due" }); continue; }
             // Native archive recursively affects spawned descendants, even
             // those not registered here. Only a persisted leaf is eligible.
@@ -241,12 +245,17 @@ export function createDelegatedRetention(input: {
             event("delegation_retention_archive_completed", next);
             outcomes.push({ threadId: record.threadId, status: "archived" });
           } catch (error) {
-            // No busy-loop: only startup or an explicit management event can
-            // revisit a due-but-deferred record. Task execution is unaffected.
+            // Keep the original archive deadline. Reuse the next-due timer for
+            // a twelve-hour maintenance review; real lifecycle events can wake
+            // it earlier. Never interrupt the official owner or retry a mutation
+            // whose execution is uncertain.
             if (records.get(k)?.archivePending) report(error);
-            else if (!record.deferred) {
-              report(error); save(k, { ...record, deferred: "lifecycle_unavailable" });
-              event("delegation_retention_deferred", record, "lifecycle_unavailable");
+            else {
+              if (record.reviewAfter == null) {
+                report(error);
+                event("delegation_retention_deferred", record, "lifecycle_unavailable");
+              }
+              save(k, { ...record, reviewAfter: now() + HALF_DAY });
             }
             outcomes.push({ threadId: record.threadId, status: "deferred" });
           } finally { await rpc?.close(); }

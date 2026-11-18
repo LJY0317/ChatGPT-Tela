@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hookActivation, ownedInstalledPlugin, refreshInstalledLocalPlugin } from "./local-plugin";
+import { ownedInstalledPlugin, refreshInstalledLocalPlugin } from "./local-plugin";
 import { resolveProductPaths, createOwnershipManifest, writeOwnershipManifest } from "@chatgpt-tela/product-lifecycle";
 
 test("installed identity comes from the exact local source, not a personal marketplace name or matching title", () => {
@@ -13,20 +13,6 @@ test("installed identity comes from the exact local source, not a personal marke
   expect(ownedInstalledPlugin({ installed: [{ ...own, source: { source: "local", path: join(tmpdir(), "foreign") } }] }, own.source.path)).toBeUndefined();
   expect(() => ownedInstalledPlugin({}, own.source.path)).toThrow();
   expect(() => ownedInstalledPlugin({ installed: [own, own] }, own.source.path)).toThrow();
-});
-
-test("only the exact enabled, approved hook is ready; discovery and installation never imply approval", () => {
-  const hook = { pluginId: "actual-id", source: "plugin", eventName: "postToolUse", handlerType: "command",
-    command: "owned-command", async: true, matcher: "close_agent$", enabled: true, trustStatus: "trusted" };
-  const state = (change: object) => hookActivation({ data: [{ hooks: [{ ...hook, ...change }] }] }, "actual-id", "owned-command");
-  expect(state({})).toBe("ready");
-  expect(state({ trustStatus: "untrusted" })).toBe("review");
-  expect(state({ trustStatus: "modified" })).toBe("review");
-  expect(state({ enabled: false })).toBe("disabled");
-  expect(state({ command: "another-command" })).toBe("unavailable");
-  expect(state({ pluginId: "another-plugin" })).toBe("unavailable");
-  expect(state({ trustStatus: "unknown" })).toBe("unavailable");
-  expect(hookActivation({ data: [] }, "actual-id", "owned-command")).toBe("unavailable");
 });
 
 test("ordinary install without explicit plugin preparation does not create a source or host installation", async () => {

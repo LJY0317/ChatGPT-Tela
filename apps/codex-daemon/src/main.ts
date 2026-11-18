@@ -33,6 +33,7 @@ async function main(): Promise<void> {
   const paths = resolveProductPaths();
   const descriptorPath = join(paths.serviceRuntime("codex"), "descriptor.json");
   const lifecycle = new AbortController();
+  let delegatedRetention: ReturnType<typeof createDelegatedRetention> | undefined;
   const service = await startCodexService({
     signal: lifecycle.signal,
     config: {
@@ -46,7 +47,11 @@ async function main(): Promise<void> {
     prepareProfileRuntime: async slot => {
       await prepareInstalledProfileOwnership({ slot, productPaths: paths, installId, environment: process.env });
     },
-    onProfileConnectionChanged: setWorkProfileConnection,
+    onProfileConnectionChanged: (targetId, enabled) => {
+      setWorkProfileConnection(targetId, enabled);
+      void delegatedRetention?.reconcile().catch(error => emitDiagnosticEvent("chatgpt_tela_codex",
+        "delegation_retention_reconcile_failed", { failure_class: diagnosticFailureClass(error) }));
+    },
     profileRuntimeEnvironment: slot => {
       const preferences = readProductPreferences();
       return {
@@ -59,7 +64,6 @@ async function main(): Promise<void> {
       };
     },
   });
-  let delegatedRetention: ReturnType<typeof createDelegatedRetention> | undefined;
   try {
     delegatedRetention = createDelegatedRetention({
       directory: join(paths.serviceState("codex"), "delegated-retention"),

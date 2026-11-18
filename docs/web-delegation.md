@@ -97,7 +97,7 @@ This explicitly enrolls that child. It checks the public
 `source.subAgent.thread_spawn.parent_thread_id` against the coordinator's Native
 `CODEX_THREAD_ID` and scopes the record to this installation and exact configured
 profile/history home. A title, Web model, old journal, ordinary user chat, app save,
-or hook event alone never enrolls a conversation. Native `spawn_agent` does not
+or lifecycle event alone never enrolls a conversation. Native `spawn_agent` does not
 implicitly call this command. A new child's first Web turn uses the observation path
 above; other deliberately selected children require this explicit command.
 No AGENTS.md rule or additional model request is needed for the operation itself.
@@ -136,42 +136,29 @@ or error bodies. A wait wakeup is not a collection receipt.
   its conversation and independent acknowledgement receipt remain unchanged.
   Active and archived list reads alone are insufficient: a child can be restored
   between them and disappear from both reads even while the parent's writer is held.
-- A writer conflict or unavailable lifecycle defers the record without a retry loop.
-  It is reconsidered at service startup or explicit reconciliation, not by polling:
+- A writer conflict or unavailable lifecycle preserves the original retention deadline.
+  The same next-due timer schedules another maintenance review 12 hours later, without
+  a second scheduler, rapid retries or catalog scanning. Only due registered records
+  are examined; pending, uncertain archive mutations are never replayed automatically.
+  Service startup, profile connection changes and explicit reconciliation can review sooner:
 
   ```sh
   chatgpt-tela reconcile-delegations --slot 1
+  chatgpt-tela reconcile-delegations --all
   ```
 
-  On macOS, the menu's existing Desktop lifecycle observer reconciles enrolled
-  records when an official Desktop app actually terminates. App-owned profiles omit
-  Desktop PIDs, so this wakeup uses the registry's installation/profile scope rather
-  than an unavailable PID-to-profile mapping. Concurrent exit hints are coalesced;
-  a new hint during a pass schedules another pass, without polling or starting services.
+  On macOS, the existing menu lifecycle paths also reconcile on official Desktop exit
+  and system wake. They use the registry's installation/profile scope, not unavailable
+  Desktop PIDs. Concurrent hints are coalesced. The service does not depend on menu
+  availability for its timer. No plugin hook, hook approval, new model turn or forced
+  owner release is involved. Exact arbitrary per-thread unload observation remains
+  unverified; a released chat can therefore wait until the next maintenance review.
 
-  The installed local plugin also offers an asynchronous `PostToolUse` command hook
-  for `close_agent`. Once installed, enabled and explicitly trusted in the host's
-  **Settings > Hooks**, it invokes the same reconciliation after a child-close tool
-  result, including while Desktop stays open. It adds no MCP tool or model context;
-  unavailable Tela is a no-op for Native work. A disabled plugin or untrusted hook
-  does not supply this event. Packaging or registration does not grant hook trust.
-  Normal installation, repair and Sparkle completion reuse one refresh operation: update
-  the owned generated source, then use the official CLI to upgrade an already installed,
-  enabled plugin identified by its exact local source. Missing/disabled plugins and edited
-  sources/marketplace entries stay untouched. This never writes host hook trust or changes
-  per-plugin MCP overrides. Optional refresh failure is diagnosed without failing the app update.
-  Settings reads official plugin and hook/config metadata on demand, without model requests
-  or polling. Only an exact enabled, trusted hook is shown ready; unknown is not ready.
-  Configuration applies to new chats; existing-chat reload is not asserted. macOS isolated
-  CLI acceptance covers cache upgrade and disabled/MCP-override preservation; Windows/Linux
-  host execution and consumer hook approval remain unverified.
-  The explicit all-profile equivalent is `chatgpt-tela reconcile-delegations --all`.
+  Plugin maintenance is separate: installation, repair and Sparkle completion reuse
+  one operation to update the owned source and an already installed, enabled local
+  plugin through the official CLI. Missing/disabled plugins and user edits are preserved.
+  Settings reads plugin metadata on demand; it does not claim tool or retention readiness.
 
-  Both events are maintenance hints. They never enroll an ordinary chat, acknowledge
-  a result, interrupt work or authorize deletion. The service still acquires the
-  canonical writer and checks the due time. Arbitrary per-thread unloading outside
-  supported close hooks remains without a verified Desktop event subscription; a
-  late owner release can still defer until another event or explicit reconciliation.
 - An archive request has a durable pending intent followed by a confirmed archive
   timestamp. A crash or ambiguous failure between them reports `archive_unconfirmed`
   and never automatically repeats the mutation. Confirmed records are never
@@ -197,13 +184,6 @@ consumer Desktop acceptance. An isolated product-source run also excluded a Nati
 container, archived a selected leaf, and left that leaf active after manual restore
 and reconciliation. Its clock was advanced in the fixture; no real profile was changed.
 
-A current installed-engine isolated trial loaded the generated plugin through the
-public marketplace CLI, observed its asynchronous close hook, then used the product
-hook handler, authenticated service HTTP route and lifecycle reader to archive an
-enrolled leaf while its parent process remained open. Only the fixture's retention
-clock advanced; no external model request or consumer profile change occurred.
-This does not prove consumer Desktop hook installation/trust or every unload path.
-
 Deletion needs an additional restore-aware serialized contract: the installed engine
 accepted `thread/delete` after `thread/unarchive`. A current 0.169.0-alpha.11.1 isolated
 trial again confirmed that the restored chat was in the active list and was still
@@ -215,9 +195,6 @@ delete. Full manual archive/restore observation before the first managed archive
 also not established; an archive-and-restore occurring entirely between observations
 must not be claimed as detected. Consumer acceptance must resolve that boundary.
 
-Official [hooks](https://learn.chatgpt.com/docs/hooks) supplied exact session/child
-identities in isolated trials, but are not installed by this change. `SessionEnd` is
-not an archive receipt and `wait_agent` is not an exact-result acknowledgement.
 Existing profile data and user-created conversations have not been enrolled or changed.
 
 MCP initialization instructions direct ChatGPT Native-model work to the host's

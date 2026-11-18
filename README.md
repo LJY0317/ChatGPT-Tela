@@ -491,13 +491,15 @@ Desktop's Plugins Directory. Finally, in a **local Desktop thread**, invoke a Ch
 an approved workspace and read a file to verify actual access. Service readiness and plugin
 preparation do **not** prove host installation or permission. Neither public HTTPS nor Tailscale
 nor Web account setup is required for this local path.
-The installed plugin can also recheck delegated-chat retention after an agent closes.
-Review this optional background hook in **ChatGPT Settings → Hooks**. Preparing or
-registering the plugin does not approve hooks. Existing install, repair and update flows
-refresh an owned generated source and upgrade its already installed, enabled local plugin
-through the official plugin manager. Missing or disabled plugins and user edits are preserved.
-Settings shows installation, approval and disabled states separately; approved configuration
-applies to new chats, not proof that an existing chat reloaded it. See [retention behavior and limits](docs/web-delegation.md#delegated-chat-retention).
+Delegated-chat retention uses the existing service timer and lifecycle events, without
+plugin hooks or hook approval. Collected results become eligible after 12 hours; uncollected
+results after 7 days. Busy conversations are reviewed again without interrupting them.
+Automatic 30-day deletion remains unavailable until the host can protect restored chats;
+see [retention behavior and limits](docs/web-delegation.md#delegated-chat-retention).
+Existing install, repair and update flows refresh an owned generated source and upgrade its
+already installed, enabled local plugin through the official manager. Missing/disabled plugins
+and user edits are preserved. Settings reports plugin installation and enabled state;
+it does not claim that an existing chat reloaded configuration or that tools were exercised.
 
 Basic read-only Chat use of the standard local plugin has user acceptance on both macOS
 accounts. Clean installation on a new OS account, two-physical-device isolation and access

@@ -75,15 +75,13 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   source run verified leaf archival and preservation after manual restore.
   Newly executing Web children now notify that same registry; canonical lineage and
   first-turn checks exclude ordinary chats and later model switches. Other Native
-  children require explicit enrollment. Desktop exit and a reviewed local plugin's
-  asynchronous `close_agent` hook now wake the existing registered-record reconciliation,
-  without requiring Desktop PIDs in independent Web-profile status. Isolated generated
-  plugin/official-engine tests reached actual leaf archival while the parent stayed open.
-  Existing install/repair/update now refresh owned source and an already installed enabled
-  plugin through the official manager; Settings distinguishes installation, approval and
-  disabled configuration without granting trust. Consumer Desktop hook trust/acceptance,
-  Windows/Linux host activation, other per-thread unload paths and complete
-  manual-restore observation remain. Automatic deletion stays disabled pending a
+  children require explicit enrollment. One service timer reviews deferred records again
+  after 12 hours without moving the archive deadline. Startup, profile changes and macOS
+  Desktop exit/system wake can review sooner; no plugin hooks or approval are required.
+  Existing install/repair/update refresh the owned source and an already installed enabled
+  plugin through the official manager. Settings reports plugin state independently.
+  Consumer Desktop acceptance, Windows/Linux host activation, exact per-thread unload and
+  complete manual-restore observation remain. Automatic deletion stays disabled pending a
   restore-aware serialized contract: the installed engine still deletes a restored
   active thread through its unconditional delete API. Do not revive the retired engine
   or adopt ordinary chats by title.

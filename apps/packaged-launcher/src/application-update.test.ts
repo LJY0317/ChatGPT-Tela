@@ -100,7 +100,7 @@ test("Sparkle replacement restores only prior running services and promotes exte
       marketplacePath: join(root, "personal", "marketplace.json") });
     const pluginManifest = join(f.paths.stateRoot, "install/local-chat-plugin/plugins/tela-local-chat/.codex-plugin/plugin.json");
     const old = JSON.parse(readFileSync(pluginManifest, "utf8"));
-    old.version = "0.0.2"; delete old.hooks;
+    old.version = "0.0.2";
     writeFileSync(pluginManifest, JSON.stringify(old));
     expect(await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" })).toMatchObject({ prepared: true });
     expect(JSON.parse(readFileSync(pluginManifest, "utf8")).version).toBe("0.0.2");
@@ -116,7 +116,8 @@ test("Sparkle replacement restores only prior running services and promotes exte
     writeFileSync(join(f.sourceRoot, "Contents/Resources/build.txt"), "2");
     expect(await runApplicationUpdate("finish", f.input)).toMatchObject({ ready: true, restored: true, productVersion: "2.0.0", localPlugin: "updated" });
     expect(readOwnershipManifest(f.paths.installManifest)?.productVersion).toBe("2.0.0");
-    expect(JSON.parse(readFileSync(pluginManifest, "utf8"))).toMatchObject({ version: "0.0.3", hooks: expect.any(Object) });
+    expect(JSON.parse(readFileSync(pluginManifest, "utf8"))).toMatchObject({ version: "0.0.3" });
+    expect(JSON.parse(readFileSync(pluginManifest, "utf8")).hooks).toBeUndefined();
     expect(f.runner.jobs.get("com.openai.chatgpt-tela.codex")?.running).toBe(false);
     expect(f.runner.jobs.get("com.openai.chatgpt-tela.chat")?.running).toBe(true);
     expect(f.runner.jobs.get("com.openai.chatgpt-tela.gateway")?.running).toBe(true);

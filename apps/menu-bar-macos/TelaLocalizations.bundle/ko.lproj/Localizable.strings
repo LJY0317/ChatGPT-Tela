@@ -302,15 +302,13 @@
 "Install Tela Local Chat in ChatGPT’s Plugins Directory." = "ChatGPT 플러그인 목록에서 Tela Local Chat을 설치하세요.";
 "Plugin: Update needed" = "플러그인: 업데이트 필요";
 "Update Tela Local Chat in ChatGPT’s Plugins Directory." = "ChatGPT 플러그인 목록에서 Tela Local Chat을 업데이트하세요.";
-"Automatic cleanup: Approval needed" = "자동 정리: 승인 필요";
-"ChatGPT → Settings → Hooks" = "ChatGPT → 설정 → Hooks";
-"Automatic cleanup: Off" = "자동 정리: 꺼짐";
-"Manage the plugin and hooks in ChatGPT." = "ChatGPT에서 플러그인과 Hooks를 확인하세요.";
-"Automatic cleanup: Ready" = "자동 정리: 사용 가능";
 "Applies to new chats." = "새 대화부터 적용됩니다.";
 "Plugin: Custom source kept" = "플러그인: 사용자 설정 유지";
 "Manage the plugin in ChatGPT." = "ChatGPT에서 플러그인을 확인하세요.";
 "Plugin: Couldn't check" = "플러그인: 확인 불가";
-"Check the plugin and hooks in ChatGPT." = "ChatGPT에서 플러그인과 Hooks를 확인하세요.";
 "Checking plugin…" = "플러그인 확인 중…";
 "Couldn't prepare the plugin. Check Tela's installation." = "플러그인을 준비하지 못했습니다. Tela 설치 상태를 확인하세요.";
+
+"Plugin: Off" = "플러그인: 꺼짐";
+"Plugin: Enabled" = "플러그인: 켜짐";
+"Check the plugin in ChatGPT." = "ChatGPT에서 플러그인을 확인하세요.";

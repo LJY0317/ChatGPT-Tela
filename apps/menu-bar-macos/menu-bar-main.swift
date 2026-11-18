@@ -193,7 +193,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       guard let self else { return }
       recordMenuDiagnostic(event, fields: fields, home: self.home)
     }, terminated: { [weak self] in
-      self?.controlCenter.reconcileDelegationsAfterDesktopExit()
+      self?.controlCenter.reconcileDelegationsAfterLifecycleEvent()
     })
     DistributedNotificationCenter.default().addObserver(self, selector: #selector(reopenInstalledMenu),
       name: Notification.Name("com.openai.chatgpt-tela.menu-bar.reopen"), object: nil)
@@ -240,6 +240,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
                  NSWorkspace.didTerminateApplicationNotification] {
       notifications.addObserver(self, selector: #selector(workspaceChanged(_:)), name: name, object: nil)
     }
+    notifications.addObserver(self, selector: #selector(workspaceAwoke(_:)), name: NSWorkspace.didWakeNotification, object: nil)
     Task {
       if await updater.start() { await controlCenter.startServicesAtLaunch() }
       await controlCenter.showFirstUseIfNeeded()
@@ -339,6 +340,10 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
        ready["pid"] as? Int == Int(getpid()) {
       try? FileManager.default.removeItem(at: url)
     }
+  }
+
+  @objc private func workspaceAwoke(_ notification: Notification) {
+    controlCenter.reconcileDelegationsAfterLifecycleEvent()
   }
 
   @objc private func workspaceChanged(_ notification: Notification) {

@@ -1,16 +1,14 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { homedir } from "node:os";
-import { connectHookMetadataRpc } from "@chatgpt-tela/codex";
 import { resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 import { readProductConfigIfPresent } from "@chatgpt-tela/product-config";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { FilesystemOwnershipObserver, observeLocalMarketplaceEntry, readOwnershipManifest,
   resolveProductPaths, withPackagedTransitionOwner, type ProductPathOptions, type ProductPaths } from "@chatgpt-tela/product-lifecycle";
-import { LOCAL_CHAT_PLUGIN_VERSION, localChatRetentionHookCommand, refreshOwnedLocalChatPlugin, inspectOwnedLocalChatPlugin } from "../../local-mcp/src/plugin-package";
+import { LOCAL_CHAT_PLUGIN_VERSION, refreshOwnedLocalChatPlugin, inspectOwnedLocalChatPlugin } from "../../local-mcp/src/plugin-package";
 
-export type LocalPluginState = "prepare" | "install" | "update" | "review" | "disabled" | "ready" | "customized" | "unavailable";
+export type LocalPluginState = "prepare" | "install" | "update" | "disabled" | "ready" | "customized" | "unavailable";
 type InstalledPlugin = { pluginId: string; version: string; enabled: boolean };
 type Host = { slot: number; codexHome: string; executable: string };
 type Input = ProductPathOptions & { launcherExecutablePath: string; signal?: AbortSignal };
@@ -61,18 +59,6 @@ export function ownedInstalledPlugin(value: any, sourcePath: string): InstalledP
   return plugin;
 }
 
-export function hookActivation(value: any, pluginId: string, command: string): LocalPluginState {
-  if (!Array.isArray(value?.data)) return "unavailable";
-  const hook = value.data.flatMap((entry: any) => Array.isArray(entry?.hooks) ? entry.hooks : []).find((h: any) =>
-    h?.pluginId === pluginId && h.source === "plugin" && h.eventName === "postToolUse"
-    && h.handlerType === "command" && h.command === command && h.async === true && h.matcher === "close_agent$");
-  if (!hook) return "unavailable";
-  if (hook.enabled === false) return "disabled";
-  if (hook.enabled !== true) return "unavailable";
-  if (hook.trustStatus === "untrusted" || hook.trustStatus === "modified") return "review";
-  return ["trusted", "managed"].includes(hook.trustStatus) ? "ready" : "unavailable";
-}
-
 /** On-demand disk configuration, not proof an already-running Desktop loaded new settings. */
 export async function readLocalPluginStatus(input: Input) {
   const paths = resolveProductPaths(input);
@@ -82,7 +68,6 @@ export async function readLocalPluginStatus(input: Input) {
     const prepared = inspectOwnedLocalChatPlugin(source.root, input.launcherExecutablePath).state;
     if (prepared !== "current") return { source: prepared === "outdated" ? "prepare" : "customized", profiles: [] };
     const sourcePath = join(source.root, "plugins", "tela-local-chat");
-    const command = localChatRetentionHookCommand(resolve(input.launcherExecutablePath));
     const profiles = await Promise.all(hosts(paths, input).map(async host => {
       let state: LocalPluginState = "unavailable";
       try {
@@ -91,17 +76,7 @@ export async function readLocalPluginStatus(input: Input) {
         if (!plugin) state = "install";
         else if (!plugin.enabled) state = "disabled";
         else if (plugin.version !== LOCAL_CHAT_PLUGIN_VERSION) state = "update";
-        else {
-          const rpc = await connectHookMetadataRpc({ executable: host.executable, codexHome: host.codexHome,
-            cwd: input.home ?? homedir(), ...(input.signal ? { signal: input.signal } : {}) });
-          try {
-            const cwd = input.home ?? homedir();
-            const config: any = await rpc.request("config/read", { cwd, includeLayers: false });
-            if (!config?.config || typeof config.config !== "object") throw Error("Official hook configuration is unavailable");
-            state = config.config.features?.hooks === false ? "disabled"
-              : hookActivation(await rpc.request("hooks/list", { cwds: [cwd] }), plugin.pluginId, command);
-          } finally { await rpc.close(); }
-        }
+        else state = "ready";
       } catch (error) {
         emitDiagnosticEvent("chatgpt_tela_update", "local_plugin_status_failed", { slot: host.slot, ...diagnosticFailureFields(error) });
       }

@@ -11,9 +11,6 @@ if (process.argv[2] === "--tela-operation-owner-v1") {
     case "codex": await launchDaemon("codex", () => import("../../codex-daemon/src/main")); break;
     default: throw new Error("packaged daemon must be gateway, chat, or codex");
   }
-} else if (process.argv[2] === "delegation-hook") {
-  const { runDelegationHook } = await import("../../cli/src/delegation-hook");
-  await runDelegationHook(await Bun.stdin.text());
 } else if (process.argv[2] === "local-mcp") {
   const args = process.argv.slice(3);
   if (args.length === 0) {

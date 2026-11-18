@@ -98,6 +98,69 @@ test("writer conflicts defer without interruption; release wakeup or restart can
   }
 });
 
+test("deferred archives retain their policy clock and are scheduled again without hooks", async () => {
+  const f = fixture();
+  try {
+    await f.manager.enroll(1, "parent", "child"); f.advance(7 * 24); f.setBusy(true);
+    const due = f.receipt().dueAt;
+    expect((await f.manager.reconcile(undefined, true)).outcomes[0]?.status).toBe("deferred");
+    expect(f.receipt().dueAt).toBe(due);
+    expect(f.receipt().reviewAfter).toBe(due + 12 * HOUR);
+    const count = f.calls.length;
+    f.setBusy(false); f.advance(11);
+    expect((await f.manager.reconcile(undefined, true)).outcomes).toEqual([]);
+    expect(f.calls.length).toBe(count);
+    f.advance(1);
+    expect((await f.manager.reconcile(undefined, true)).outcomes[0]?.status).toBe("archived");
+    expect(f.receipt().dueAt).toBe(due);
+    expect(f.receipt().reviewAfter).toBeUndefined();
+    expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+test("persisted deferral returns to the same automatic timer when its review is due", async () => {
+  const f = fixture();
+  let automatic: ReturnType<typeof createDelegatedRetention> | undefined;
+  try {
+    await f.manager.enroll(1, "parent", "child"); f.advance(7 * 24); f.setBusy(true);
+    await f.manager.reconcile(); await f.manager.close();
+    f.setBusy(false); f.advance(12);
+    let observed!: () => void;
+    const archived = new Promise<void>(resolve => { observed = resolve; });
+    automatic = createDelegatedRetention({ ...f.options, automatic: true, profile(slot) {
+      const base = f.options.profile(slot);
+      return { ...base, async connect(id, lifecycle) {
+        const rpc = await base.connect(id, lifecycle);
+        return { close: () => rpc.close(), async request(method, params) {
+          const result = await rpc.request(method, params);
+          if (method === "thread/archive") observed();
+          return result;
+        } };
+      } };
+    } });
+    await Promise.race([archived, new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(Error("Deferred timer did not resume")), 2000); timer.unref();
+    })]);
+    await automatic.close(); automatic = undefined;
+    expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
+    expect(f.receipt().reviewAfter).toBeUndefined();
+  } finally { await automatic?.close(); await f.close(); }
+});
+
+test("lifecycle wakeup can archive before a deferred scheduled review and acknowledgement starts twelve hours", async () => {
+  const f = fixture();
+  try {
+    await f.manager.enroll(1, "parent", "child"); await f.manager.acknowledge(1, answer);
+    f.advance(12); f.setBusy(true);
+    expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("deferred");
+    const due = f.receipt().dueAt;
+    f.advance(1); f.setBusy(false);
+    expect((await f.manager.reconcile(1)).outcomes[0]?.status).toBe("archived");
+    expect(f.receipt().dueAt).toBe(due);
+    expect(f.calls.some(c => ["turn/start", "turn/interrupt", "thread/delete"].includes(c.method))).toBe(false);
+  } finally { await f.close(); }
+});
+
 test("profile-scoped reconciliation and changed installation cannot mutate another profile", async () => {
   const f = fixture();
   try {

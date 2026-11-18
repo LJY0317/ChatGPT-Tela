@@ -189,35 +189,18 @@ test("an uninstalled device cannot initialize local MCP or list any tools", () =
 });
 
 
-test("installed hook uses its exact launcher with shell-special paths and no extra tool server", () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-hook-package-"));
-  try {
-    const launcher = join(root, "tela ' $literal");
-    writeFileSync(launcher, '#!/bin/sh\nprintf "%s" "$1"\n', { mode: 0o755 });
-    const { plugin } = prepareLocalChatPlugin(join(root, "package"), launcher);
-    const manifest = JSON.parse(readFileSync(join(plugin, ".codex-plugin/plugin.json"), "utf8"));
-    const handler = manifest.hooks.hooks.PostToolUse[0].hooks[0];
-    expect(handler.async).toBe(true);
-    if (process.platform !== "win32") {
-      const result = spawnSync("/bin/sh", ["-c", handler.command], { cwd: root, encoding: "utf8" });
-      expect(result.status).toBe(0);
-      expect(result.stdout).toBe("delegation-hook");
-    }
-    expect(Object.keys(JSON.parse(readFileSync(join(plugin, ".mcp.json"), "utf8")).mcpServers)).toEqual(["tela-local-chat"]);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
-test("generated refresh preserves edited hooks and MCP settings", () => {
-  const root = mkdtempSync(join(tmpdir(), "tela-hook-refresh-"));
+test("generated refresh adds no hooks and preserves custom plugin and MCP settings", () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-plugin-refresh-"));
   try {
     const launcher = join(root, "tela"), { plugin } = prepareLocalChatPlugin(root, launcher);
     const path = join(plugin, ".codex-plugin/plugin.json");
     const next = JSON.parse(readFileSync(path, "utf8"));
-    const previous = { ...next, version: "0.0.2" }; delete previous.hooks;
+    const previous = { ...next, version: "0.0.2" };
+    expect(next.hooks).toBeUndefined();
     writeFileSync(path, JSON.stringify(previous));
     refreshOwnedLocalChatPlugin(root, launcher);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(next);
-    const edited = JSON.stringify({ ...next, hooks: { user: true } });
+    const edited = JSON.stringify({ ...next, description: "user customization" });
     writeFileSync(path, edited);
     refreshOwnedLocalChatPlugin(root, launcher);
     expect(readFileSync(path, "utf8")).toBe(edited);
