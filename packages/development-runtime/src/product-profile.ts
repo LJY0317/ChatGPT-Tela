@@ -84,6 +84,7 @@ export interface ProductProfileRuntimeConfig {
 type AccountSurface = Awaited<ReturnType<ElectronDevelopmentRuntime["openProfileSetupSurface"]>>;
 
 export async function startAppOwnedProductResponsesRuntime(input: {
+  readonly onWebChild?: import("./runtime").DevelopmentRuntimeOptions["onWebChild"];
   readonly config: ProductProfileRuntimeConfig;
   readonly ingress: { readonly port: number; readonly capability: string };
   readonly electronStarter?: typeof startElectronDevelopmentRuntime;
@@ -185,6 +186,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     profileSlot: config.slot,
     ...(suppliedHistory ? { suppliedHistory } : {}),
     routeId: config.routeId,
+    ...(input.onWebChild ? { onWebChild: input.onWebChild } : {}),
     completedResults: resultScope,
     profileId: config.browserProfile.profileId,
     chatGptUrl: CHATGPT_TEMPORARY_CHAT_URL,

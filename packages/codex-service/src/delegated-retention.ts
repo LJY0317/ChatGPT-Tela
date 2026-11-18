@@ -121,17 +121,34 @@ export function createDelegatedRetention(input: {
   });
   const report = (error: unknown) => emitDiagnosticEvent("chatgpt_tela_codex", "delegation_retention_failed", diagnosticFailureFields(error));
   const api = {
-    enroll(slot: number, parentThreadId: string, threadId: string) {
+    enroll(slot: number, parentThreadId: string, threadId: string, firstWebTurnId?: string) {
       return serial(async () => {
         if (!Number.isInteger(slot) || slot < 1 || slot > 99) throw Error("Invalid profile slot");
         id(parentThreadId); id(threadId);
         const profile = input.profile(slot), scope = hash(profile.scope), k = key(scope, threadId);
+        const existing = records.get(k);
+        if (firstWebTurnId !== undefined) {
+          id(firstWebTurnId);
+          // The persisted lineage is already verified. Observation cannot change
+          // it or its archive state, and need not start another history reader.
+          if (existing) {
+            if (existing.parentThreadId !== parentThreadId) throw Error("Delegation lineage changed");
+            return existing;
+          }
+        }
         const rpc = await profile.connect(threadId, false);
         try {
           const data: any = await rpc.request("thread/read", { threadId, includeTurns: false });
           lineage(data?.thread, parentThreadId, threadId);
-          const existing = records.get(k);
           if (existing && existing.archivedAt == null) return existing;
+          if (firstWebTurnId !== undefined) {
+            const first: any = await rpc.request("thread/turns/list", {
+              threadId, limit: 1, sortDirection: "asc", itemsView: "notLoaded",
+            });
+            if (!first?.data?.[0]?.id) throw Error("Official first turn is unavailable");
+            // A later model switch or an old restored chat is not creation consent.
+            if (first?.data?.[0]?.id !== firstWebTurnId) return { enrolled: false, reason: "not_first_turn" };
+          }
           const turn = await latest(rpc, threadId);
           // Enrollment time is only an initial observation for active/missing history;
           // no archive can occur until an official terminal completedAt is available.

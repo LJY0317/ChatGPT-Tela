@@ -159,6 +159,7 @@ export type DevelopmentMcpRuntime =
     };
 
 export interface DevelopmentRuntimeOptions {
+  readonly onWebChild?: Parameters<typeof createSuppliedRequestGateway>[0]["onWebChild"];
   readonly suppliedHistory?: import("./supplied-history").SuppliedHistorySource;
   readonly profileSlot?: number;
   readonly routeId?: string;
@@ -206,6 +207,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
     if (typeof planner.planSuppliedRequest !== "function") throw new Error("Web planner does not support supplied requests");
     const gateway = createSuppliedRequestGateway({ browserHost: input.browserHost, provider,
       planner: planner as SuppliedRequestWebTurnPlanner,
+      ...(input.onWebChild ? { onWebChild: input.onWebChild } : {}),
       ...(input.completedResults ? { completedResults: input.completedResults } : {}),
       ...(input.suppliedHistory ? { suppliedHistory: input.suppliedHistory } : {}),
       ...(input.routeId ? { routeId: input.routeId } : {}),

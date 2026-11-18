@@ -63,9 +63,29 @@ new response. This does not add a scheduler or restore the retired engine.
 
 ## Delegated-chat retention
 
-The source implementation connects explicit registration and result acknowledgement
-to the existing Tela Codex service's automatic archive path. It is not installed or
-accepted against consumer Desktop profiles yet. Automatic deletion remains disabled.
+The source implementation connects new Web-child observation, explicit registration
+and exact result acknowledgement to the existing Tela Codex service's archive path.
+This integration is not installed or accepted against consumer Desktop profiles yet.
+Automatic deletion remains disabled.
+
+When a new child executes its first official turn through a Web route, the installed
+profile runtime notifies the existing owned service once per new provider operation.
+The service verifies the exact configured profile, canonical parent/child lineage and
+first turn before enrollment. Ordinary chats and later Native-to-Web switches do not
+enroll. Replayed responses do not dispatch another notification; observations never
+reactivate retained archive records. A registration failure emits correlated diagnostics
+without blocking the answer or shutdown readiness. No catalog scan, hook installation,
+model request, retry worker or second registry is added.
+
+An isolated installed-engine trial confirmed parent identity in the child request and
+successfully enrolled it through the actual read-only history client before returning
+its first synthetic answer. This used no external model call or consumer profile.
+It proves that boundary, not consumer Desktop installation or timed archival.
+
+This path depends on the host supplying parent identity with its first Web request and
+making that first turn readable. Missing evidence is not replaced with title matching
+or adoption of older chats. Registration success is durable only after the service has
+saved the record; dispatch alone is not success. Explicit enrollment remains available:
 
 Use the Native coordinator's existing command tool after creating a selected child:
 
@@ -78,7 +98,8 @@ This explicitly enrolls that child. It checks the public
 `CODEX_THREAD_ID` and scopes the record to this installation and exact configured
 profile/history home. A title, Web model, old journal, ordinary user chat, app save,
 or hook event alone never enrolls a conversation. Native `spawn_agent` does not
-implicitly call this command; the creation workflow must invoke it deliberately.
+implicitly call this command. A new child's first Web turn uses the observation path
+above; other deliberately selected children require this explicit command.
 No AGENTS.md rule or additional model request is needed for the operation itself.
 
 After receiving an exact result, the coordinator confirms it through the same service:

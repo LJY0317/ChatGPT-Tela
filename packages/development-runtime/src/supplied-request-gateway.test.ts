@@ -118,6 +118,7 @@ function request(turn = "turn-1", input: unknown[] = firstInput) {
 }
 
 function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure?: Error; planner?: ReturnType<typeof createNativeRequestDevelopmentWebTurnPlanner>;
+  onWebChild?: Parameters<typeof createSuppliedRequestGateway>[0]["onWebChild"];
   suppliedHistory?: Parameters<typeof createSuppliedRequestGateway>[0]["suppliedHistory"];
   completedResults?: Parameters<typeof createSuppliedRequestGateway>[0]["completedResults"] } = {}) {
   const submissions: WebTurnRequest[] = [], selections: unknown[] = [], released: string[] = [];
@@ -157,6 +158,7 @@ function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure
     },
   };
   const gateway = createSuppliedRequestGateway({ browserHost: host, provider, profileSlot: 2,
+    ...(options.onWebChild ? { onWebChild: options.onWebChild } : {}),
     ...(options.completedResults ? { completedResults: options.completedResults } : {}),
     ...(options.planner ? { planner: options.planner } : {}),
     ...(options.suppliedHistory ? { suppliedHistory: options.suppliedHistory } : {}),
@@ -691,4 +693,45 @@ test("supplied opaque bootstrap exposes only scoped history, retires its control
     expect(f.submissions[1]!.physicalContext.mode).toBe("retained-delta");
     expect(f.submissions[1]!.chatTools!.nativeHistoryControl).toBeString();
   } finally { release(); await client.close(); await server.stop(); await f.gateway.close(); }
+});
+
+
+test("only newly executed Web child operations notify retention; duplicates join and ordinary chats do not enroll", async () => {
+  const children: unknown[] = [];
+  const f = fixture({ onWebChild: async child => { children.push(child); } });
+  const child = request();
+  Object.assign(child.client_metadata["x-codex-turn-metadata"], { parent_thread_id: "parent" });
+  try {
+    await Promise.all([f.gateway.handle(child), f.gateway.handle(child)]);
+    expect(children).toEqual([{ parentThreadId: "parent", threadId: "thread-1", turnId: "turn-1" }]);
+    await f.gateway.handle(child);
+    expect(children).toHaveLength(1);
+    await f.gateway.handle(request("turn-2", [...firstInput,
+      { type: "message", role: "assistant", content: "A inspected." },
+      { type: "message", role: "user", content: "Inspect B." }]));
+    expect(children).toHaveLength(1);
+  } finally { await f.gateway.close(); }
+});
+
+test("unavailable retention does not fail or duplicate a Web answer", async () => {
+  const f = fixture({ onWebChild: async () => { throw Error("owned service disconnected"); } });
+  const child = request();
+  Object.assign(child.client_metadata["x-codex-turn-metadata"], { parent_thread_id: "parent" });
+  try {
+    expect(await f.gateway.handle(child)).toMatchObject({ type: "final", answer: "A inspected." });
+    expect(f.submissions).toHaveLength(1);
+  } finally { await f.gateway.close(); }
+});
+
+
+test("pending retention enrollment does not hold the Web response or shutdown readiness", async () => {
+  const f = fixture({ onWebChild: async () => new Promise<void>(() => {}) });
+  const child = request();
+  Object.assign(child.client_metadata["x-codex-turn-metadata"], { parent_thread_id: "parent" });
+  try {
+    const outcome = await f.gateway.handle(child);
+    expect(outcome).toMatchObject({ type: "final", answer: "A inspected." });
+    f.gateway.commit(outcome);
+    expect(f.gateway.shutdownReadiness()).toBe("ready");
+  } finally { await f.gateway.close(); }
 });

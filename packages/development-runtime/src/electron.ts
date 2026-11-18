@@ -105,6 +105,7 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
 }
 
 export interface ElectronDevelopmentRuntimeOptions {
+  readonly onWebChild?: DevelopmentRuntimeOptions["onWebChild"];
   readonly suppliedHistory?: import("./supplied-history").SuppliedHistorySource;
   readonly profileSlot?: number;
   readonly routeId?: string;
@@ -296,6 +297,7 @@ export async function startElectronDevelopmentRuntime(
   }) : undefined;
 
   const runtime = await startDevelopmentRuntime({
+    ...(input.onWebChild ? { onWebChild: input.onWebChild } : {}),
     ...(input.completedResults ? { completedResults: input.completedResults } : {}),
       ...(input.suppliedHistory ? { suppliedHistory: input.suppliedHistory } : {}),
     ...(input.profileSlot !== undefined ? { profileSlot: input.profileSlot } : {}),

@@ -221,3 +221,37 @@ test("persisted Native spawn evidence excludes a container even when restore rac
     } finally { await manager?.close(); await f.close(); }
   }
 });
+
+
+test("automatic Web enrollment requires the canonical first child turn and never enrolls a later switch", async () => {
+  const f = fixture();
+  try {
+    expect(await f.manager.enroll(1, "parent", "child", "later-web-turn"))
+      .toEqual({ enrolled: false, reason: "not_first_turn" });
+    expect(readdirSync(f.options.directory)).toEqual([]);
+    await f.manager.enroll(1, "parent", "child", "turn");
+    expect(f.receipt().threadId).toBe("child");
+    const reads = f.calls.length;
+    await f.manager.enroll(1, "parent", "child", "turn");
+    expect(f.calls.length).toBe(reads);
+    await expect(f.manager.enroll(1, "foreign", "child", "turn")).rejects.toThrow("lineage");
+    expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
+    f.advance(7 * 24);
+    expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("archived");
+    const archived = f.receipt();
+    await f.manager.enroll(1, "parent", "child", "turn");
+    expect(f.receipt()).toEqual(archived);
+    await f.manager.reconcile();
+    expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+test("automatic Web metadata cannot enroll a normal chat or claim another Native parent", async () => {
+  const f = fixture();
+  try {
+    await expect(f.manager.enroll(1, "foreign", "child", "turn")).rejects.toThrow("lineage");
+    f.thread.source = "cli";
+    await expect(f.manager.enroll(1, "parent", "child", "turn")).rejects.toThrow("lineage");
+    expect(readdirSync(f.options.directory)).toEqual([]);
+  } finally { await f.close(); }
+});

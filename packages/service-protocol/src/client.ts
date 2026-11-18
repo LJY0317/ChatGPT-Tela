@@ -163,6 +163,7 @@ export class CodexServiceClient extends LocalServiceClient {
 
   async manageDelegation(input: { slot: number } & (
     { action: "reconcile" }
+    | { action: "observe-web-child"; parentThreadId: string; threadId: string; turnId: string }
     | { action: "enroll"; parentThreadId: string; threadId: string }
     | ({ action: "acknowledge"; parentThreadId: string; threadId: string; turnId: string }
       & ({ outcome: "answer"; itemId: string } | { outcome: "failed" | "interrupted" }))

@@ -125,6 +125,9 @@ export async function startCodexServiceHttpServer(input: {
           if (!body || typeof body !== "object" || !Number.isInteger(body.slot) || body.slot < 1 || body.slot > 99) return error(400, "Invalid delegation request");
           if (body.action === "reconcile") return Response.json(await manager.reconcile(body.slot));
           if (typeof body.parentThreadId !== "string" || typeof body.threadId !== "string") return error(400, "Invalid delegation identity");
+          if (body.action === "observe-web-child" && typeof body.turnId === "string") {
+            return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId, body.turnId));
+          }
           if (body.action === "enroll") return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId));
           if (body.action === "acknowledge" && typeof body.turnId === "string"
             && (body.outcome === "answer" && typeof body.itemId === "string" || ["failed", "interrupted"].includes(body.outcome))) {

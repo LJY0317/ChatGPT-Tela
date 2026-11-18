@@ -1,3 +1,6 @@
+import { join } from "node:path";
+import { readServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
+import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
 import { diagnosticFingerprint, withDiagnosticContext } from "@chatgpt-tela/core";
 import {
   loadProductProfileRuntimeConfig,
@@ -50,6 +53,14 @@ async function mainAppOwned(
     const installId = process.env.CHATGPT_TELA_INSTALL_ID;
     runtime = await startAppOwnedProductResponsesRuntime({
       config, ingress, signal: lifecycle.signal,
+      ...(installId ? { onWebChild: async (child: { threadId: string; parentThreadId: string; turnId: string }) => {
+        const paths = resolveProductPaths();
+        const descriptor = readServiceRuntimeDescriptor(join(paths.serviceRuntime("codex"), "descriptor.json"));
+        if (!descriptor || descriptor.installId !== installId) throw Error("Owned delegation service is unavailable");
+        await new CodexServiceClient(descriptorForService(descriptor, "codex")).manageDelegation({
+          action: "observe-web-child", slot: config.slot, ...child,
+        }, lifecycle.signal);
+      } } : {}),
       ...(installId
         ? { catalogPreparation: { paths: resolveProductPaths(), installId } } : {}),
     });

@@ -551,7 +551,7 @@ test("private service forwards exact selected preview and explicit reveal withou
   } finally {await client.close(); await server.close();}
 });
 
-test("owned management client connects explicit creation, acknowledgement and due archive without a Native turn", async () => {
+test("owned management client connects observed Web creation, acknowledgement and due archive without a Native turn", async () => {
   const directory = mkdtempSync(join(tmpdir(), "tela-retention-http-"));
   let now = 1_000_000_000;
   const methods: string[] = [];
@@ -574,7 +574,10 @@ test("owned management client connects explicit creation, acknowledgement and du
   const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
     installId: "fixture", pid: process.pid, endpoint: server.endpoint.href, bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
   try {
+    await client.manageDelegation({ action: "observe-web-child", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn" });
+    const enrolled = readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8");
     await client.manageDelegation({ action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" });
+    expect(readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8")).toBe(enrolled);
     expect(await client.manageDelegation({ action: "acknowledge", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer" }))
       .toMatchObject({ enrolled: true, automaticArchiveEnabled: true, automaticDeleteEnabled: false });
     now += 12 * 3_600_000;
