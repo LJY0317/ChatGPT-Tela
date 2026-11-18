@@ -49,13 +49,15 @@ test("only explicitly enrolled official children are archived; unconfirmed clock
     await expect(f.manager.enroll(1, "parent", "child")).rejects.toThrow("lineage");
     f.thread.source = { subAgent: { thread_spawn: { parent_thread_id: "parent" } } };
     await f.manager.enroll(1, "parent", "child");
+    expect((await f.manager.reconcile()).outcomes).toEqual([]);
+    f.advance(7 * 24);
     expect((await f.manager.reconcile()).outcomes).toEqual([{ threadId: "child", status: "archived" }]);
     expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
     await f.manager.reconcile(); expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
   } finally { await f.close(); }
 });
 
-test("acknowledgement uses the later of exact result confirmation and terminal activity plus twelve hours", async () => {
+test("only an exact answer receipt starts twelve hours from first collection", async () => {
   const f = fixture();
   try {
     await f.manager.enroll(1, "parent", "child"); f.advance(4);
@@ -76,6 +78,23 @@ test("a newer turn invalidates an older acknowledgement without moving time for 
     const due = f.receipt().dueAt; f.advance(1); await f.manager.reconcile(); expect(f.receipt().dueAt).toBe(due);
     expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
     f.advance(7 * 24); expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("archived");
+  } finally { await f.close(); }
+});
+
+test("acknowledged failures remain seven-day fallback and repeated checks cannot postpone it", async () => {
+  const f = fixture();
+  try {
+    await f.manager.enroll(1, "parent", "child"); const due = f.receipt().dueAt;
+    f.turn.status = "failed"; f.advance(24);
+    await f.manager.acknowledge(1, { ...answer, outcome: "failed" });
+    expect(f.receipt().dueAt).toBe(due);
+    f.advance(6 * 24); f.setBusy(true); await f.manager.reconcile();
+    const review = f.receipt().reviewAfter;
+    f.advance(1); await f.manager.reconcile();
+    expect(f.receipt().reviewAfter).toBe(review);
+    expect(f.receipt().dueAt).toBe(due);
+    f.setBusy(false);
+    expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("archived");
   } finally { await f.close(); }
 });
 
@@ -227,7 +246,7 @@ test("ambiguous archive preserves durable intent and never repeats after restart
         } };
       } };
     } });
-    expect((await manager.reconcile()).outcomes[0]?.status).toBe("deferred");
+    expect((await manager.reconcile()).outcomes[0]?.status).toBe("archive_unconfirmed");
     expect(f.receipt().archivePending).toBe(true); expect(f.receipt().archivedAt).toBeUndefined();
     await manager.close();
     manager = createDelegatedRetention(f.options);
@@ -236,33 +255,47 @@ test("ambiguous archive preserves durable intent and never repeats after restart
   } finally { await manager?.close(); await f.close(); }
 });
 
-test("missing terminal completion time and a newer unfinished turn never inherit an old archive deadline", async () => {
-  const f = fixture();
-  try {
-    await f.manager.enroll(1, "parent", "child"); f.advance(7 * 24);
-    f.turn.completedAt = null;
-    expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("deferred");
-    f.turn.id = "in-progress-turn"; f.turn.status = "inProgress";
-    expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("deferred");
-    expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
-  } finally { await f.close(); }
-});
-
-test("recursive archive never touches active or archived descendants outside the enrolled leaf", async () => {
-  for (const state of ["active", "archived"] as const) {
+test("unknown completion, failures and new uncollected turns share the fixed seven-day fallback", async () => {
+  for (const status of ["completed", "failed", "interrupted", "inProgress"]) {
     const f = fixture();
     try {
-      await f.manager.enroll(1, "parent", "child"); f.advance(7 * 24); f.setDescendant(state);
-      expect((await f.manager.reconcile()).outcomes).toEqual([{ threadId: "child", status: "excluded_descendants" }]);
-      expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
-      expect(readdirSync(f.options.directory)).toEqual([]);
-      const calls = f.calls.length;
-      await f.manager.reconcile(); expect(f.calls.length).toBe(calls);
+      await f.manager.enroll(1, "parent", "child");
+      const due = f.receipt().dueAt;
+      f.turn.completedAt = null; f.turn.status = status; f.turn.id = "new-turn";
+      f.advance(7 * 24);
+      expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("archived");
+      expect(f.receipt().dueAt).toBe(due);
     } finally { await f.close(); }
   }
 });
 
-test("persisted Native spawn evidence excludes a container even when restore races across list buckets", async () => {
+test("actual running state is reported as overdue rather than pretending seven days guarantees a stop", async () => {
+  const f = fixture();
+  try {
+    await f.manager.enroll(1, "parent", "child"); f.advance(7 * 24); f.thread.status.type = "active";
+    expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("deferred");
+    expect(f.manager.status().overdue[0]?.reason).toBe("running");
+    f.thread.status.type = "idle";
+    expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("archived");
+  } finally { await f.close(); }
+});
+
+test("recursive archive retains blocked conversations for user review without touching descendants", async () => {
+  for (const state of ["active", "archived"] as const) {
+    const f = fixture();
+    try {
+      await f.manager.enroll(1, "parent", "child"); f.advance(7 * 24); f.setDescendant(state);
+      expect((await f.manager.reconcile()).outcomes).toEqual([{ threadId: "child", status: "deferred" }]);
+      expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
+      expect(f.manager.status().overdue[0]?.reason).toBe("descendants_present");
+      expect(readdirSync(f.options.directory)).toHaveLength(1);
+      await f.manager.reconcile();
+      expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
+    } finally { await f.close(); }
+  }
+});
+
+test("Native spawn evidence requires review even when restore races across list buckets", async () => {
   for (const creationItem of [
     { id: "spawn", type: "collabAgentToolCall", tool: "spawnAgent", receiverThreadIds: ["restored-descendant"] },
     { id: "started", type: "subAgentActivity", kind: "started", agentThreadId: "restored-descendant" },
@@ -284,7 +317,7 @@ test("persisted Native spawn evidence excludes a container even when restore rac
           } };
         } };
       } });
-      expect((await manager.reconcile()).outcomes[0]?.status).toBe("excluded_descendants");
+      expect((await manager.reconcile()).outcomes[0]?.status).toBe("deferred");
       expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
       expect(f.calls.some(c => c.method === "thread/list")).toBe(false);
     } finally { await manager?.close(); await f.close(); }

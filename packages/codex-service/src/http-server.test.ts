@@ -575,6 +575,12 @@ test("owned management client connects observed Web creation, acknowledgement an
     installId: "fixture", pid: process.pid, endpoint: server.endpoint.href, bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
   try {
     await client.manageDelegation({ action: "observe-web-child", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn" });
+    const snapshot = await fetch(new URL("v1/codex/delegations", server.endpoint), {
+      headers: { authorization: `Bearer ${server.bearerToken}` },
+    });
+    expect(await snapshot.json()).toEqual({ overdue: [], automaticDeleteEnabled: false });
+    const blockedRead = await fetch(new URL("v1/codex/delegations", server.endpoint));
+    expect(blockedRead.status).toBe(401);
     const enrolled = readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8");
     await client.manageDelegation({ action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" });
     expect(readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8")).toBe(enrolled);

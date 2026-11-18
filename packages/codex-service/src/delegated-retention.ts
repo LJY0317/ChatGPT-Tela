@@ -11,7 +11,7 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 type State = {
   version: 1; scope: string; slot: number; parentThreadId: string; threadId: string;
   enrolledAt: number; dueAt: number; acknowledgement?: ResultAcknowledgement;
-  archivedAt?: number; archivePending?: true; reviewAfter?: number;
+  archivedAt?: number; archivePending?: true; reviewAfter?: number; issue?: string; title?: string;
 };
 export interface DelegatedRetentionProfile {
   /** Install identity + exact configured profile/home; never a model-supplied label. */
@@ -26,10 +26,13 @@ function lineage(thread: any, parent: string, child: string): void {
   if (thread?.id !== child || thread.source?.subAgent?.thread_spawn?.parent_thread_id !== parent
     || thread.parentThreadId != null && thread.parentThreadId !== parent) throw Error("Delegation lineage changed");
 }
-function terminalTime(turn: any): number | undefined {
-  return ["completed", "failed", "interrupted"].includes(turn?.status)
-    && typeof turn.completedAt === "number" && Number.isFinite(turn.completedAt) && turn.completedAt >= 0
-    ? turn.completedAt * 1000 : undefined;
+/** Exactly two clocks. Observations, failures and missing metadata cannot extend either. */
+function archiveDeadline(record: State, latestTurnId?: string): number {
+  const ack = record.acknowledgement;
+  const collectedAt = ack?.result?.outcome === "answer" && ack.scope === record.scope
+    && ack.result.threadId === record.threadId && ack.result.parentThreadId === record.parentThreadId
+    && ack.result.turnId === latestTurnId ? Date.parse(ack.acknowledgedAt) : NaN;
+  return Number.isFinite(collectedAt) ? collectedAt + HALF_DAY : record.enrolledAt + 7 * DAY;
 }
 async function latest(rpc: CodexAppServerRpc, threadId: string): Promise<any> {
   const result: any = await rpc.request("thread/turns/list", { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" });
@@ -93,7 +96,11 @@ export function createDelegatedRetention(input: {
       || key(record.scope, id(record.threadId)) + ".json" !== file) throw Error("Invalid delegation state");
     id(record.parentThreadId);
     if (record.archivedAt != null && now() - record.archivedAt > 60 * DAY) unlinkSync(join(input.directory, file));
-    else records.set(file.slice(0, -5), record);
+    else {
+      // Old completion-based deadlines must not postpone the fixed fallback.
+      record.dueAt = Math.min(record.dueAt, record.enrolledAt + 7 * DAY);
+      records.set(file.slice(0, -5), record);
+    }
   }
   const save = (k: string, record: State) => {
     const body = JSON.stringify(record) + "\n";
@@ -151,11 +158,9 @@ export function createDelegatedRetention(input: {
             // A later model switch or an old restored chat is not creation consent.
             if (first?.data?.[0]?.id !== firstWebTurnId) return { enrolled: false, reason: "not_first_turn" };
           }
-          const turn = await latest(rpc, threadId);
-          // Enrollment time is only an initial observation for active/missing history;
-          // no archive can occur until an official terminal completedAt is available.
-          const dueAt = (terminalTime(turn) ?? now()) + 7 * DAY;
-          const record: State = { version: 1, scope, slot, parentThreadId, threadId, enrolledAt: now(), dueAt };
+          const enrolledAt = now();
+          const record: State = { version: 1, scope, slot, parentThreadId, threadId, enrolledAt, dueAt: enrolledAt + 7 * DAY,
+            ...(typeof data.thread.name === "string" ? { title: data.thread.name.slice(0, 200) } : {}) };
           save(k, record);
           event("delegation_retention_enrolled", record);
           return record;
@@ -175,18 +180,23 @@ export function createDelegatedRetention(input: {
             ? record.acknowledgement : verified;
           if (record && record.archivedAt == null && !record.archivePending) {
             if (record.parentThreadId !== result.parentThreadId) throw Error("Acknowledgement parent changed");
-            const turn = await latest(rpc, result.threadId), activity = terminalTime(turn);
-            if (turn?.id === result.turnId && activity != null) {
-              const next = { ...record, acknowledgement, dueAt: Math.max(activity, Date.parse(acknowledgement.acknowledgedAt)) + HALF_DAY };
-              delete next.reviewAfter;
-              save(k, next);
-              if (record.acknowledgement?.acknowledgedAt !== acknowledgement.acknowledgedAt
-                || record.acknowledgement?.result.turnId !== acknowledgement.result.turnId) event("delegation_retention_acknowledged", next);
-            }
+            const turn = await latest(rpc, result.threadId);
+            const next = { ...record, acknowledgement };
+            next.dueAt = archiveDeadline(next, turn?.id);
+            delete next.reviewAfter;
+            save(k, next);
+            if (record.acknowledgement?.acknowledgedAt !== acknowledgement.acknowledgedAt
+              || record.acknowledgement?.result.turnId !== acknowledgement.result.turnId) event("delegation_retention_acknowledged", next);
           }
           return { acknowledgement, enrolled: !!record, automaticArchiveEnabled: !!record && record.archivedAt == null && !record.archivePending, automaticDeleteEnabled: false };
         } finally { await rpc.close(); }
       });
+    },
+    status() {
+      return { overdue: [...records.values()].filter(r => r.archivedAt == null && r.dueAt <= now()).map(r => ({
+        slot: r.slot, threadId: r.threadId, title: r.title, dueAt: r.dueAt,
+        reason: r.archivePending ? "archive_unconfirmed" : r.issue ?? "overdue",
+      })), automaticDeleteEnabled: false };
     },
     // Scheduled checks honor a deferred review deadline. Real lifecycle/user
     // events can check sooner without changing the original retention clock.
@@ -197,28 +207,34 @@ export function createDelegatedRetention(input: {
           if (slot != null && record.slot !== slot || record.archivedAt != null) continue;
           if (record.archivePending) { outcomes.push({ threadId: record.threadId, status: "archive_unconfirmed" }); continue; }
           if (record.dueAt > now() || scheduled && (record.reviewAfter ?? 0) > now()) continue;
-          let rpc: CodexAppServerRpc | undefined;
+          let rpc: CodexAppServerRpc | undefined, reason = "profile_unavailable";
           try {
             const profile = input.profile(record.slot);
+            reason = "ownership_changed";
             if (hash(profile.scope) !== record.scope) throw Error("Configured profile ownership changed");
+            reason = "owner_unavailable";
             rpc = await profile.connect(record.threadId, true);
             // The installed engine acquires its writer here. Another owner must
             // release naturally; never send turn/start, interrupt, delete or retry.
             const resumed: any = await rpc.request("thread/resume", { threadId: record.threadId, excludeTurns: true });
+            reason = "ownership_changed";
             lineage(resumed?.thread, record.parentThreadId, record.threadId);
+            reason = "running";
             if (resumed.thread.status?.type !== "idle") throw Error("Delegation is not idle");
-            const turn = await latest(rpc, record.threadId), activity = terminalTime(turn);
-            if (activity == null) throw Error("Official terminal activity time is unavailable");
-            const ack = record.acknowledgement;
-            const confirmed = ack?.scope === record.scope && ack.result.parentThreadId === record.parentThreadId
-              && ack.result.threadId === record.threadId && ack.result.turnId === turn.id;
-            const dueAt = confirmed ? Math.max(activity, Date.parse(ack!.acknowledgedAt)) + HALF_DAY : activity + 7 * DAY;
-            if (!Number.isFinite(dueAt)) throw Error("Invalid result acknowledgement time");
-            const next = { ...record, dueAt };
+            // Without a collected answer, no completion timestamp or turn read
+            // is needed to apply the fixed seven-day fallback to an idle owner.
+            let latestTurnId: string | undefined;
+            if (record.acknowledgement?.result?.outcome === "answer") {
+              try { latestTurnId = (await latest(rpc, record.threadId))?.id; }
+              catch (error) { report(error); } // Unknown receipt validity uses the same fallback.
+            }
+            const next = { ...record, dueAt: archiveDeadline(record, latestTurnId) };
             delete next.reviewAfter;
-            if (dueAt > now()) { save(k, next); outcomes.push({ threadId: record.threadId, status: "not_due" }); continue; }
+            delete next.issue;
+            if (next.dueAt > now()) { save(k, next); outcomes.push({ threadId: record.threadId, status: "not_due" }); continue; }
             // Native archive recursively affects spawned descendants, even
             // those not registered here. Only a persisted leaf is eligible.
+            reason = "history_unavailable";
             let hasDescendants = await hasSpawnHistory(rpc, record.threadId);
             for (const archived of hasDescendants ? [] : [false, true]) {
               const page: any = await rpc.request("thread/list", { ancestorThreadId: record.threadId,
@@ -226,18 +242,11 @@ export function createDelegatedRetention(input: {
               if (!Array.isArray(page?.data) || page.data.length === 0 && page.nextCursor != null) throw Error("Official descendant metadata is unavailable");
               if (page.data.length > 0) { hasDescendants = true; break; }
             }
-            if (hasDescendants) {
-              // Containers are outside this archive primitive's ownership, not
-              // temporarily busy. Relinquish management instead of re-auditing
-              // their history on every service restart. The chat/ACK remain.
-              unlinkSync(path(k));
-              records.delete(k);
-              event("delegation_retention_excluded", record, "descendants_present");
-              outcomes.push({ threadId: record.threadId, status: "excluded_descendants" });
-              continue;
-            }
+            reason = "descendants_present";
+            if (hasDescendants) throw Error("Archiving would affect other conversations; user review required");
             // Durable intent prevents re-archiving a manually restored chat if
             // the process dies between the mutation and confirmation write.
+            reason = "storage_unavailable";
             save(k, { ...next, archivePending: true });
             event("delegation_retention_archive_requested", next);
             await rpc.request("thread/archive", { threadId: record.threadId });
@@ -249,15 +258,20 @@ export function createDelegatedRetention(input: {
             // a twelve-hour maintenance review; real lifecycle events can wake
             // it earlier. Never interrupt the official owner or retry a mutation
             // whose execution is uncertain.
-            if (records.get(k)?.archivePending) report(error);
-            else {
-              if (record.reviewAfter == null) {
+            if (records.get(k)?.archivePending) {
+              report(error);
+              outcomes.push({ threadId: record.threadId, status: "archive_unconfirmed" });
+            } else {
+              if (record.issue !== reason) {
                 report(error);
-                event("delegation_retention_deferred", record, "lifecycle_unavailable");
+                event("delegation_retention_deferred", record, reason);
               }
-              save(k, { ...record, reviewAfter: now() + HALF_DAY });
+              // Repeated observations cannot push an already scheduled review
+              // later. Lifecycle events always bypass this maintenance backstop.
+              const reviewAfter = (record.reviewAfter ?? 0) > now() ? record.reviewAfter! : now() + HALF_DAY;
+              save(k, { ...record, issue: reason, reviewAfter });
+              outcomes.push({ threadId: record.threadId, status: "deferred" });
             }
-            outcomes.push({ threadId: record.threadId, status: "deferred" });
           } finally { await rpc?.close(); }
         }
         return { outcomes, automaticDeleteEnabled: false };

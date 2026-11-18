@@ -493,7 +493,10 @@ preparation do **not** prove host installation or permission. Neither public HTT
 nor Web account setup is required for this local path.
 Delegated-chat retention uses the existing service timer and lifecycle events, without
 plugin hooks or hook approval. Collected results become eligible after 12 hours; uncollected
-results after 7 days. Busy conversations are reviewed again without interrupting them.
+results after 7 days from first enrollment. Failures and observations do not restart these
+clocks. Overdue chats are archived as soon as a lifecycle check can safely do so.
+Work → **Cleanup needs review → Review…** shows unresolved cases; **Check again** rechecks
+immediately. Chats that would affect other conversations require review and stay listed.
 Automatic 30-day deletion remains unavailable until the host can protect restored chats;
 see [retention behavior and limits](docs/web-delegation.md#delegated-chat-retention).
 Existing install, repair and update flows refresh an owned generated source and upgrade its

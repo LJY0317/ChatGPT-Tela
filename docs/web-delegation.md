@@ -115,32 +115,37 @@ This is explicit confirmation of receipt, not proof of comprehension, task compl
 or resolution of the original request. It stores identifiers and time, not answer
 or error bodies. A wait wakeup is not a collection receipt.
 
-- With a matching acknowledgement of the newest terminal turn, archive 12 hours after
-  the later of that acknowledgement and official turn completion.
-- Without one, use 7 days from official turn completion. A new turn invalidates an old
-  acknowledgement. Metadata reads do not move either clock; unknown terminal times
-  do not fall back to a fabricated activity timestamp.
+- A verified receipt for the newest final answer makes it eligible 12 hours after
+  first collection. Duplicate receipts do not restart this clock. Failure/interruption
+  acknowledgement is not collection of an answer.
+- Every other enrolled chat uses the fixed deadline of first enrollment plus 7 days.
+  A new uncollected turn, missing completion time, observation failure or metadata read
+  does not extend that deadline. Unknown receipt validity uses the same fallback.
+  A new turn invalidates the older answer receipt, not the original fallback clock.
 - The service keeps one next-due timer and reconciles enrolled records at startup.
   It never scans the conversation catalog, adds a daemon, starts a model turn,
   interrupts work or forces an owner to release a conversation.
 - At the mutation boundary, an exact-thread lifecycle client acquires the official
   writer through `thread/resume` with `excludeTurns:true`, checks lineage and the
-  latest terminal turn under that ownership, then calls `thread/archive` on the same
+  latest turn when validating an answer receipt, then calls `thread/archive` on the same
   connection. No provider/config/history overrides, unarchive or delete are exposed.
   The separate stored-history reader remains read-only.
 - The official archive API also attempts to archive spawned descendants. Automatic
   management therefore supports only leaves without recorded Native child creation.
   Before archiving, it pages this conversation's official item history for successful
   spawn/child-start evidence and performs scoped, one-item descendant queries under
-  the writer. A container is excluded from management, not retried on every startup;
-  its conversation and independent acknowledgement receipt remain unchanged.
+  the writer. A container stays registered and overdue for user review; it is never
+  silently excluded or allowed to archive conversations outside its ownership.
   Active and archived list reads alone are insufficient: a child can be restored
   between them and disappear from both reads even while the parent's writer is held.
 - A writer conflict or unavailable lifecycle preserves the original retention deadline.
   The same next-due timer schedules another maintenance review 12 hours later, without
   a second scheduler, rapid retries or catalog scanning. Only due registered records
   are examined; pending, uncertain archive mutations are never replayed automatically.
-  Service startup, profile connection changes and explicit reconciliation can review sooner:
+  Repeated failed hints do not postpone an already scheduled review. Service startup,
+  profile connection changes and explicit reconciliation check overdue records immediately,
+  bypassing the maintenance delay. An eligible record is archived in that same pass:
+
 
   ```sh
   chatgpt-tela reconcile-delegations --slot 1
@@ -163,6 +168,15 @@ or error bodies. A wait wakeup is not a collection receipt.
   timestamp. A crash or ambiguous failure between them reports `archive_unconfirmed`
   and never automatically repeats the mutation. Confirmed records are never
   re-archived after manual restore; re-enrollment must be explicit.
+- Work shows **Cleanup needs review** only when registered chats are overdue. **Review…**
+  lists their profile, saved title/ID and reason. **Check again** invokes the same lifecycle
+  reconciliation; it never starts a turn or silently approves recursive archive.
+  A read-only authenticated service snapshot does not depend on the maintenance writer queue.
+  Running work, unavailable ownership, changed profile identity, affected descendants and
+  ambiguous archive results remain visible. The deadline is not a guarantee that an offline
+  or permanently inaccessible official app can perform an archive. Exact per-thread stopping
+  through the app-owned engine and an affected-chat approval flow remain incomplete; do not
+  substitute whole-profile interruption or claim they are implemented.
 - Archived metadata expires after 60 days on startup; registration/acknowledgement
   metadata uses total-byte limits without file-count limits. Existing unresolved
   records are preserved when new registration would exceed the storage budget.
@@ -180,8 +194,8 @@ delete or resume a thread held by another owner, including an idle loaded thread
 After release, resume/read/archive succeeded without a model request. Resuming an
 already archived thread was rejected without changing its archived state. These are
 installed CLI/app-server observations, not universal guarantees across versions or
-consumer Desktop acceptance. An isolated product-source run also excluded a Native
-container, archived a selected leaf, and left that leaf active after manual restore
+consumer Desktop acceptance. An isolated product-source run also left a Native
+container untouched, archived a selected leaf, and left that leaf active after manual restore
 and reconciliation. Its clock was advanced in the fixture; no real profile was changed.
 
 Deletion needs an additional restore-aware serialized contract: the installed engine

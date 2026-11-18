@@ -299,6 +299,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var preparingLocalPlugin = false
   private var localPluginMessage: String?
   private var localPluginStatus: TelaLocalPluginStatus?
+  private var retentionStatus: TelaRetentionStatus?
   private var endpointField: NSTextField?
   private var portField: NSTextField?
   private var exposurePicker: NSPopUpButton?
@@ -790,6 +791,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       let webTasks = card()
       append(label("Web tasks", style: .headline), to: webTasks)
       append(secondary("Start or delegate tasks with a Web model in ChatGPT."), to: webTasks)
+      if let pending = retentionStatus?.overdue, !pending.isEmpty {
+        row(String(format: telaText("Cleanup needs review · %d"), pending.count),
+            control: actionButton("Review…", action: #selector(reviewRetention)), in: webTasks)
+      }
       for profile in profiles {
         let profileCard = card()
         let account = profileAccounts[profile.slot]
@@ -1957,6 +1962,35 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     return value
   }
 
+  private func loadRetentionStatus() async {
+    do {
+      guard let descriptor = try readDescriptor("codex") else { retentionStatus = nil; return }
+      let data = try await request(descriptor, path: "v1/codex/delegations")
+      retentionStatus = try JSONDecoder().decode(TelaRetentionStatus.self, from: data)
+    } catch { retentionStatus = nil }
+  }
+
+  @objc private func reviewRetention() {
+    guard let pending = retentionStatus?.overdue, !pending.isEmpty else { return }
+    let alert = NSAlert(); alert.messageText = telaText("Review chat cleanup")
+    alert.informativeText = telaText("Overdue chats stay listed until resolved. Review other affected chats before archiving.")
+    let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 540, height: 250))
+    scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
+    let text = NSTextView(frame: scroll.bounds); text.isEditable = false; text.isSelectable = true
+    text.isVerticallyResizable = true; text.autoresizingMask = [.width]
+    text.string = pending.map { item in
+      let title = item.title ?? item.threadId
+      let profile = item.slot == 1 ? "ChatGPT" : "ChatGPT Profile \(item.slot)"
+      return "\(profile) · \(title)\n\(item.explanation)\n\(item.threadId)"
+    }.joined(separator: "\n\n")
+    scroll.documentView = text; alert.accessoryView = scroll
+    alert.addButton(withTitle: telaText("Close"))
+    alert.addButton(withTitle: telaText("Check again"))
+    if alert.runModal() == .alertSecondButtonReturn {
+      reconcileDelegationsAfterLifecycleEvent()
+    }
+  }
+
   private var retentionWakeup: Task<Void, Never>?
   private var retentionWakeupPending = false
 
@@ -1973,6 +2007,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           guard let descriptor = try readDescriptor("codex") else { break }
           _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
                                 body: ["action": "reconcile"])
+          if selectedPage == .work { await loadRetentionStatus(); renderCurrentPage() }
         } catch {
           recordMenuDiagnostic("delegation_retention_wakeup_failed", fields: [:], home: home)
         }
@@ -2040,6 +2075,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     // Refresh Native-only renames on the existing user-initiated/status lifecycle.
     // Surface revision tracks Web leases and cannot signal a Native thread rename.
     if selectedPage == .work {
+      await loadRetentionStatus()
       for profile in profiles where profile.controlState == "running" {
         await refreshBridgeTitles(slot: profile.slot)
       }

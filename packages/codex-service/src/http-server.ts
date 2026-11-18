@@ -118,6 +118,10 @@ export async function startCodexServiceHttpServer(input: {
             return error(409, "Codex shutdown readiness could not be verified");
           }
         }
+        if (request.method === "GET" && url.pathname === "/v1/codex/delegations") {
+          return input.delegatedRetention ? Response.json(input.delegatedRetention.status(), { headers: { "cache-control": "no-store" } })
+            : error(503, "Delegated-chat retention is unavailable");
+        }
         if (request.method === "POST" && url.pathname === "/v1/codex/delegations") {
           const manager = input.delegatedRetention;
           if (!manager) return error(503, "Delegated-chat retention is unavailable");

@@ -4,6 +4,27 @@ import TelaLocalization
 import Foundation
 
 // On-demand official CLI metadata, scoped to this installation's local source.
+struct TelaRetentionStatus: Decodable {
+  struct Item: Decodable {
+    let slot: Int
+    let threadId: String
+    let title: String?
+    let dueAt: Double
+    let reason: String
+    var explanation: String {
+      switch reason {
+      case "running": return telaText("Still running. Check and stop the task in ChatGPT.")
+      case "owner_unavailable": return telaText("ChatGPT still holds this chat, or its connection is unavailable.")
+      case "descendants_present": return telaText("Archiving would also affect other chats. Review them first.")
+      case "ownership_changed": return telaText("The chat or profile ownership changed. Check the original profile.")
+      case "archive_unconfirmed": return telaText("The archive result is unknown. Check the existing result before trying again.")
+      default: return telaText("Archiving is overdue. Check the chat and connection.")
+      }
+    }
+  }
+  let overdue: [Item]
+}
+
 struct TelaLocalPluginStatus: Decodable {
   struct Profile: Decodable { let slot: Int; let state: String }
   let source: String

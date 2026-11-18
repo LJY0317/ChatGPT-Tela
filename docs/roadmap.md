@@ -71,11 +71,15 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   acknowledgement now reach the existing service's next-due archive path in source.
   Source tests cover profile scope, current-turn clocks, writer deferral and restart;
   consumer Desktop installation/acceptance remains. Containers with Native child
-  creation are excluded because the official archive operation cascades; an isolated
-  source run verified leaf archival and preservation after manual restore.
+  creation require user review because official archival cascades; an isolated source
+  run verified leaf archival and preservation after manual restore.
   Newly executing Web children now notify that same registry; canonical lineage and
   first-turn checks exclude ordinary chats and later model switches. Other Native
-  children require explicit enrollment. One service timer reviews deferred records again
+  children require explicit enrollment. Retention is exactly 12h from verified latest-answer
+  collection, otherwise 7d from first enrollment; missing timestamps and new uncollected turns
+  do not extend the fallback. Blocked chats stay registered and Work exposes a review list.
+  Exact app-owned task stop and approval for affected descendants remain incomplete.
+  One service timer reviews deferred records again
   after 12 hours without moving the archive deadline. Startup, profile changes and macOS
   Desktop exit/system wake can review sooner; no plugin hooks or approval are required.
   Existing install/repair/update refresh the owned source and an already installed enabled

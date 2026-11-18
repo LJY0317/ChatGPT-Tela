@@ -49,6 +49,9 @@ precondition(TelaLocalPluginPresentation(state: "disabled").label == "Plugin: Of
 precondition(TelaLocalPluginPresentation(state: "install").openApp)
 precondition(!TelaLocalPluginPresentation(state: "ready").openApp)
 precondition(TelaLocalPluginPresentation(state: "unknown").label != TelaLocalPluginPresentation(state: "ready").label)
+let retention = try! JSONDecoder().decode(TelaRetentionStatus.self, from: Data("{\"overdue\":[{\"slot\":2,\"threadId\":\"owned\",\"dueAt\":1,\"reason\":\"descendants_present\"}]}".utf8))
+precondition(retention.overdue.count == 1)
+precondition(retention.overdue[0].explanation.contains("other chats"))
 print("passed")
 var notice = TelaLaunchNoticePolicy()
 var unconnected = profile
