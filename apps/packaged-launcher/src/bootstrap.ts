@@ -88,9 +88,7 @@ export async function prepareProductConfiguration(input: {
       { id: `${service}-state`, owner: service, path: paths.serviceState(service), dataClass: "state" as const },
       { id: `${service}-runtime`, owner: service, path: paths.serviceRuntime(service), dataClass: "runtime" as const },
     ]),
-    ...(enableAppOwned || config.appOwnedResponses !== undefined || existingAppOwnedResponses !== undefined
-      ? [{ id: "app-owned-desktop-model-catalog", owner: "product" as const,
-      path: join(paths.stateRoot, "install", "desktop-model-catalog"), dataClass: "config" as const }] : []),
+
   ];
   for (const directory of directories) await prepareOwnedDirectory({ manifestPath: paths.installManifest,
     installId: ownership.installId, productVersion: ownership.productVersion, resource: { kind: "directory", ...directory } });

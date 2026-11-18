@@ -1,3 +1,4 @@
+import { retiredCatalogConfig } from "../../../tests/support/retired-catalog";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -125,7 +126,7 @@ test("uninstall detaches and removes the install-owned startup catalog after res
     }));
     const registration = { configPath, installId, baseUrl: `http://127.0.0.1:18744/${capability}/v1`, catalogPath };
     expect(editOfficialCodexProviderFile({ ...registration, action: "register", mode: "apply" })).toBe(true);
-    const selected = readFileSync(configPath, "utf8");
+    const selected = retiredCatalogConfig(readFileSync(configPath, "utf8"), installId, catalogPath);
     writeFileSync(configPath, selected);
     const dry = await runProductUninstall({ mode: "dry-run", removeData: true, ...fixture.options });
     expect(dry.providerRestore).toMatchObject({ status: "planned", catalogStatus: "removed" });
@@ -169,7 +170,8 @@ test("uninstall preserves a catalog newly referenced by user edits during the re
       appOwnedResponses: [{ slot: 1, port: 18744, capability }],
     }));
     editOfficialCodexProviderFile({ configPath, installId,
-      baseUrl: `http://127.0.0.1:18744/${capability}/v1`, catalogPath, action: "register", mode: "apply" });
+      baseUrl: `http://127.0.0.1:18744/${capability}/v1`, action: "register", mode: "apply" });
+    writeFileSync(configPath, retiredCatalogConfig(readFileSync(configPath, "utf8"), installId, catalogPath));
     const edited = readFileSync(configPath, "utf8").replace(/openai_base_url = "[^"\n]+"/, 'openai_base_url = "https://user.example/v1"');
     let editedAfterPlan = false;
     const paths = { ...fixture.paths, serviceState(service: Parameters<typeof fixture.paths.serviceState>[0]) {

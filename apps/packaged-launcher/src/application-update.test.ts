@@ -254,7 +254,7 @@ test.each(["available", "unavailable"])("Native-first replacement prepares route
     expect(readProductConfig(configPath).multiProfile).toEqual(config.multiProfile);
     expect(readFileSync(preferencesPath)).toEqual(preferences);
     expect(readFileSync(officialConfig)).toEqual(officialBytes);
-    expect(readOwnershipManifest(f.paths.installManifest)?.resources.some(resource => resource.id === "app-owned-desktop-model-catalog")).toBe(true);
+    expect(readOwnershipManifest(f.paths.installManifest)?.resources.some(resource => resource.id === "app-owned-desktop-model-catalog")).toBe(false);
     expect(existsSync(macApplicationUpdatePath(f.paths))).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

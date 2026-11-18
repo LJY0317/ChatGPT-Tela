@@ -4,13 +4,6 @@ function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid model catalog response");
   return value as Record<string, unknown>;
 }
-/** Read-only, on-demand proof of the effective catalog and visible Tela model rows. */
-export async function readVisibleWebModelCatalog(rpc: Pick<CodexAppServerRpc, "request">, signal: AbortSignal): Promise<readonly string[]> {
-  const config = object(object(await rpc.request("config/read", { includeLayers: false }, signal)).config);
-  if (typeof config.model_catalog_json !== "string" || !config.model_catalog_json.trim()) throw new Error("Web model startup catalog is not active");
-  return readDynamicWebModelCatalog(rpc, signal);
-}
-
 /** Read the engine-owned dynamic list without requiring a Tela startup file. */
 export async function readDynamicWebModelCatalog(rpc: Pick<CodexAppServerRpc, "request">, signal: AbortSignal): Promise<readonly string[]> {
   return visibleWebModels(await rpc.request("model/list", { includeHidden: true }, signal));

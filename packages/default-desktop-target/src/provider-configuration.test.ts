@@ -1,3 +1,4 @@
+import { retiredCatalogConfig } from "../../../tests/support/retired-catalog";
 import { describe, expect, test } from "bun:test";
 import { editAppOwnedDesktopProviderConfig } from "./provider-configuration";
 
@@ -77,32 +78,16 @@ describe("owned built-in OpenAI routing", () => {
   });
 });
 
-describe("owned model catalog with built-in routing", () => {
-  const registration = { ...owned, catalogPath: "/isolated/owned/models.json" };
-  test("catalog and route register and restore as one exact transaction", () => {
-    const added = editAppOwnedDesktopProviderConfig(original, "register", registration);
-    expect(added.catalogStatus).toBe("installed");
-    expect((Bun.TOML.parse(added.content) as any).model_catalog_json).toBe(registration.catalogPath);
-    expect(editAppOwnedDesktopProviderConfig(added.content, "register", registration).catalogStatus).toBe("already-owned");
-    expect(editAppOwnedDesktopProviderConfig(added.content, "restore", registration))
-      .toEqual({ content: original, changed: true, catalogStatus: "removed" });
-  });
-  test("foreign or edited catalogs are preserved independently of the owned route", () => {
-    const foreign = 'model_catalog_json = "/user/catalog.json"\n' + original;
-    const added = editAppOwnedDesktopProviderConfig(foreign, "register", registration);
-    expect(added.catalogStatus).toBe("foreign-preserved");
-    expect(editAppOwnedDesktopProviderConfig(added.content, "restore", registration).content).toBe(foreign);
-    const edited = editAppOwnedDesktopProviderConfig(original, "register", registration).content
-      .replace(registration.catalogPath, '/user/new.json');
-    const restored = editAppOwnedDesktopProviderConfig(edited, "restore", registration);
-    expect(restored.catalogStatus).toBe("modified-preserved");
-    expect(restored.content).toContain('model_catalog_json = "/user/new.json"');
-    expect(restored.content).not.toContain('openai_base_url');
-  });
-  test("Windows catalog paths are valid; relative paths are not", () => {
-    const windows = { ...registration, catalogPath: "C:\\Tela\\models.json" };
-    const added = editAppOwnedDesktopProviderConfig(original, "register", windows);
-    expect(editAppOwnedDesktopProviderConfig(added.content, "restore", windows).content).toBe(original);
-    expect(() => editAppOwnedDesktopProviderConfig(original, "register", { ...owned, catalogPath: "relative.json" })).toThrow("absolute catalog");
-  });
+test("registration removes its exact old snapshot but preserves Native selection and foreign catalogs", () => {
+  const prior = retiredCatalogConfig(original, owned.installId, "/isolated/models.json");
+  const next = editAppOwnedDesktopProviderConfig(prior, "register", owned);
+  expect(next.catalogStatus).toBe("removed");
+  expect(next.content).not.toContain("model_catalog_json");
+  expect(next.content).toContain('model = "user-model"');
+  expect(next.content).toContain("openai_base_url");
+  expect(editAppOwnedDesktopProviderConfig(next.content, "register", owned).changed).toBe(false);
+  const changed = prior.replace('/isolated/models.json', '/user/changed.json');
+  expect(editAppOwnedDesktopProviderConfig(changed, "register", owned).catalogStatus).toBe("modified-preserved");
+  const foreign = 'model_catalog_json = "/user/models.json"\n' + original;
+  expect(editAppOwnedDesktopProviderConfig(foreign, "register", owned).catalogStatus).toBe("foreign-preserved");
 });

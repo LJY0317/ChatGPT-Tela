@@ -37,7 +37,7 @@ below and should not be confused with an installer-supported release.
 
 The current Desktop-owned adapter targets Plura Desktop's v2 lifecycle contract.
 Plura launches the official app; Tela connects its local Responses route and
-per-profile model catalog while keeping the built-in `openai` provider identity. No external Native engine or
+server model-list augmentation while keeping the built-in `openai` provider identity. No external Native engine or
 launch-time proxy/overlay is used. See [explicit provider setup](docs/official-desktop-provider.md).
 This adapter remains pre-release; source verification and local acceptance do not establish a publicly supported release.
 For a large existing conversation, the official engine may first compact with the previous Native
@@ -589,7 +589,8 @@ the launcher allocates its separate private port and capability. Other slots rem
 The source CLI preserves configured routes on ordinary
 reconfiguration but does not generate new ones. After changing a route, reconnect the affected
 stopped profile and register its owned route while keeping the built-in `openai` provider;
-a normal Desktop restart loads the route and catalog. This candidate does not bundle an official Native engine, so
+a normal Desktop restart loads the route. Native model discovery stays server-driven; Tela adds Web choices
+to the existing response and does not pin a local model list. This candidate does not bundle an official Native engine, so
 an existing Native-first installation cannot be replaced unchanged.
 
 ```json

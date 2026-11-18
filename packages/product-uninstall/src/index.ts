@@ -159,17 +159,10 @@ function restoreOwnedDesktopProviderForSlot(input: ProductUninstallOptions, path
     const ingress = config.appOwnedResponses?.find(item => item.slot === slot);
     if (!ingress) return withoutOwnedRoute();
     if (!existsSync(configPath)) return { status: "already-absent" as const };
-    const catalogResource = manifest.resources.find(resource => resource.id === (slot === 1 ? APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID : `${APP_OWNED_DESKTOP_CATALOG_RESOURCE_ID}-${slot}`));
-    const catalogPath = catalogResource?.kind === "directory" && catalogResource.owner === "product"
-      && catalogResource.dataClass === "config"
-      && catalogResource.path === join(paths.stateRoot, "install", slot === 1 ? "desktop-model-catalog" : `desktop-model-catalog-${slot}`)
-      && readOwnershipMarker(catalogResource)?.installId === installId
-      && readOwnershipMarker(catalogResource)?.resourceId === catalogResource.id
-      ? join(catalogResource.path, "models.json") : undefined;
     const result = editOfficialCodexProviderFile({
       configPath, action: "restore", mode: input.mode,
       installId, baseUrl: `http://127.0.0.1:${ingress.port}/${ingress.capability}/v1`,
-      ...(catalogPath ? { catalogPath } : {}), result: "detailed",
+      result: "detailed",
     });
     const changed = result.changed;
     return { status: changed ? input.mode === "apply" ? "restored" as const : "planned" as const

@@ -16,7 +16,6 @@ import { runPackagedServicesCommand } from "./services";
 import { readConfigurationInput, runPackagedBootstrapCommand } from "./bootstrap";
 import { runPackagedDesktopProviderCommand } from "./desktop-provider";
 import { resolveChatGptTelaBrowserProfile } from "@chatgpt-tela/development-runtime/browser-profile";
-import { publishAppOwnedDesktopCatalog } from "@chatgpt-tela/development-runtime/app-owned-desktop-catalog";
 import { prepareInstalledProfileOwnership } from "../../cli/src/profile-ownership";
 import { MultiProfileNativeTargetAdapter } from "../../../packages/codex-service/src/native-target";
 import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporary-fixtures";
@@ -186,35 +185,26 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
       ...bootstrap, configurationInput: configurationInput.replace("18743", "18744"),
     })).rejects.toThrow("preserved");
     expect(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).toBe(productConfig);
-    // Consumer opt-in generates the private ingress and reserves its catalog resource in one configure call.
+    // Consumer opt-in generates the private ingress without a static catalog resource.
     await runPackagedBootstrapCommand(["configure", "--file", configFile, "--enable-app-owned-desktop"], bootstrap);
     const optedIn = JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8"));
     expect(optedIn.appOwnedResponses).toHaveLength(1);
     expect(optedIn.appOwnedResponses[0]).toMatchObject({ slot: 1, port: 18744 });
     expect(optedIn.appOwnedResponses[0].capability).toMatch(/^[A-Za-z0-9_-]{43}$/);
     const catalogResource = readOwnershipManifest(paths.installManifest)?.resources.find(resource => resource.id === "app-owned-desktop-model-catalog");
-    expect(catalogResource).toMatchObject({ kind: "directory", owner: "product", dataClass: "config", path: join(paths.stateRoot, "install", "desktop-model-catalog") });
-    expect(existsSync(join(paths.stateRoot, "install", "desktop-model-catalog", OWNERSHIP_MARKER))).toBe(true);
+    expect(catalogResource).toBeUndefined();
     const codexHome = join(home, ".codex"); mkdirSync(codexHome);
     const codexConfig = join(codexHome, "config.toml");
     const codexOriginal = 'model_provider = "openai"\nmodel = "user-native-model"\n# preserve desktop settings\n';
     writeFileSync(codexConfig, codexOriginal, { mode: 0o640 });
-    const catalogFile = await publishAppOwnedDesktopCatalog({ paths, installId: manifest.installId,
-      nativeCatalog: { models: [{ slug: "native-fixture", visibility: "list", display_name: "Native fixture",
-        supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] },
-      webFamilies: [{ key: "0123456789abcdefabcd", label: "Web fixture", availableEfforts: ["medium"] }],
-      assertCurrentAccount() {},
-    });
-    expect(JSON.parse(readFileSync(catalogFile, "utf8")).models.map((model: { slug: string }) => model.slug))
-      .toEqual(["native-fixture", "chatgpt-tela-web/family/0123456789abcdefabcd"]);
     const providerOptions = { payloadRoot: paths.binaryRoot, pathOptions: options };
     expect(await runPackagedDesktopProviderCommand(["desktop-provider", "register", "--dry-run"], providerOptions))
-      .toMatchObject({ changed: true, selection: expect.stringContaining("Catalog: installed") });
+      .toMatchObject({ changed: true, selection: expect.stringContaining("Catalog: absent") });
     expect(readFileSync(codexConfig, "utf8")).toBe(codexOriginal);
     expect(await runPackagedDesktopProviderCommand(["desktop-provider", "register", "--apply"], providerOptions))
-      .toMatchObject({ changed: true, selection: expect.stringContaining("Catalog: installed") });
+      .toMatchObject({ changed: true, selection: expect.stringContaining("Catalog: absent") });
     const registered = readFileSync(codexConfig, "utf8");
-    expect(registered).toContain(`model_catalog_json = ${JSON.stringify(catalogFile)}`);
+    expect(registered).not.toContain("model_catalog_json");
     expect(registered).toContain("openai_base_url = ");
     expect(registered).not.toContain("[model_providers.chatgpt_tela_local]");
     expect(registered).toContain('model = "user-native-model"');
@@ -225,13 +215,6 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     expect(await runPackagedDesktopProviderCommand(["desktop-provider", "restore", "--apply"], providerOptions))
       .toMatchObject({ changed: true });
     expect(readFileSync(codexConfig, "utf8")).toBe(codexOriginal);
-    const markerPath = join(paths.stateRoot, "install", "desktop-model-catalog", OWNERSHIP_MARKER);
-    const marker = readFileSync(markerPath, "utf8");
-    writeFileSync(markerPath, JSON.stringify({ version: 1, installId: "foreign-install", resourceId: "app-owned-desktop-model-catalog" }));
-    await expect(runPackagedDesktopProviderCommand(["desktop-provider", "register", "--apply"], providerOptions))
-      .rejects.toThrow("Desktop model catalog ownership changed");
-    expect(readFileSync(codexConfig, "utf8")).toBe(codexOriginal);
-    writeFileSync(markerPath, marker);
     // Ordinary reconfiguration without the opt-in preserves the existing route.
     await runPackagedBootstrapCommand(["configure", "--file", configFile], bootstrap);
     expect(JSON.parse(readFileSync(join(paths.configRoot, "product-v1.json"), "utf8")).appOwnedResponses).toEqual(optedIn.appOwnedResponses);
@@ -298,9 +281,6 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
     const selectedConfig = join(root, "selected-profile-config.toml");
     writeFileSync(selectedConfig, 'model_provider = "openai"\n# selected profile\n');
     const originalDefaultConfig = readFileSync(codexConfig, "utf8");
-    const slot2Catalog = await publishAppOwnedDesktopCatalog({ paths, installId: manifest.installId, slot: 2,
-      nativeCatalog: { models: [] }, webFamilies: [], assertCurrentAccount() {} });
-    expect(slot2Catalog).not.toBe(catalogFile);
     await expect(runPackagedDesktopProviderCommand(["desktop-provider", "register", "--dry-run", "--slot", "2"], providerOptions)).rejects.toThrow("--config-file");
     const selectedProvider = ["desktop-provider", "register", "--apply", "--slot", "2", "--config-file", selectedConfig];
     await runPackagedDesktopProviderCommand(selectedProvider, providerOptions);

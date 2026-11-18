@@ -4,12 +4,9 @@ import { isAbsolute, win32 } from "node:path";
 export interface AppOwnedProviderRegistration {
   readonly installId: string;
   readonly baseUrl: string;
-  /** An already prepared, installation-owned Native + Web startup catalog. */
-  readonly catalogPath?: string;
 }
 
-export type CatalogRegistrationStatus = "not-requested" | "installed" | "already-owned"
-  | "foreign-preserved" | "modified-preserved" | "removed" | "absent";
+export type CatalogRegistrationStatus = "foreign-preserved" | "modified-preserved" | "removed" | "absent";
 
 function catalogBlock(installId: string, catalogPath: string): string {
   if ((!isAbsolute(catalogPath) && !win32.isAbsolute(catalogPath)) || /[\r\n\0]/.test(catalogPath)) {
@@ -152,30 +149,19 @@ export function editAppOwnedDesktopProviderConfig(
     next = next.replace(block, "");
   }
 
+  // Removal only: a fixed catalog disables first-party server discovery.
   const owned = ownedCatalog(next, registration.installId);
   const anyCatalogMarker = next.includes("# ChatGPT Tela catalog begin:") || next.includes("# ChatGPT Tela catalog end:");
   const catalogValue = (Bun.TOML.parse(next) as Record<string, any>).model_catalog_json;
-  let catalogStatus: CatalogRegistrationStatus = "not-requested";
-  if (action === "register" && registration.catalogPath !== undefined) {
-    const proposed = catalogBlock(registration.installId, registration.catalogPath);
-    if (owned.block) {
-      catalogStatus = owned.block === proposed && catalogValue === registration.catalogPath ? "already-owned" : "modified-preserved";
-    } else if (owned.modified || anyCatalogMarker || catalogValue !== undefined) {
-      catalogStatus = "foreign-preserved";
-    } else {
-      next = proposed + next;
-      catalogStatus = "installed";
-    }
-  } else if (action === "restore") {
-    if (owned.block && catalogValue === owned.path) {
-      next = next.replace(owned.block, "");
-      catalogStatus = "removed";
-    } else {
-      catalogStatus = owned.modified || anyCatalogMarker ? "modified-preserved"
-        : catalogValue !== undefined ? "foreign-preserved" : "absent";
-    }
-    if (hasRoute || retired || catalogStatus === "removed") next = clearWebModelSelections(next, baseUrl);
+  let catalogStatus: CatalogRegistrationStatus;
+  if (owned.block && catalogValue === owned.path) {
+    next = next.replace(owned.block, "");
+    catalogStatus = "removed";
+  } else {
+    catalogStatus = owned.modified || anyCatalogMarker ? "modified-preserved"
+      : catalogValue !== undefined ? "foreign-preserved" : "absent";
   }
+  if (action === "restore" && (hasRoute || retired || catalogStatus === "removed")) next = clearWebModelSelections(next, baseUrl);
   Bun.TOML.parse(next);
   return { content: next, changed: next !== content, catalogStatus };
 }

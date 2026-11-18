@@ -115,9 +115,9 @@ describe("default-profile composite provider router", () => {
     await expect(router.route(unauthenticated)).rejects.toThrow("first-party request authorization");
   });
 
-  test("augments native model discovery and coalesces/caches browser discovery", async () => {
+  test("new Native models arrive through the existing route while only browser discovery is cached", async () => {
     let discoveries = 0;
-    let clock = 100;
+    let clock = 100, nativeRevision = 0;
     const key = chatGptWebFamilyKey("Web Family");
     const router = createDefaultProfileCompositeProviderRouter({
       runtimeHeaderName: header,
@@ -128,17 +128,21 @@ describe("default-profile composite provider router", () => {
         return [{ key, label: "Web Family", availableEfforts: ["medium"] }];
       },
       async fetchUpstream() {
-        return Response.json(nativeCatalog());
+        const catalog = nativeCatalog();
+        if (nativeRevision) catalog.models.push({ ...catalog.models[0]!, slug: "new-server-model" });
+        return Response.json(catalog);
       },
     });
     const first = await router.route(request("/v1/models"));
     await router.refreshWebModelFamilies();
+    nativeRevision = 1;
     const second = await router.route(request("/v1/models"));
     expect(discoveries).toBe(1);
     expect(((await first?.json()) as any).models.map((model: any) => model.slug)).toEqual([
       "native-model",
     ]);
-    expect(((await second?.json()) as any).models).toHaveLength(2);
+    const current = ((await second?.json()) as any).models.map((m: any) => m.slug);
+    expect(current).toEqual(["native-model", "new-server-model", chatGptWebModelId(key)]);
     clock += 1_001;
     await router.route(request("/v1/models"));
     expect(discoveries).toBe(2);

@@ -8,7 +8,6 @@ import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
 import { appOwnedProviderSelectionFromConfig, startCodexService } from "./controller";
 import { startCodexServiceHttpServer } from "./http-server";
 import { createOwnershipManifest, resolveProductPaths, writeOwnershipManifest } from "../../product-lifecycle/src/index";
-import { appOwnedDesktopCatalogPath, readPreparedAppOwnedDesktopCatalog } from "../../development-runtime/src/app-owned-desktop-catalog";
 import { editOfficialCodexProviderFile, TELA_DEFAULT_DESKTOP_PROVIDER_ID } from "@chatgpt-tela/default-desktop-target";
 import { writeServiceRuntimeDescriptor } from "../../service-protocol/src/index";
 import { CodexServiceClient } from "../../service-protocol/src/client";
@@ -445,12 +444,16 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
   const marker = "TELA_NATIVE_ORIGINAL_TOOL_OK";
   mkdirSync(home, { recursive: true });
   writeFileSync(join(home, "auth.json"), JSON.stringify({
-    auth_mode: "apikey", OPENAI_API_KEY: "isolated-fixture-only", tokens: null,
+    auth_mode: "chatgpt", OPENAI_API_KEY: null,
+    tokens: { id_token: "e30." + Buffer.from(JSON.stringify({ "https://api.openai.com/auth": {
+      chatgpt_account_id: "fixture-only", chatgpt_plan_type: "pro" } })).toString("base64url") + ".fixture",
+      access_token: "isolated-fixture-only", refresh_token: "fixture-only", account_id: "fixture-only" },
+    last_refresh: new Date().toISOString(),
   }));
   const paths = resolveProductPaths({ platform: "linux", home: root, environment: {} });
   const install = createOwnershipManifest("official-fixture", new Date(), "11111111-2222-4333-8444-555555555555");
   writeOwnershipManifest(paths.installManifest, install);
-  const nativeCatalog = JSON.parse(execFileSync(officialEngine!, ["debug", "models"], {
+  const nativeCatalog = JSON.parse(execFileSync(officialEngine!, ["debug", "models", "--bundled"], {
     encoding: "utf8", env: { PATH: process.env.PATH!, HOME: root,
       CODEX_HOME: home, OPENAI_API_KEY: "isolated-fixture-only", TMPDIR: root },
   })) as { models: { slug: string; visibility?: string; supported_reasoning_levels?: unknown[] }[] };
@@ -542,9 +545,9 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
   let owned: Awaited<ReturnType<typeof startAppOwnedProductResponsesRuntime>> | undefined;
   let engine: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined;
   try {
-    expect(execFileSync(officialEngine!, ["--version"], { encoding: "utf8" })).toContain("0.167.");
+    expect(execFileSync(officialEngine!, ["--version"], { encoding: "utf8" }).trim()).not.toBe("");
     owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter, nativeFetch,
-      catalogPreparation: { paths, installId: install.installId, async readNativeCatalog() { return nativeCatalog; } } });
+ });
     // Cold app-server: there is no model_catalog_json and no prior Native/Web
     // cache. Query its public model/list while the product /models route exists.
     const coldHome = join(root, "cold-codex-home");
@@ -611,8 +614,6 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
     } finally {
       coldEngine.stdin.end();await coldEngine.exited;await coldReading;
     }
-    const catalogFile = appOwnedDesktopCatalogPath(paths);
-    expect(readPreparedAppOwnedDesktopCatalog({ paths, installId: install.installId })).toBe(catalogFile);
     const catalogResponse = await fetch(new URL("models", owned.responses.baseUrl), {
       headers: { authorization: "Bearer isolated-fixture-only" },
     });
@@ -621,23 +622,19 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
     expect(providerCatalog.models.map(item => item.slug)).toEqual([nativeModel, webModel]);
     expect(providerCatalog.models[0]).toEqual(nativeEntry);
     expect(providerCatalog.models[1]).toMatchObject({ slug: webModel, tool_mode: null });
-    const assembledCatalog = JSON.parse(readFileSync(catalogFile, "utf8"));
-    expect((assembledCatalog.models as any[]).map(item => item.slug)).toContain(nativeModel);
-    expect((assembledCatalog.models as any[]).map(item => item.slug)).toContain(webModel);
     const endpoint = owned.responses.baseUrl.href;
     const configPath = join(home, "config.toml");
     const originalConfig = 'model = "user-native-model"\nmodel_provider = "openai"\n';
     writeFileSync(configPath, originalConfig);
     expect(editOfficialCodexProviderFile({ configPath, action: "register", mode: "apply",
-      installId: install.installId, baseUrl: endpoint.slice(0, -1), catalogPath: catalogFile, result: "detailed" }))
-      .toMatchObject({ changed: true, catalogStatus: "installed" });
+      installId: install.installId, baseUrl: endpoint.slice(0, -1), result: "detailed" }))
+      .toMatchObject({ changed: true, catalogStatus: "absent" });
     expect(readFileSync(configPath, "utf8")).toContain(originalConfig);
     // The user chooses a Web model; the built-in provider identity is unchanged.
     writeFileSync(configPath, readFileSync(configPath, "utf8")
       .replace(originalConfig, `model = ${JSON.stringify(webModel)}\nmodel_provider = ${JSON.stringify(TELA_DEFAULT_DESKTOP_PROVIDER_ID)}\n`));
     engine = Bun.spawn([officialEngine!, "app-server", "--stdio"], {
-      cwd: root, env: { PATH: process.env.PATH!, HOME: root, CODEX_HOME: home,
-        OPENAI_API_KEY: "isolated-fixture-only", TMPDIR: root },
+      cwd: root, env: { PATH: process.env.PATH!, HOME: root, CODEX_HOME: home, TMPDIR: root },
       stdin: "pipe", stdout: "pipe", stderr: "pipe",
     });
     let nextId = 0;
@@ -682,7 +679,8 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       engine.stdin.write(JSON.stringify({ method: "initialized" }) + "\n");
       const catalog = await rpc("model/list", { includeHidden: true });
       const effective = await rpc("config/read", { includeLayers: true });
-      expect(effective.config).toMatchObject({ model_provider: TELA_DEFAULT_DESKTOP_PROVIDER_ID, model_catalog_json: catalogFile });
+      expect(effective.config).toMatchObject({ model_provider: TELA_DEFAULT_DESKTOP_PROVIDER_ID });
+      expect(effective.config.model_catalog_json ?? null).toBeNull();
       expect(effective.config.openai_base_url).toBe(endpoint.slice(0, -1));
       expect(catalog.data.map((entry: any) => entry.model)).toEqual(expect.arrayContaining([webModel, nativeModel]));
       const thread = await rpc("thread/start", { model: webModel, modelProvider: TELA_DEFAULT_DESKTOP_PROVIDER_ID,
@@ -727,8 +725,8 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
     writeFileSync(configPath, readFileSync(configPath, "utf8").replace(
       `model = ${JSON.stringify(webModel)}\nmodel_provider = ${JSON.stringify(TELA_DEFAULT_DESKTOP_PROVIDER_ID)}\n`, originalConfig));
     expect(editOfficialCodexProviderFile({ configPath, action: "restore", mode: "apply",
-      installId: install.installId, baseUrl: endpoint.slice(0, -1), catalogPath: catalogFile, result: "detailed" }))
-      .toMatchObject({ changed: true, catalogStatus: "removed" });
+      installId: install.installId, baseUrl: endpoint.slice(0, -1), result: "detailed" }))
+      .toMatchObject({ changed: true, catalogStatus: "absent" });
     expect(readFileSync(configPath, "utf8")).toBe(originalConfig);
   } finally {
     await owned?.stop();

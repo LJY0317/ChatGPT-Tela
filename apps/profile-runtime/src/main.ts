@@ -62,7 +62,7 @@ async function mainAppOwned(
         }, lifecycle.signal);
       } } : {}),
       ...(installId
-        ? { catalogPreparation: { paths: resolveProductPaths(), installId } } : {}),
+        ? { installedContext: { paths: resolveProductPaths(), installId } } : {}),
     });
     const owned = runtime;
     preview = await startAppOwnedProfileBridge(config, owned, lifecycle.signal);

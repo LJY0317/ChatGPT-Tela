@@ -15,24 +15,23 @@ test("isolated official config catalog transaction keeps mode, ownership and for
     const owner = {
       configPath, installId: "1cfd5019-a499-43dd-a3a9-8462b0184eaa",
       baseUrl: `http://127.0.0.1:18744/${"a".repeat(48)}/v1`,
-      catalogPath: join(root, "owned-native-web.json"),
     };
     expect(editOfficialCodexProviderFile({ ...owner, action: "register", mode: "dry-run", result: "detailed" }))
-      .toEqual({ changed: true, catalogStatus: "installed" });
+      .toEqual({ changed: true, catalogStatus: "absent" });
     expect(readFileSync(configPath, "utf8")).toBe(original);
     expect(editOfficialCodexProviderFile({ ...owner, action: "register", mode: "apply", result: "detailed" }))
-      .toEqual({ changed: true, catalogStatus: "installed" });
+      .toEqual({ changed: true, catalogStatus: "absent" });
     expect(editOfficialCodexProviderFile({ ...owner, action: "register", mode: "apply", result: "detailed" }))
-      .toEqual({ changed: false, catalogStatus: "already-owned" });
+      .toEqual({ changed: false, catalogStatus: "absent" });
     expect(lstatSync(configPath).mode & 0o777).toBe(0o640);
     const current = readFileSync(configPath, "utf8");
-    expect((Bun.TOML.parse(current) as any).model_catalog_json).toBe(owner.catalogPath);
+    expect((Bun.TOML.parse(current) as any).model_catalog_json).toBeUndefined();
     expect((Bun.TOML.parse(current) as any).model_provider).toBe("openai");
     expect(editOfficialCodexProviderFile({ ...owner, action: "restore", mode: "dry-run", result: "detailed" }))
-      .toEqual({ changed: true, catalogStatus: "removed" });
+      .toEqual({ changed: true, catalogStatus: "absent" });
     expect(readFileSync(configPath, "utf8")).toBe(current);
     expect(editOfficialCodexProviderFile({ ...owner, action: "restore", mode: "apply", result: "detailed" }))
-      .toEqual({ changed: true, catalogStatus: "removed" });
+      .toEqual({ changed: true, catalogStatus: "absent" });
     expect(readFileSync(configPath, "utf8")).toBe(original);
     expect(editOfficialCodexProviderFile({ ...owner, action: "restore", mode: "apply", result: "detailed" }))
       .toEqual({ changed: false, catalogStatus: "absent" });
@@ -46,7 +45,7 @@ test("isolated official config catalog transaction keeps mode, ownership and for
   }
 });
 
-test("two device homes keep independent provider credentials and catalog paths for one signed-in account", () => {
+test("two device homes keep independent built-in routes for one signed-in account", () => {
   const root = mkdtempSync(join(tmpdir(), "tela-two-device-providers-"));
   try {
     const devices = ["device-a", "device-b"].map((name, index) => {
@@ -56,24 +55,19 @@ test("two device homes keep independent provider credentials and catalog paths f
       const original = ['model_provider = "openai"', 'model = "same-account-model"', ''].join("\n");
       writeFileSync(configPath, original);
       return { home, configPath, original, installId: `11111111-2222-4333-8444-55555555555${index}`,
-        baseUrl: `http://127.0.0.1:${18744 + index}/${String(index + 1).repeat(48)}/v1`,
-        catalogPath: join(home, "state", "owned-models.json") };
+        baseUrl: `http://127.0.0.1:${18744 + index}/${String(index + 1).repeat(48)}/v1` };
     });
     for (const device of devices) {
       expect(editOfficialCodexProviderFile({ ...device, action: "register", mode: "apply", result: "detailed" }))
-        .toMatchObject({ changed: true, catalogStatus: "installed" });
+        .toMatchObject({ changed: true, catalogStatus: "absent" });
     }
     const [a, b] = devices.map(device => readFileSync(device.configPath, "utf8"));
     expect(a).toContain(devices[0]!.baseUrl);
-    expect(a).toContain(devices[0]!.catalogPath);
     expect(a).not.toContain(devices[1]!.baseUrl);
-    expect(a).not.toContain(devices[1]!.catalogPath);
     expect(b).toContain(devices[1]!.baseUrl);
-    expect(b).toContain(devices[1]!.catalogPath);
     expect(b).not.toContain(devices[0]!.baseUrl);
-    expect(b).not.toContain(devices[0]!.catalogPath);
     expect(devices.map(device => editOfficialCodexProviderFile({ ...device, action: "restore", mode: "apply", result: "detailed" })))
-      .toEqual([{ changed: true, catalogStatus: "removed" }, { changed: true, catalogStatus: "removed" }]);
+      .toEqual([{ changed: true, catalogStatus: "absent" }, { changed: true, catalogStatus: "absent" }]);
     for (const device of devices) expect(readFileSync(device.configPath, "utf8")).toBe(device.original);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

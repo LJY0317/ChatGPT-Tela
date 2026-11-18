@@ -234,7 +234,7 @@ const providerConfig = [
 if (!configuredHome) writeFileSync(join(home, "config.toml"), firstPartyAuth && !builtinProvider
   ? editAppOwnedDesktopProviderConfig(providerConfig, "register", {
     installId: "a7f1e18d-6020-4f0c-9684-c4370a8dd58f",
-    baseUrl: `${server.url}${"a".repeat(48)}/v1`, catalogPath: modelCatalog,
+    baseUrl: `${server.url}${"a".repeat(48)}/v1`,
   }).content
   : providerConfig);
 const child = Bun.spawn([engine, "app-server", "--stdio"], {

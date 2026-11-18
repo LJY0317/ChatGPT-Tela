@@ -48,21 +48,27 @@ profiles use Plura Desktop's target contract v2 and must be selected explicitly
 with `--slot N`; each has its own local route, capability and model catalog.
 
 In Control Center → Work, enable **Web models** for the selected profile and wait
-for **Ready**. The installed runtime prepares an account-bound Native/Web model
-catalog. Then connect the official user-level config through the existing launcher:
+for **Ready**. The existing `/models` route preserves the server's Native catalog
+and appends the account-bound Web choices. Connect the official user-level config
+through the existing launcher:
 
 ```text
 chatgpt-tela desktop-provider register --dry-run
 chatgpt-tela desktop-provider register --apply
 ```
 
-Registration installs only an exact install-marked `openai_base_url` and, when
-unoccupied, `model_catalog_json`. It preserves the selected model, unrelated
-settings, comments and file permissions. An existing external base URL is not
+Registration installs only an exact install-marked `openai_base_url`. It removes an
+unchanged Tela-owned `model_catalog_json` block instead of replacing first-party
+server discovery with a startup snapshot. Profile startup applies that same cleanup
+to previously registered installations; it does not connect an unregistered app.
+The selected model, unrelated settings, comments and file permissions are preserved. An existing external base URL is not
 overwritten. A foreign or edited model catalog is preserved and reported; that
 result does not claim Web choices were added. Select the built-in `openai` provider
 first if using another provider. Normally restart Desktop to load configuration;
-hot reload is not assumed. Choose a Web model only after its catalog is available.
+hot reload is not assumed. A running app that already loaded the retired static catalog may need one normal restart.
+Subsequent model availability follows the official engine’s server/cache refresh, account
+entitlements and client compatibility; Tela has no Native model-name allowlist. API-key
+auth may use a different discovery path and is not proof of ChatGPT-login picker behavior.
 
 For an additional profile, explicitly select its existing config file:
 
