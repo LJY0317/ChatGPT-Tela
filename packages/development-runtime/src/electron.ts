@@ -365,6 +365,7 @@ export async function startElectronDevelopmentRuntime(
     ...(runtime.suppliedToolBridge ? { suppliedToolBridge: runtime.suppliedToolBridge } : {}),
     ...(runtime.shutdownReadiness ? { shutdownReadiness: () => runtime.shutdownReadiness!() } : {}),
     ...(runtime.prepareShutdown ? { prepareShutdown: () => runtime.prepareShutdown!() } : {}),
+    ...(runtime.interruptWork ? { interruptWork: () => runtime.interruptWork!() } : {}),
     ...(runtime.resetWebAccount ? { resetWebAccount: () => runtime.resetWebAccount!() } : {}),
     mcp: runtime.mcp,
     turns: runtime.turns,
