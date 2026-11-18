@@ -97,6 +97,7 @@ interface ApprovalDomObservation {
   readonly allowConversationPoint?: { readonly x: number; readonly y: number } | null;
   readonly optionsDisclosureCount?: number;
   readonly optionsExpanded?: boolean;
+  readonly optionsMenuVerified?: boolean;
   readonly optionsPoint?: { readonly x: number; readonly y: number } | null;
   readonly optionsAnchorStable?: boolean | null;
   readonly optionsAttempted?: boolean;
@@ -152,6 +153,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     allowConversationPoint: null,
     optionsDisclosureCount: 0,
     optionsExpanded: false,
+    optionsMenuVerified: false,
     optionsPoint: null,
     optionsAnchorStable: null,
     optionsAttempted: false,
@@ -241,7 +243,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
         optionsDisclosure = button;
         result.optionsExpanded = button.getAttribute("aria-expanded") === "true";
         if (button.getAttribute("aria-expanded") === "false"
-          && button.getAttribute("aria-controls") && !button.disabled
+          && !button.disabled
           && button.getAttribute("aria-disabled") !== "true" && !button.closest('[inert]')) {
           result.optionsPoint = point(button);
         }
@@ -280,6 +282,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
       const disclosureId = optionsDisclosure.getAttribute("id");
       if ((menuId && optionsDisclosure.getAttribute("aria-controls") === menuId)
         || (disclosureId && menu.getAttribute("aria-labelledby") === disclosureId)) {
+        result.optionsMenuVerified = true;
         // A native button with role=menuitem is one control, not two variants.
         const choices = [...new Set(menu.querySelectorAll('[role="menuitem"],button,[role="button"]'))];
         for (const item of choices) {
@@ -360,8 +363,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     if (prepare.cardKey !== prior.cardKey || prepare.proofKey !== prior.proofKey
       || (prior.menuOpenAttempted && prior.menuOpenAnchorText !== text)
       || !eligible(result) || !selected || !visible(selected) || selected.disabled
-      || selected.getAttribute("aria-disabled") === "true" || selected.closest('[inert]')
-      || (openingOptions && !selected.getAttribute("aria-controls"))) return finish();
+      || selected.getAttribute("aria-disabled") === "true" || selected.closest('[inert]')) return finish();
     selected.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
     // Instant scroll plus synchronous geometry/hit testing flushes current layout.
     // Frame callbacks may stop in hidden windows and must never gate approval.
@@ -2501,7 +2503,8 @@ export class ChatGptDomSurfaceDriver implements ChatGptSurfaceDriver {
       observed = await inspect("menu");
       if (observed.cardKey !== cardKey || observed.optionsAnchorStable !== true
         || observed.optionsExpanded !== true || observed.optionsDisclosureCount !== 1
-        || decideChatGptApproval(mode, observed).action !== "approve_conversation") {
+        || observed.optionsMenuVerified !== true
+        || decideChatGptApproval(mode, observed).action === "none") {
         this.#diagnostic("approval_options_open_withheld", { reason_class: "menu_unverified" });
         return Object.freeze({ status: "none" as const, reason: "options_unverified" });
       }

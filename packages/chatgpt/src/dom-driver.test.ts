@@ -1363,6 +1363,8 @@ describe("current ChatGPT DOM surface driver", () => {
   test.each([
     ["verified", "allow_conversation", 2],
     ["verified native buttons", "allow_conversation", 2],
+    ["labelled-by portal", "allow_conversation", 2],
+    ["once-only menu", "allow_once", 2],
     ["button menuitem", "allow_conversation", 2],
     ["security warning", "allow_conversation", 2],
     ["replaced card", "options_unverified", 1],
@@ -1375,18 +1377,20 @@ describe("current ChatGPT DOM surface driver", () => {
     const once = new FixtureElement(); once.textContent = "Allow once";
     const trigger = new FixtureElement({ id: "approval-trigger", "aria-label": "Approval options",
       "aria-haspopup": "menu", "aria-controls": "approval-scope-menu", "aria-expanded": "false" });
+    if (scenario === "labelled-by portal") delete trigger.attributes["aria-controls"];
     trigger.textContent = "Approval options";
     trigger.getBoundingClientRect = () => ({ left: 0, top: 0, width: 20, height: 20 });
     const nativeButtons = scenario === "verified native buttons" || scenario === "button menuitem";
     const scoped = new FixtureElement(nativeButtons ? { "data-fixture-tag": "BUTTON" } : { role: "menuitem" });
-    scoped.textContent = "Allow for this conversation";
+    scoped.textContent = "Allow ChatGPT Tela for this conversation";
     scoped.getBoundingClientRect = () => ({ left: 60, top: 0, width: 20, height: 20 });
     const menuOnce = new FixtureElement(nativeButtons ? { "data-fixture-tag": "BUTTON" } : { role: "menuitem" });
     menuOnce.textContent = "Allow once";
     const forever = new FixtureElement({ role: "menuitem" }); forever.textContent = "Always allow";
-    const menu = new FixtureElement({ role: "menu", id: "approval-scope-menu" }, {
+    const menu = new FixtureElement({ role: "menu", id: "approval-scope-menu",
+      ...(scenario === "labelled-by portal" ? {"aria-labelledby":"approval-trigger"} : {}) }, {
       ...(scenario === "button menuitem" ? {'[role="menuitem"]':[scoped,menuOnce]} : {}),
-      [nativeButtons ? "button" : '[role="menuitem"]']: [scoped, menuOnce,
+      [nativeButtons ? "button" : '[role="menuitem"]']: [...(scenario === "once-only menu" ? [] : [scoped]), menuOnce,
         ...(scenario === "persistent alternative" ? [forever] : [])],
       ...(scenario === "menu warning" ? { '[role="alert"]': [new FixtureElement({ role: "alert" })] } : {}),
     });
@@ -1406,7 +1410,7 @@ describe("current ChatGPT DOM surface driver", () => {
     });
     const page = new RendererFixturePage(root);
     const clicks: { x: number; y: number }[] = [];
-    page.hitTest = () => clicks.length === 0 ? trigger : scoped;
+    page.hitTest = () => clicks.length === 0 ? trigger : scenario === "once-only menu" ? once : scoped;
     page.pointerClick = async point => {
       clicks.push(point);
       if (clicks.length === 1) {
@@ -1427,7 +1431,9 @@ describe("current ChatGPT DOM surface driver", () => {
     });
     expect(first.reason).toBe(outcome);
     expect(clicks).toHaveLength(expectedClicks);
-    if (scenario === "verified" || scenario === "verified native buttons" || scenario === "persistent alternative"
+    if (scenario === "once-only menu") {
+      expect(first.status).toBe("dispatched");
+    } else if (scenario === "verified" || scenario === "labelled-by portal" || scenario === "verified native buttons" || scenario === "persistent alternative"
       || scenario === "button menuitem" || scenario === "security warning" || scenario === "menu warning") {
       expect(first.status).toBe("dispatched");
       expect(first).toMatchObject({ revisionFingerprint: expect.any(String) });
@@ -1564,7 +1570,8 @@ describe("current ChatGPT DOM surface driver", () => {
       card.textContent = "PRIVATE_CARD_CONTENT";
       const viewport = new DiagnosticElement({ "data-fixture-overflow-y": "hidden" });
       viewport.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 50 });
-      card.parentElement = viewport; allow.parentElement = card;
+      card.parentElement = viewport; allow.parentElement = card; disclosure.parentElement = card;
+      disclosure.getBoundingClientRect = allow.getBoundingClientRect;
       const blocker = new DiagnosticElement(); blocker.textContent = "PRIVATE_BLOCKER_CONTENT";
       const document = Object.assign(new DiagnosticElement({}, { '[data-codex-approval-surface="true"]': [card] }), {
         hasFocus: () => false, visibilityState: "hidden",
@@ -1583,7 +1590,7 @@ describe("current ChatGPT DOM surface driver", () => {
       for (const row of probes) expect(structuralDiagnosticEvent(row)).toEqual(row);
       expect(probes.find(row => row.stage === "approval_structure_observed" && row.phase === "observed"))
         .toMatchObject({ probe_available: true, popup_menu_count: 1, popup_with_controls_count: 0,
-          options_disclosure_count: 1, options_ready: false, document_hidden: true });
+          options_disclosure_count: 1, options_ready: true, document_hidden: true });
       expect(probes.find(row => row.stage === "approval_control_observed" && row.kind === "options"))
         .toMatchObject({ popup_menu: true, controls_present: false, collapsed: true });
       expect(probes.find(row => row.stage === "approval_layout_observed" && row.phase === "target" && row.depth === 2))
