@@ -1308,6 +1308,8 @@ describe("current ChatGPT DOM surface driver", () => {
   test.each([
     ["English", "See details", "Deny", "Allow once", "Approval options"],
     ["한국어", "자세히 보기", "거부", "한 번만 허용", "승인 옵션"],
+    ["English visible shortcut", "See details", "Deny Esc", "Allow once ⏎", "Approval options"],
+    ["한국어 visible shortcut", "자세히 보기", "거부Esc", "한 번만 허용⏎", "승인 옵션"],
   ])("%s one-shot approval excludes hidden keyboard hints and explicit disclosures", async (_, detailsLabel, denyLabel, onceLabel, optionsLabel) => {
     const control = (label: string, hint: string) => {
       const button = new FixtureElement();

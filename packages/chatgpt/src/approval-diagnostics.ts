@@ -1,4 +1,4 @@
-import { approvalControlLabel } from "./approval-label";
+import { approvalControlLabel, approvalControlText } from "./approval-label";
 
 export interface ApprovalDiagnosticProbe {
   readonly controls: Record<string, number | boolean>;
@@ -12,13 +12,14 @@ export function approvalDiagnosticProbe(
   target: HTMLElement | null,
   hit: Element | null,
   controlLabel: (value: string) => string = approvalControlLabel,
+  controlText: (node: Node) => string = approvalControlText,
 ): ApprovalDiagnosticProbe {
   const visible = (node: Element) => {
     const style = getComputedStyle(node);
     return style.display !== "none" && style.visibility !== "hidden"
       && style.opacity !== "0" && node.getClientRects().length > 0;
   };
-  const label = (node: Element) => controlLabel(node.getAttribute("aria-label") || node.textContent || "");
+  const label = (node: Element) => controlLabel(node.getAttribute("aria-label") || controlText(node));
   const buttons = Array.from(card?.querySelectorAll('button,[role="button"]') ?? []).slice(0, 64);
   const menus = Array.from(document.querySelectorAll('[role="menu"]')).filter(visible).slice(0, 16);
   const disclosures = buttons.filter(node => node.getAttribute("aria-haspopup") === "menu");

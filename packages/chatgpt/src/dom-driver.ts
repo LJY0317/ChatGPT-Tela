@@ -1,4 +1,4 @@
-import { approvalControlLabel } from "./approval-label";
+import { approvalControlLabel, approvalControlText } from "./approval-label";
 import { authorDiagnosticProbe } from "./author-diagnostics";
 import { approvalDiagnosticProbe, type ApprovalDiagnosticProbe } from "./approval-diagnostics";
 import { prepareApprovalWithinDeadline } from "./approval-preparation";
@@ -114,11 +114,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
     && element.getClientRects().length > 0;
   const controlLabel = (${approvalControlLabel.toString()});
   const decideApproval = (${decideChatGptApproval.toString()});
-  const accessibleText = node => {
-    if (node instanceof HTMLElement && node.getAttribute("aria-hidden") === "true") return "";
-    if (!node.childNodes?.length) return node.textContent || node.innerText || "";
-    return [...node.childNodes].map(accessibleText).join("");
-  };
+  const accessibleText = (${approvalControlText.toString()});
   const registryKey = Symbol.for("chatgpt-tela.approval-observations.v1");
   const registry = globalThis[registryKey] ||= { cards: new WeakMap(), prefix: crypto.randomUUID(), next: 0, receipt: null };
   // Candidate discovery: marked provider cards and accessible dialogs with Allow/Deny controls.
@@ -170,7 +166,7 @@ const INSPECT_APPROVAL_CARD = String.raw`async function inspectApproval(prepare)
   const finish = () => {
     if (prepare?.diagnostics && card) {
       try {
-        result.diagnostics = diagnose(card, diagnosticTarget, diagnosticHit, controlLabel);
+        result.diagnostics = diagnose(card, diagnosticTarget, diagnosticHit, controlLabel, accessibleText);
         result.diagnostics.controls.hit_test_observed = diagnosticHitTested;
       }
       catch { result.diagnosticUnavailable = true; }
