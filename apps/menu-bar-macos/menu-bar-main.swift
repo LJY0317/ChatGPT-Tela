@@ -175,7 +175,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   private let decisionUiSession = UUID().uuidString
   private let controlCenter = TelaControlCenterController()
   private let updater = TelaSparkleUpdater()
-  private var desktopLifecycleDiagnostics: TelaDesktopLifecycleDiagnostics?
+  private var desktopLifecycleObserver: TelaDesktopLifecycleObserver?
   private let fileManager = FileManager.default
   private let home = FileManager.default.homeDirectoryForCurrentUser
 
@@ -189,10 +189,12 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     supportRoot.appendingPathComponent("config/preferences-v1.json", isDirectory: false)
   }
   func applicationDidFinishLaunching(_ notification: Notification) {
-    desktopLifecycleDiagnostics = TelaDesktopLifecycleDiagnostics { [weak self] event, fields in
+    desktopLifecycleObserver = TelaDesktopLifecycleObserver(emit: { [weak self] event, fields in
       guard let self else { return }
       recordMenuDiagnostic(event, fields: fields, home: self.home)
-    }
+    }, terminated: { [weak self] pid in
+      self?.controlCenter.reconcileDelegationsAfterDesktopExit(pid: pid)
+    })
     DistributedNotificationCenter.default().addObserver(self, selector: #selector(reopenInstalledMenu),
       name: Notification.Name("com.openai.chatgpt-tela.menu-bar.reopen"), object: nil)
     NSApp.setActivationPolicy(.accessory)
@@ -329,7 +331,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   }
 
   func applicationWillTerminate(_ notification: Notification) {
-    desktopLifecycleDiagnostics?.stop()
+    desktopLifecycleObserver?.stop()
     NSWorkspace.shared.notificationCenter.removeObserver(self)
     if let url = startupReceiptURL,
        let data = try? Data(contentsOf: url),

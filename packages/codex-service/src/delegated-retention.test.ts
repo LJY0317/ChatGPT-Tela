@@ -79,17 +79,23 @@ test("a newer turn invalidates an older acknowledgement without moving time for 
   } finally { await f.close(); }
 });
 
-test("writer conflicts defer without interrupting or acquiring an old active result; restart can reconcile", async () => {
-  const f = fixture();
-  try {
-    await f.manager.enroll(1, "parent", "child"); f.advance(7 * 24); f.setBusy(true);
-    expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("deferred");
-    expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
-    await f.manager.close(); f.setBusy(false);
-    const restarted = createDelegatedRetention(f.options);
-    try { expect((await restarted.reconcile()).outcomes[0]?.status).toBe("archived"); }
-    finally { await restarted.close(); }
-  } finally { await f.close(); }
+test("writer conflicts defer without interruption; release wakeup or restart can reconcile", async () => {
+  for (const restart of [false, true]) {
+    const f = fixture();
+    let restarted: ReturnType<typeof createDelegatedRetention> | undefined;
+    try {
+      await f.manager.enroll(1, "parent", "child"); f.advance(7 * 24); f.setBusy(true);
+      expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("deferred");
+      expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
+      f.setBusy(false);
+      if (restart) { await f.manager.close(); restarted = createDelegatedRetention(f.options); }
+      const manager = restarted ?? f.manager;
+      expect((await manager.reconcile(1)).outcomes[0]?.status).toBe("archived");
+      await manager.reconcile(1);
+      expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
+      expect(f.calls.some(c => ["turn/start", "turn/interrupt", "thread/delete"].includes(c.method))).toBe(false);
+    } finally { await restarted?.close(); await f.close(); }
+  }
 });
 
 test("profile-scoped reconciliation and changed installation cannot mutate another profile", async () => {

@@ -1934,6 +1934,23 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     return value
   }
 
+  private var retentionWakeups = Set<Int>()
+
+  func reconcileDelegationsAfterDesktopExit(pid: Int) {
+    guard let slot = workState.inventory.releasedDesktopSlot(pid: pid),
+          retentionWakeups.insert(slot).inserted else { return }
+    Task {
+      defer { retentionWakeups.remove(slot) }
+      do {
+        guard let descriptor = try readDescriptor("codex") else { return }
+        _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
+                              body: ["action": "reconcile", "slot": slot])
+      } catch {
+        recordMenuDiagnostic("delegation_retention_wakeup_failed", fields: ["slot": slot], home: home)
+      }
+    }
+  }
+
   private func request(_ descriptor: ControlCenterServiceDescriptor, path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> Data {
     guard let base = URL(string: descriptor.endpoint), let url = URL(string: path, relativeTo: base) else {
       throw NSError(domain: "ChatGPTTelaControlCenter", code: 3)

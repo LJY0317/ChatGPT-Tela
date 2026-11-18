@@ -143,8 +143,14 @@ or error bodies. A wait wakeup is not a collection receipt.
   chatgpt-tela reconcile-delegations --slot 1
   ```
 
-  There is not yet a verified owner-release event connection guaranteeing immediate
-  progress after that deferral. A due time does not justify interrupting live work.
+  On macOS, the menu's existing Desktop lifecycle observer also reconciles the
+  exact known profile when its app actually terminates. Concurrent exit hints are
+  coalesced; the request neither starts a stopped service nor waits for other work
+  to release. The service still acquires the canonical writer and checks eligibility.
+  This is an app-exit wakeup, not a complete per-thread owner-release subscription:
+  release while Desktop stays alive, unavailable profile identity, or a later engine
+  exit can still defer until another supported event or explicit reconciliation.
+  A due time never justifies interrupting live work.
 - An archive request has a durable pending intent followed by a confirmed archive
   timestamp. A crash or ambiguous failure between them reports `archive_unconfirmed`
   and never automatically repeats the mutation. Confirmed records are never
@@ -171,7 +177,10 @@ container, archived a selected leaf, and left that leaf active after manual rest
 and reconciliation. Its clock was advanced in the fixture; no real profile was changed.
 
 Deletion needs an additional restore-aware serialized contract: the installed engine
-accepted `thread/delete` after `thread/unarchive`. Writer exclusion alone therefore
+accepted `thread/delete` after `thread/unarchive`. A current 0.169.0-alpha.11.1 isolated
+trial again confirmed that the restored chat was in the active list and was still
+deleted by that call; the generated delete schema accepts only `threadId`, with no
+archived-state or archive-generation precondition. Writer exclusion alone therefore
 cannot enforce “delete only the still-archived generation.” Automatic 30-day deletion
 is not enabled. Do not approximate it with a separate read followed by unconditional
 delete. Full manual archive/restore observation before the first managed archive is

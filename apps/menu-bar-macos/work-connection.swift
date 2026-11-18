@@ -166,6 +166,13 @@ struct TelaLaunchNoticePolicy {
 }
 
 struct TelaWorkInventory {
+  // Termination hints do not authorize mutation; the service still acquires
+  // canonical thread ownership. Do not guess a profile from an app title.
+  func releasedDesktopSlot(pid: Int) -> Int? {
+    guard pid > 0 else { return nil }
+    let matches = profiles.filter { $0.desktopProcessId == pid }
+    return matches.count == 1 ? matches.first?.slot : nil
+  }
   private(set) var profiles: [TelaWorkProfile] = []
   private(set) var error: String?
   mutating func loaded(_ value: [TelaWorkProfile]) {

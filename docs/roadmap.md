@@ -75,9 +75,11 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   source run verified leaf archival and preservation after manual restore.
   Newly executing Web children now notify that same registry; canonical lineage and
   first-turn checks exclude ordinary chats and later model switches. Other Native
-  children require explicit enrollment. Owner-release wakeup and complete manual-restore
-  observation are not connected. Automatic deletion remains disabled pending a restore-aware
-  serialized contract. Do not revive the retired engine or adopt ordinary chats by title.
+  children require explicit enrollment. The macOS Desktop-exit observer now wakes the
+  existing profile-scoped reconciliation. Per-thread release while Desktop remains alive
+  and complete manual-restore observation are not connected. Automatic deletion remains
+  disabled pending a restore-aware serialized contract; the current installed engine
+  still deletes a restored active thread through the unconditional delete API. Do not revive the retired engine or adopt ordinary chats by title.
   See [Web tasks](web-delegation.md).
 
 ## Deferred at the user's request
