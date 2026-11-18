@@ -1,7 +1,7 @@
 import { ControlledBrowserHost } from "@chatgpt-tela/browser-host";
 import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
-import {
-} from "@chatgpt-tela/default-desktop-target";
+import { editAppOwnedDesktopProviderConfig } from "@chatgpt-tela/default-desktop-target";
+import { retiredCatalogConfig } from "../../../tests/support/retired-catalog";
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { connectCodexTurnBridge } from "@chatgpt-tela/mcp";
 import {
@@ -797,23 +797,32 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
   }
 });
 
-test("failed account discovery does not create a fixed Native model catalog", async () => {
+test("profile startup retires its old fixed catalog even when Web account discovery fails", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-app-owned-catalog-discovery-failure-"));
   let responses: Awaited<ReturnType<typeof startLocalResponsesServer>> | undefined;
+  const { CHATGPT_EXECUTABLE: previousChat, CODEX_EXECUTABLE: previousCodex } = process.env;
   try {
     const paths = resolveProductPaths({ platform: process.platform, home: root, environment: {} });
     const manifest = createOwnershipManifest("fixture", new Date(), "11111111-2222-4333-8444-555555555555");
     writeOwnershipManifest(paths.installManifest, manifest);
-    const oldFamily = { key: chatGptWebFamilyKey("Previous account model"), label: "Previous account model",
-      availableEfforts: ["medium"] as const };
     const config = loadProductProfileRuntimeConfig(common(root));
     mkdirSync(config.browserProfile.userDataDir, { recursive: true });
     bindChatGptTelaAccount(config.browserProfile, "a".repeat(64));
     const ingressServer = await startLocalResponsesServer({ requestRouter: async () => new Response(null, { status: 404 }) });
     const ingress = { port: ingressServer.port, capability: "f".repeat(48) };
     await ingressServer.stop();
-    const nativeCatalog = { object: "list", models: [{ slug: "native-current", visibility: "list",
-      supported_reasoning_levels: [{ effort: "medium", description: "Medium" }] }] };
+    const desktopConfigPath = join(root, "config.toml");
+    const owner = { installId: manifest.installId, baseUrl: `http://127.0.0.1:${ingress.port}/${ingress.capability}/v1` };
+    const expected = editAppOwnedDesktopProviderConfig('model = "native-choice"\n# keep this comment\n', "register", owner).content;
+    writeFileSync(desktopConfigPath, retiredCatalogConfig(expected, manifest.installId, join(root, "models.json")));
+    mkdirSync(paths.configRoot, { recursive: true });
+    writeFileSync(join(paths.configRoot, "product-v1.json"), JSON.stringify({
+      version: 1, publicMcpAbi: "stable",
+      exposure: { kind: "existing-https", publicUrl: "https://example.test/mcp", localPort: 18743, authentication: "none", allowUnauthenticatedPublicEndpoint: true },
+      appOwnedResponses: [{ slot: config.slot, ...ingress, desktopConfigPath }],
+    }));
+    process.env.CHATGPT_EXECUTABLE = process.execPath;
+    process.env.CODEX_EXECUTABLE = process.execPath;
     const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
       responses = await startLocalResponsesServer(options.responses!);
       return {
@@ -827,9 +836,12 @@ test("failed account discovery does not create a fixed Native model catalog", as
       } as unknown as import("./electron").ElectronDevelopmentRuntime;
     }) as typeof import("./electron").startElectronDevelopmentRuntime;
     await expect(startAppOwnedProductResponsesRuntime({
-      config, ingress, electronStarter: starter,
+      config, ingress, electronStarter: starter, installedContext: { paths, installId: manifest.installId },
     })).rejects.toThrow("synthetic Web discovery failure");
+    expect(readFileSync(desktopConfigPath, "utf8")).toBe(expected);
   } finally {
+    if (previousChat === undefined) delete process.env.CHATGPT_EXECUTABLE; else process.env.CHATGPT_EXECUTABLE = previousChat;
+    if (previousCodex === undefined) delete process.env.CODEX_EXECUTABLE; else process.env.CODEX_EXECUTABLE = previousCodex;
     await responses?.stop();
     rmSync(root, { recursive: true, force: true });
   }
