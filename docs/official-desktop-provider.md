@@ -17,6 +17,22 @@ Native inference also traverses Tela while this setting is active. The local
 service must be running; keeping the OpenAI provider identity does not provide
 Native service independence or automatic fallback.
 
+## Native transport independence
+
+Desktop-owned execution is not transport independence: while the owned base URL is active,
+Native inference also needs Tela. Preserve the supported same-chat Native/Web switching workflow;
+do not silently replace it with provider-specific chats or rewrite stored provider identities.
+
+The current public contract selects a provider for a thread; model metadata does not select an
+independent endpoint per model. The installed official engine also rejects loading an OpenAI
+thread under a different provider. Accepting a resume request for an already-loaded thread does
+not prove a provider switch: the returned provider can remain unchanged. See the
+[official thread and model contracts](https://learn.chatgpt.com/docs/app-server).
+
+Direct Native transport while preserving this workflow remains an unmet requirement. Reassess
+when a supported per-model route or host-controlled provider transition is available. Do not add
+an external engine, private host bridge, automatic config switching or outage retry engine.
+
 ## Configure and connect
 
 Explicitly enable the existing app-owned route during product configuration:

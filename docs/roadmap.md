@@ -34,6 +34,12 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
 
 ## External contracts and explicit limits
 
+- **Native transport independence with same-chat switching.** Official Desktop ownership
+  does not remove the current Native inference dependency on Tela's base URL. Preserve the
+  user's same-chat Native/Web workflow; a different-provider chat is not an accepted substitute.
+  Validate supported per-model routing or host provider transition before removing the composite
+  route. Do not add another engine, automatic config switching or provider-history migration.
+
 - **Cross-profile delegation control.** The retired external session manager could
   select a profile for thread creation and continuation. The current official
   host tools expose no Desktop-profile selector, and Plura's target lifecycle
