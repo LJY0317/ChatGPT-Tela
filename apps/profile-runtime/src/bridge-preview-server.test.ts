@@ -3,6 +3,22 @@ import { startProfileBridgePreviewServer } from "./bridge-preview-server";
 import { parseCodexBridgePreviewContract } from "@chatgpt-tela/service-protocol";
 
 describe("profile bridge preview server", () => {
+  test("explicit interruption reaches the Web owner only through its authenticated mutation route", async () => {
+    let calls = 0;
+    const token = "i".repeat(48);
+    const server = await startProfileBridgePreviewServer({ slot: 1, bearerToken: token,
+      async observe() { return { activeSurfaceCount: 0 }; },
+      async interruptWebWork() { calls++; return 2; },
+    });
+    const url = new URL("v1/work-interrupt", server.endpoint);
+    try {
+      expect((await fetch(url, { method: "POST" })).status).toBe(401);
+      expect((await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}`, origin: "https://chatgpt.com" } })).status).toBe(403);
+      expect(calls).toBe(0);
+      expect(await (await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}` } })).json()).toEqual({ count: 2 });
+      expect(calls).toBe(1);
+    } finally { await server.close(); }
+  });
   test("shutdown requires owned auth, coalesces cleanup and retains a receipt without closing control", async () => {
     const token = "s".repeat(48); let calls = 0;
     let release!: () => void;

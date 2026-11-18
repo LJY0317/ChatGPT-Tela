@@ -40,6 +40,7 @@ export async function startProfileBridgePreviewServer(input: {
    * alive until the parent receives it and releases its lease. */
   readonly shutdownProfile?: () => Promise<{ readonly responsesRouteFingerprint: string }>;
   readonly shutdownReadiness?: () => "ready" | "blocked";
+  readonly interruptWebWork?: () => Promise<number>;
   readonly inspectCheckpointCandidates?: (threadId: string) => Promise<unknown>;
   readonly openAccountBrowser?: () => Promise<void>;
   readonly closeAccountBrowser?: () => Promise<void>;
@@ -75,6 +76,9 @@ export async function startProfileBridgePreviewServer(input: {
       if (request.headers.has("origin")) return new Response(null, { status: 403 });
       if (!sameSecret(bearer(request), input.bearerToken)) return new Response(null, { status: 401 });
       const url = new URL(request.url);
+      if (request.method === "POST" && url.pathname === "/v1/work-interrupt" && input.interruptWebWork) {
+        return Response.json({ count: await input.interruptWebWork() }, { headers: { "cache-control": "no-store" } });
+      }
       if (request.method === "POST" && url.pathname === "/v1/profile-stop" && input.shutdownProfile) {
         try {
           shutdown ??= input.shutdownProfile().catch(error => { shutdown = undefined; throw error; });
@@ -305,6 +309,7 @@ export function startAppOwnedProfileBridge(config: ProductProfileRuntimeConfig,
     openAccountBrowser: () => owned.openWebAccountBrowser(),
     closeAccountBrowser: () => owned.closeWebAccountBrowser(),
     shutdownReadiness: () => owned.shutdownReadiness(),
+    interruptWebWork: () => owned.interruptWebWork(),
     shutdownProfile: async () => {
       await owned.stop();
       return { responsesRouteFingerprint: createHash("sha256").update(owned.responses.baseUrl.href).digest("hex") };

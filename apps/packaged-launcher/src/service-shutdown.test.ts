@@ -176,32 +176,23 @@ test("orphaned update wait aborts the Codex readiness request without shutdown",
   } finally { release(); await http.close(); rmSync(home, { recursive: true, force: true }); }
 });
 
-test("consented update interruption uses the owned Native endpoint and exact active turn", async () => {
-  const home = mkdtempSync(join(tmpdir(), "tela-update-interrupt-native-"));
+test("consented update closes official apps then drains Web work without a Native terminal", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tela-update-interrupt-web-"));
   const paths = resolveProductPaths({ platform: "linux", home, environment: {} });
-  const calls: { method: string; params?: any }[] = [];
-  const thread = { id: "active-thread", historyMode: "paginated", cwd: home,
-    status: { type: "active", activeFlags: [] }, parentThreadId: null, source: "cli",
-    environments: [{ environmentId: "fixture-env", cwd: home, runtimeWorkspaceRoots: [home] }] };
-  const native = Bun.serve({ hostname: "127.0.0.1", port: 0,
-    fetch(request, server) { if (server.upgrade(request)) return; return new Response(null, { status: 400 }); },
-    websocket: { message(socket, data) {
-      const message = JSON.parse(String(data)); calls.push(message);
-      if (message.id === undefined) return;
-      const result = message.method === "thread/loaded/list" ? { data: [thread.id], nextCursor: null }
-        : message.method === "thread/read" ? { thread }
-        : message.method === "thread/turns/list" ? { data: [{ id: "exact-turn", status: "inProgress", itemsView: "notLoaded", items: [] }], nextCursor: null } : {};
-      socket.send(JSON.stringify({ id: message.id, result }));
-    } },
-  });
-  const requestedSlots: number[] = [];
+  const closed: number[] = [], interrupted: number[] = [];
   const service = {
     serviceStatus: () => ({ contractVersion: 1, service: "codex", instanceId: "fixture-interrupt", state: "ready" }),
-    profiles: async () => [1, 2].map(slot => ({ slot, targetId: `target-${slot}`, targetDisplayName: `Profile ${slot}`,
-      targetState: "running", targetSessionState: slot === 3 ? "independent" : "ready",
-      controlState: slot === 2 ? "restart-required" : "running" })),
-    terminalSession: async (slot: number) => { requestedSlots.push(slot); return { contractVersion: 1, slot, endpoint: `ws://127.0.0.1:${native.port}` }; },
+    profiles: async () => [1, 2, 3].map(slot => ({ slot, targetId: `profile-${slot}`, targetDisplayName: `Profile ${slot}`,
+      targetState: "independent", targetSessionState: "independent", controlState: "running" })),
+    async interruptWebWork(slot: number) { if (slot < 3) expect(closed).toContain(slot); interrupted.push(slot); return 1; },
+    async terminalSession() { throw Error("Retired external Native terminal must not be used"); },
   } as unknown as CodexService;
+  const desktop = {
+    async resolve(slot: number) { return { target: { slot, id: `profile-${slot}`, adapterKind: slot === 1 ? "default-desktop" as const : "multi-profile" as const,
+      displayName: `Profile ${slot}`, state: "running", managed: slot > 1 },
+      session: { targetId: `profile-${slot}`, state: slot === 3 ? "available" : "restart-required", ...(slot === 3 ? {} : { desktopProcessId: slot * 123 }) } }; },
+    async quit(id: string) { closed.push(Number(id.split("-")[1])); return { targetId: id, state: "available" }; },
+  };
   const http = await startCodexServiceHttpServer({ service });
   try {
     mkdirSync(paths.serviceRuntime("codex"), { recursive: true });
@@ -209,37 +200,15 @@ test("consented update interruption uses the owned Native endpoint and exact act
       version: 1, service: "codex", instanceId: "fixture-interrupt", installId: "fixture", pid: process.pid,
       endpoint: http.endpoint.href, bearerToken: http.bearerToken, startedAt: new Date().toISOString(),
     });
-    await interruptOwnedWork("fixture", paths, ["codex"]);
-    expect(requestedSlots).toEqual([1]);
-    expect(calls.filter(call => call.method === "turn/interrupt")).toEqual([
-      expect.objectContaining({ method: "turn/interrupt", params: { threadId: thread.id, turnId: "exact-turn" } }),
-    ]);
-    expect(calls.filter(call => call.method === "thread/read").every(call => call.params.includeTurns === false)).toBe(true);
-    service.profiles = async () => [1, 2, 3].map(slot => ({ slot, targetId: slot === 1 ? "default" : `profile-${slot}`,
-      targetDisplayName: `Profile ${slot}`, targetState: "independent", targetSessionState: "independent", controlState: "running" }));
-    const closed: { id: string; pid: number | undefined }[] = [];
-    const desktop = {
-      async resolve(slot: number) {
-        const id = slot === 1 ? "default" : `profile-${slot}`;
-        return { target: { slot, id, adapterKind: slot === 1 ? "default-desktop" as const : "multi-profile" as const,
-          displayName: `Profile ${slot}`, state: "running", managed: slot > 1 },
-          session: { targetId: id, state: slot === 3 ? "available" : "restart-required", ...(slot === 3 ? {} : { desktopProcessId: slot * 123 }) } };
-      },
-      async quit(id: string, _signal?: AbortSignal, pid?: number) { closed.push({ id, pid }); return { targetId: id, state: "available" }; },
-    };
     await interruptOwnedWork("fixture", paths, ["codex"], desktop);
-    expect(closed).toEqual([{ id: "default", pid: 123 }, { id: "profile-2", pid: 246 }]);
-    closed.length = 0;
+    expect(closed).toEqual([1, 2]); expect(interrupted).toEqual([1, 2, 3]);
+    interrupted.length = 0;
     await expect(interruptOwnedWork("fixture", paths, ["codex"], { ...desktop,
       async quit() { throw Error("normal quit refused"); },
     })).rejects.toThrow("normal quit refused");
-    expect(closed).toEqual([]);
+    expect(interrupted).toEqual([]);
     await expect(interruptOwnedWork("fixture", paths, ["codex"], { ...desktop,
       async resolve(slot) { const r = await desktop.resolve(slot); return { ...r, target: { ...r.target, id: "replaced" } }; },
     })).rejects.toThrow("ChatGPT profile changed");
-    expect(closed).toEqual([]);
-
-    expect(requestedSlots).toEqual([1]);
-
-  } finally { await http.close(); native.stop(true); rmSync(home, { recursive: true, force: true }); }
+  } finally { await http.close(); rmSync(home, { recursive: true, force: true }); }
 });

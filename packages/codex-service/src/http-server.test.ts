@@ -29,6 +29,7 @@ function fixtureService(): CodexService {
     async waitWebPreparation() { throw new Error("not used"); },
     async reconnectWeb() { throw new Error("not used"); },
     async stopProfile() { throw new Error("not used"); },
+    async interruptWebWork() { return 0; },
     async terminalSession(slot) { return { contractVersion: 1, slot, endpoint: "ws://127.0.0.1:1234/", runtimeProcessId: 10, responsesRouteFingerprint: "a".repeat(64) }; },
     async bridgeSurfaces(slot) { return { contractVersion: 1, slot, revision: 0, surfaces: [] }; },
     async bridgePreview(slot) {

@@ -41,7 +41,7 @@ function error(status: number, message: string): Response {
   return Response.json({ error: { type: "tela_codex_service_error", message } }, { status });
 }
 
-function slot(pathname: string, action: "start" | "stop" | "web-reconnect"): number | undefined {
+function slot(pathname: string, action: "start" | "stop" | "web-reconnect" | "interrupt-work"): number | undefined {
   const match = new RegExp(`^/v1/codex/profiles/([1-9][0-9]?)/${action}$`).exec(pathname);
   if (!match) return undefined;
   const value = Number(match[1]);
@@ -134,6 +134,10 @@ export async function startCodexServiceHttpServer(input: {
             }));
           }
           return error(400, "Invalid delegation action");
+        }
+        const interruptSlot = request.method === "POST" ? slot(url.pathname, "interrupt-work") : undefined;
+        if (interruptSlot !== undefined) {
+          return Response.json({ count: await input.service.interruptWebWork(interruptSlot) }, { headers: { "cache-control": "no-store" } });
         }
         if (request.method === "GET" && url.pathname === "/v1/codex/profiles") {
           const profiles = await input.service.profiles();

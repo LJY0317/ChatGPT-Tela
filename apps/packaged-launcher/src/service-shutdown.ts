@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { PACKAGED_TRANSITION_TIMEOUT_MS, PackagedServiceShutdownNotStartedError, type ProductPaths, type TelaServiceId } from "@chatgpt-tela/product-lifecycle";
 import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 import { ChatServiceClient, CodexServiceClient, descriptorForService, ServiceShutdownNotStartedError } from "@chatgpt-tela/service-protocol/client";
-import { interruptLoadedAppServerTurns } from "@chatgpt-tela/codex";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { readProductConfig } from "@chatgpt-tela/product-config";
 import { CompositeNativeTargetAdapter, MultiProfileNativeTargetAdapter, type CodexNativeTargetAdapter } from "../../../packages/codex-service/src/native-target";
@@ -27,22 +26,18 @@ export async function interruptOwnedWork(installId: string, paths: ProductPaths,
         // An app-owned provider runs inside Tela, but its Native engine belongs
         // to the official Desktop. It exposes no terminal that Tela may interrupt.
         if (profile.controlState !== "running") continue;
-        if (profile.targetSessionState === "independent") {
-          const { target, session } = await targets.resolve(profile.slot);
-          if (target.id !== profile.targetId) throw Error("ChatGPT profile changed before update closure");
-          if (session.state !== "available") {
-            const fields = { slot: profile.slot, target_kind: target.adapterKind };
-            emitDiagnosticEvent("chatgpt_tela_update", "desktop_close_started", fields);
-            let closed = false;
-            try { await targets.quit(target.id, undefined, session.desktopProcessId); closed = true; }
-            finally { emitDiagnosticEvent("chatgpt_tela_update", "desktop_close_finished", {
-              ...fields, outcome: closed ? "completed" : "failed",
-            }); }
-          }
-          continue;
+        const { target, session } = await targets.resolve(profile.slot);
+        if (target.id !== profile.targetId) throw Error("ChatGPT profile changed before update closure");
+        if (session.state !== "available") {
+          const fields = { slot: profile.slot, target_kind: target.adapterKind };
+          emitDiagnosticEvent("chatgpt_tela_update", "desktop_close_started", fields);
+          let closed = false;
+          try { await targets.quit(target.id, undefined, session.desktopProcessId); closed = true; }
+          finally { emitDiagnosticEvent("chatgpt_tela_update", "desktop_close_finished", {
+            ...fields, outcome: closed ? "completed" : "failed",
+          }); }
         }
-        const session = await client.terminalSession(profile.slot);
-        count += await interruptLoadedAppServerTurns(session.endpoint, { signal: AbortSignal.timeout(PACKAGED_TRANSITION_TIMEOUT_MS) });
+        count += await client.interruptWebWork(profile.slot, AbortSignal.timeout(PACKAGED_TRANSITION_TIMEOUT_MS));
       }
     } else {
       const client = new ChatServiceClient(descriptorForService(current.descriptor, "chat"));

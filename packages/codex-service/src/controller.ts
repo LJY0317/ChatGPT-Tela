@@ -171,6 +171,7 @@ export interface CodexService {
   waitWebPreparation(slot: number): Promise<CodexProfileStatus>;
   reconnectWeb(slot: number): Promise<CodexProfileStatus>;
   stopProfile(slot: number): Promise<CodexProfileStatus>;
+  interruptWebWork(slot: number): Promise<number>;
   terminalSession(slot: number): Promise<CodexTerminalSessionContract>;
   inspectCheckpointCandidates?(slot: number, threadId: string): Promise<unknown>;
   revealBridgeSurface?(slot: number, surfaceId: string, interactive?: boolean): Promise<void>;
@@ -989,6 +990,16 @@ export async function startCodexService(input: {
       operation.promise = promise;
       starting.set(slot, operation);
       return promise;
+    },
+    async interruptWebWork(slotValue: number) {
+      const profile = await controlledProfile(slotValue);
+      const response = await fetch(new URL("v1/work-interrupt", profile.bridgePreviewUrl), {
+        method: "POST", headers: { authorization: `Bearer ${profile.uiToken}` },
+        signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(CHILD_STOP_TIMEOUT_MS)]) : AbortSignal.timeout(CHILD_STOP_TIMEOUT_MS),
+      });
+      if (!response.ok) throw Error("Owned Web work interruption failed");
+      const result = await response.json() as { count: number };
+      return result.count;
     },
     async stopProfile(slotValue: number) {
       const slot = slotNumber(slotValue);

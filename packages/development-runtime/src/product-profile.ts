@@ -110,6 +110,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
   closeWebAccountBrowser(): Promise<void>;
   reconnectWeb(): Promise<void>;
   shutdownReadiness(): "ready" | "blocked";
+  interruptWebWork(): Promise<number>;
   stop(): Promise<void>;
 }> {
   const { config, ingress } = input;
@@ -349,6 +350,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
           ? Promise.reject(Error("Finish account management and active Web work first")) : reconnect();
       },
       shutdownReadiness: () => accountActive() ? "blocked" : owned.shutdownReadiness!(),
+      interruptWebWork: () => owned.interruptWork!(),
       // Close admission only after exact work is settled, in the same JS turn.
       stop() {
         if (stopping) return stopping;

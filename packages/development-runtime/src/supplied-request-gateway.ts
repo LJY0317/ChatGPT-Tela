@@ -30,6 +30,7 @@ export type SuppliedResultScope = {
 };
 
 interface Operation {
+  readonly cancellation: AbortController;
   readonly threadId: string;
   historyEnabled?: boolean;
   historyReleasedBytes?: number;
@@ -83,6 +84,7 @@ export function createSuppliedRequestGateway(input: {
   readonly toolBridge: TurnBridgeBackend;
   shutdownReadiness(): "ready" | "blocked";
   prepareShutdown(): void;
+  interruptWork(): Promise<number>;
   resetWebAccount(): Promise<void>;
   ownsCapability(capability: string): boolean;
   browserRetention(surfaceId?: string): ReturnType<RetainedBrowserEpochRegistry["retention"]>;
@@ -137,6 +139,12 @@ export function createSuppliedRequestGateway(input: {
   return {
     toolBridge,
     shutdownReadiness,
+    async interruptWork() {
+      const active = [...operations.values()].filter(op => op.finishedAt === undefined);
+      for (const op of active) op.cancellation.abort(new Error("Web work interrupted for update"));
+      await Promise.allSettled(active.map(op => op.webRun!));
+      return active.length;
+    },
     async resetWebAccount() {
       if (shutdownReadiness() !== "ready") throw Error("Finish active Web work before changing the account");
       await epochs.retireAll();
@@ -236,7 +244,7 @@ export function createSuppliedRequestGateway(input: {
           for (const listener of listeners) { try { if (listener(summary) === false) listeners.delete(listener); } catch { listeners.delete(listener); } }
         };
         const owned: Operation = {
-          threadId: identity.threadId, turnId: identity.turnId, fingerprint: hash, capability, listeners, delivered: false,
+          cancellation: new AbortController(), threadId: identity.threadId, turnId: identity.turnId, fingerprint: hash, capability, listeners, delivered: false,
           ...(previousRequestFingerprint ? { previousRequestFingerprint } : {}),
           round: new ExactToolRound(), advertisedGoals, offer,
           outcome: Promise.resolve().then(async () => {
@@ -247,8 +255,8 @@ export function createSuppliedRequestGateway(input: {
             const diagnostics = withDiagnosticContext(correlation, () => startTurnDiagnosticSummary(
               correlation.scope_fingerprint, correlation.turn_fingerprint, correlation.request_fingerprint));
             owned.diagnostics = diagnostics;
-            const signal = input.webTurnTimeoutMs === undefined ? controller.signal
-              : AbortSignal.any([controller.signal, AbortSignal.timeout(input.webTurnTimeoutMs)]);
+            const signal = AbortSignal.any([controller.signal, owned.cancellation.signal,
+              ...(input.webTurnTimeoutMs === undefined ? [] : [AbortSignal.timeout(input.webTurnTimeoutMs)])]);
             let plan: DevelopmentWebTurnPlan | undefined;
             let acquired = false;
             let plannerStage = "not_started";

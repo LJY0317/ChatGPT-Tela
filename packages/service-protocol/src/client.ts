@@ -170,6 +170,11 @@ export class CodexServiceClient extends LocalServiceClient {
     return this.request("v1/codex/delegations", "POST", input, signal);
   }
 
+  async interruptWebWork(slot: number, signal?: AbortSignal): Promise<number> {
+    const result = await this.request(`v1/codex/profiles/${slot}/interrupt-work`, "POST", {}, signal) as { count: number };
+    return result.count;
+  }
+
   async profiles(signal?: AbortSignal): Promise<readonly CodexProfileStatusContract[]> {
     const value = await this.request("v1/codex/profiles", "GET", undefined, signal);
     if (!value || typeof value !== "object" || Array.isArray(value)) {
