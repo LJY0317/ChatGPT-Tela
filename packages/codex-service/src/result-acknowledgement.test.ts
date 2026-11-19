@@ -10,7 +10,7 @@ function fixture() {
   const calls: string[] = [];
   const thread: any = { id: "child", parentThreadId: "parent", source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } };
   const item: any = { id: "answer", type: "agentMessage", phase: "final_answer", text: "PRIVATE_FINAL_BODY" };
-  const latest: any = { id: "turn", status: "failed" };
+  const latest: any = { id: "turn", status: "completed" };
   const rpc = { async request(method: string, params?: any) {
     calls.push(method);
     if (method === "thread/read") return { thread };
@@ -29,13 +29,14 @@ test("explicit exact-result acknowledgement is scoped, idempotent and body-free"
     expect((await acknowledgeNativeResult({ ...input, now: 2000 })).acknowledgedAt).toBe(first.acknowledgedAt);
     const other = await acknowledgeNativeResult({ ...input, scope: "install/profile-two", now: 2000 });
     expect(other.scope).not.toBe(first.scope);
+    f.latest.id = "next-turn";
     const newer = await acknowledgeNativeResult({ ...input, result: { ...result, turnId: "next-turn" }, now: 2000 });
     expect(newer.result.turnId).toBe("next-turn");
     expect(newer.acknowledgedAt).not.toBe(first.acknowledgedAt);
     const stored = readdirSync(f.directory).map(name => readFileSync(join(f.directory, name), "utf8")).join("");
     expect(stored).not.toContain("PRIVATE_FINAL_BODY");
     expect(stored).not.toContain("install/profile-one");
-    expect(f.calls.every(method => ["thread/read", "thread/items/list"].includes(method))).toBe(true);
+    expect(f.calls.every(method => ["thread/read", "thread/turns/list", "thread/items/list"].includes(method))).toBe(true);
   } finally { f.close(); }
 });
 
@@ -45,7 +46,7 @@ test("ordinary chats, foreign parents and non-final items cannot acquire an ackn
     const input = { rpc: f.rpc, directory: f.directory, scope: "profile", result };
     await expect(acknowledgeNativeResult({ ...input, result: { ...result, parentThreadId: "other" } })).rejects.toThrow("parent and child");
     f.item.phase = "commentary";
-    await expect(acknowledgeNativeResult(input)).rejects.toThrow("not a final answer");
+    await expect(acknowledgeNativeResult(input)).rejects.toThrow("Final answer was not found");
     f.thread.source = "cli";
     await expect(acknowledgeNativeResult(input)).rejects.toThrow();
     expect(readdirSync(f.directory)).toEqual([]);
@@ -66,13 +67,14 @@ test("paged final-item lookup preserves the exact turn and does not acknowledge 
     await acknowledgeNativeResult({ rpc, directory: f.directory, scope: "profile", result });
     expect(pages).toBe(2);
     f.item.id = "other";
-    await expect(acknowledgeNativeResult({ rpc, directory: f.directory, scope: "profile", result })).rejects.toThrow("not found");
+    await expect(acknowledgeNativeResult({ rpc, directory: f.directory, scope: "profile", result })).rejects.toThrow("no longer the latest final");
   } finally { f.close(); }
 });
 
 test("failure acknowledgement verifies the terminal outcome without manufacturing a final answer", async () => {
   const f = fixture();
   try {
+    f.latest.status = "failed";
     const failure: ResultReference = { parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "failed" };
     const input = { rpc: f.rpc, directory: f.directory, scope: "profile", result: failure };
     expect((await acknowledgeNativeResult(input)).result.outcome).toBe("failed");

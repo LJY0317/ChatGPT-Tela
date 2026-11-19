@@ -300,8 +300,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var localPluginMessage: String?
   private var localPluginStatus: TelaLocalPluginStatus?
   private var retentionStatus: TelaRetentionStatus?
-  private var trackingWebTask = false
-  private var webTaskTrackingMessage: String?
+  private var managingWebTask = false
+  private var webTaskMessage: String?
   private var endpointField: NSTextField?
   private var portField: NSTextField?
   private var exposurePicker: NSPopUpButton?
@@ -794,11 +794,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       append(label("Web tasks", style: .headline), to: webTasks)
       append(secondary("Start or delegate tasks with a Web model in ChatGPT."), to: webTasks)
       if serviceStates["codex"] == "Ready", !profiles.isEmpty, workInventory.error == nil {
-        let track = actionButton("Track Web task…", action: #selector(trackWebTask))
-        track.isEnabled = !trackingWebTask
-        webTasks.addArrangedSubview(track)
+        let manage = actionButton("Manage Web task…", action: #selector(manageWebTask))
+        manage.isEnabled = !managingWebTask
+        webTasks.addArrangedSubview(manage)
       }
-      if let message = webTaskTrackingMessage { append(secondary(message), to: webTasks) }
+      if let message = webTaskMessage { append(secondary(message), to: webTasks) }
       if let pending = retentionStatus?.overdue, !pending.isEmpty {
         row(String(format: telaText("Cleanup needs review · %d"), pending.count),
             control: actionButton("Review…", action: #selector(reviewRetention)), in: webTasks)
@@ -1987,10 +1987,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     } catch { retentionStatus = nil }
   }
 
-  @objc private func trackWebTask() {
-    guard !trackingWebTask, let onlyProfile = profiles.first else { return }
+  @objc private func manageWebTask() {
+    guard !managingWebTask, let onlyProfile = profiles.first else { return }
     let alert = NSAlert()
-    alert.messageText = telaText("Track a Web task")
+    alert.messageText = telaText("Manage a Web task")
     alert.informativeText = telaText("Tracked tasks are archived after 7 days, or 12 hours after you confirm the answer.")
     let multipleProfiles = profiles.count > 1
     let accessory = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: multipleProfiles ? 60 : 26))
@@ -2009,29 +2009,79 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       accessory.addSubview(picker)
     }
     alert.accessoryView = accessory
+    alert.addButton(withTitle: telaText("View answer"))
     alert.addButton(withTitle: telaText("Track task"))
-    alert.addButton(withTitle: telaText("Cancel"))
+    alert.addButton(withTitle: telaText("Cancel")).keyEquivalent = "\u{1b}"
     alert.window.initialFirstResponder = link
-    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    let selection = alert.runModal()
+    guard selection == .alertFirstButtonReturn || selection == .alertSecondButtonReturn else { return }
+    let readAnswer = selection == .alertFirstButtonReturn
     let slot = multipleProfiles ? (picker.selectedItem?.tag ?? 0) : onlyProfile.slot
     guard slot > 0, let threadId = telaDelegationThreadId(link.stringValue) else {
-      webTaskTrackingMessage = "Choose the profile and paste a ChatGPT task link."
+      webTaskMessage = "Choose the profile and paste a ChatGPT task link."
       renderCurrentPage()
       return
     }
-    trackingWebTask = true
-    webTaskTrackingMessage = nil
+    managingWebTask = true
+    webTaskMessage = nil
     renderCurrentPage()
     Task {
-      defer { trackingWebTask = false; renderCurrentPage() }
+      defer { managingWebTask = false; renderCurrentPage() }
       do {
         guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "ChatGPTTelaControlCenter", code: 2) }
-        _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
-          body: ["action": "enroll", "standalone": true, "threadId": threadId, "slot": slot])
-        webTaskTrackingMessage = "Web task tracked."
+        let target: [String: Any] = ["standalone": true, "threadId": threadId, "slot": slot]
+        if readAnswer {
+          try await showWebTaskAnswer(descriptor, target: target, threadId: threadId)
+        } else {
+          _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
+            body: target.merging(["action": "enroll"]) { _, current in current })
+          webTaskMessage = "Web task tracked."
+        }
       } catch {
-        webTaskTrackingMessage = "Couldn’t track this task. Check its profile and Web model."
+        webTaskMessage = readAnswer
+          ? "Couldn’t load the answer. Check that this task is tracked in the selected profile."
+          : "Couldn’t track this task. Check its profile and Web model."
       }
+    }
+  }
+
+  private func showWebTaskAnswer(_ descriptor: ControlCenterServiceDescriptor,
+                                 target: [String: Any], threadId: String) async throws {
+    let path = "v1/codex/delegations"
+    let data = try await request(descriptor, path: path, method: "POST",
+      body: target.merging(["action": "read-result"]) { _, current in current })
+    let result = try JSONDecoder().decode(TelaWebTaskResult.self, from: data)
+    guard result.threadId == threadId else { throw NSError(domain: "ChatGPTTelaControlCenter", code: 4) }
+    switch result.outcome {
+    case .pending: webTaskMessage = "The answer isn’t ready yet."; return
+    case .failed: webTaskMessage = "The task failed. Open it in ChatGPT for details."; return
+    case .interrupted: webTaskMessage = "The task was stopped."; return
+    case .answer: break
+    }
+    guard let answer = result.answer(in: threadId) else { throw NSError(domain: "ChatGPTTelaControlCenter", code: 4) }
+    let alert = NSAlert()
+    alert.messageText = telaText("Web task answer")
+    let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 480, height: 260))
+    scroll.hasVerticalScroller = true
+    scroll.borderType = .bezelBorder
+    let text = NSTextView(frame: scroll.bounds)
+    text.isEditable = false
+    text.isSelectable = true
+    text.isVerticallyResizable = true
+    text.autoresizingMask = [.width]
+    text.string = answer.text
+    scroll.documentView = text
+    alert.accessoryView = scroll
+    alert.addButton(withTitle: telaText("Close")).keyEquivalent = "\u{1b}"
+    alert.addButton(withTitle: telaText("Confirm receipt")).keyEquivalent = ""
+    guard alert.runModal() == .alertSecondButtonReturn else { return }
+    do {
+      _ = try await request(descriptor, path: path, method: "POST",
+        body: target.merging(["action": "acknowledge", "outcome": "answer", "turnId": answer.turn, "itemId": answer.item]) { _, current in current })
+      webTaskMessage = "Answer receipt confirmed."
+      await loadRetentionStatus()
+    } catch {
+      webTaskMessage = "Couldn’t confirm receipt. View the latest answer and try again."
     }
   }
 

@@ -8,6 +8,14 @@ for invalid in ["https://chatgpt.com/share/\(taskId)", "codex://threads/\(taskId
                 "codex://user@threads/\(taskId)"] {
   precondition(telaDelegationThreadId(invalid) == nil)
 }
+let result = try! JSONDecoder().decode(TelaWebTaskResult.self, from: Data("""
+{"threadId":"\(taskId)","turnId":"t","itemId":"f","outcome":"answer","text":"fixture answer"}
+""".utf8))
+precondition(result.answer(in: taskId)?.item == "f" && result.answer(in: "foreign") == nil)
+let pending = try! JSONDecoder().decode(TelaWebTaskResult.self, from: Data("""
+{"threadId":"\(taskId)","outcome":"pending"}
+""".utf8))
+precondition(pending.outcome == .pending && pending.answer(in: taskId) == nil)
 var state = TelaWorkInventory()
 let profile = TelaWorkProfile(slot: 1, targetDisplayName: "ChatGPT", targetState: "running", targetSessionState: "ready", controlState: "restart-required")
 state.loaded([profile]); precondition(state.error == nil)

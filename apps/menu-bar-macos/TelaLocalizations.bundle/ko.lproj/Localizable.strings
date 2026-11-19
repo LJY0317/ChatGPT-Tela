@@ -328,8 +328,8 @@
 "Some profiles still need to reopen." = "일부 프로필을 다시 열어야 합니다.";
 "Reopen ChatGPT…" = "ChatGPT 다시 열기…";
 
-"Track Web task…" = "Web 작업 등록…";
-"Track a Web task" = "Web 작업 등록";
+"Manage Web task…" = "Web 작업 관리…";
+"Manage a Web task" = "Web 작업 관리";
 "Tracked tasks are archived after 7 days, or 12 hours after you confirm the answer." = "등록한 작업은 7일 뒤, 답변 회수를 확인하면 12시간 뒤 보관됩니다.";
 "Paste a ChatGPT task link" = "ChatGPT 작업 링크 붙여넣기";
 "ChatGPT task link" = "ChatGPT 작업 링크";
@@ -338,3 +338,13 @@
 "Choose the profile and paste a ChatGPT task link." = "프로필을 선택하고 ChatGPT 작업 링크를 붙여넣으세요.";
 "Web task tracked." = "Web 작업을 등록했습니다.";
 "Couldn’t track this task. Check its profile and Web model." = "작업을 등록할 수 없습니다. 프로필과 Web 모델을 확인하세요.";
+
+"View answer" = "답변 보기";
+"Couldn’t load the answer. Check that this task is tracked in the selected profile." = "답변을 불러올 수 없습니다. 선택한 프로필에 작업이 등록됐는지 확인하세요.";
+"The answer isn’t ready yet." = "아직 답변이 없습니다.";
+"The task failed. Open it in ChatGPT for details." = "작업이 실패했습니다. ChatGPT에서 자세한 내용을 확인하세요.";
+"The task was stopped." = "작업이 중단됐습니다.";
+"Web task answer" = "Web 작업 답변";
+"Confirm receipt" = "회수 확인";
+"Answer receipt confirmed." = "답변 회수를 확인했습니다.";
+"Couldn’t confirm receipt. View the latest answer and try again." = "회수를 확인할 수 없습니다. 최신 답변을 열어 다시 시도하세요.";

@@ -24,9 +24,10 @@ When Tela verifies a newly spawned child's first Web turn, it prefixes the
 official chat title with `[Tela Agent]` as part of enrollment. Separate chats
 created by selecting a Web model keep the title given by their creator.
 Using a Web model or adding the prefix does not enroll a chat in retention.
-To opt in an independent Web chat, use **Control Center → Work → Track Web task…**,
-paste its ChatGPT task link, and select the matching profile if asked. From the
-command line, use `chatgpt-tela retain-delegation --standalone --thread CHAT --slot N`.
+To opt in an independent Web chat, use **Control Center → Work → Manage Web task…**.
+Paste the ChatGPT task link, select the matching profile if asked, and choose
+**Track task**. To collect a result, choose **View answer** for the same link and
+use **Confirm receipt** after reading. From the command line, use `chatgpt-tela retain-delegation --standalone --thread CHAT --slot N`.
 The selected profile must already know the exact standalone chat and its Web
 model. The caller can enroll it as soon as those details are visible in official
 history, including before the first turn saves. The source CLI can read the latest
@@ -38,8 +39,9 @@ chatgpt-tela acknowledge-result --standalone --thread CHAT --slot N --turn TURN 
 ```
 
 The read returns the exact turn, final item and text, or the current turn's pending,
-failed or interrupted status. A registered chat with no saved turn is pending without a turn ID. Run acknowledgement after consuming the final answer;
-reading alone does not change the deadline. The service stores the receipt without the
+failed or interrupted status. A registered chat with no saved turn is pending without a
+turn ID. Reading alone does not change the deadline. If another final answer replaces the
+one you viewed, reopen the result before confirming receipt. The service stores the receipt without the
 answer body. The desktop host's separate-chat creation tool currently returns a thread
 identity to its caller, but it exposes no verified creation callback to Tela. Its caller
 must enroll that chat explicitly. Regular Web chats never opt in solely by using a Web model.

@@ -43,22 +43,31 @@ export function assertManagedThread(thread: any, threadId: string, parentThreadI
     || parentThreadId === undefined && typeof thread.source !== "string") throw Error("Delegation lineage changed");
 }
 
-/** Read the newest final or validate one exact acknowledgement reference. */
+export async function readLatestResultTurn(rpc: Pick<CodexAppServerRpc, "request">,
+  threadId: string, signal?: AbortSignal): Promise<{ id: string; status: string } | undefined> {
+  const result = object(await rpc.request("thread/turns/list", {
+    threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded",
+  }, signal));
+  if (!Array.isArray(result.data) || result.data.length > 1 || result.data.length === 0 && result.nextCursor != null) {
+    throw Error("Official latest-turn metadata is unavailable");
+  }
+  if (!result.data.length) return undefined;
+  const turn = object(result.data[0]);
+  if (typeof turn.id !== "string" || typeof turn.status !== "string") throw Error("Official latest-turn metadata is unavailable");
+  return { id: turn.id, status: turn.status };
+}
+
+/** Read the newest final. Older finals from the same turn are not collection evidence. */
 export async function findFinalAnswer(rpc: Pick<CodexAppServerRpc, "request">,
-  threadId: string, turnId: string, itemId?: string, signal?: AbortSignal) {
+  threadId: string, turnId: string, signal?: AbortSignal) {
   let cursor: string | undefined;
   const visited = new Set<string>();
   do {
     const page = await readIndexedNativeItemsPage(rpc, { threadId, turnId, limit: 32, sortDirection: "desc",
       ...(cursor ? { cursor } : {}),
     }, signal);
-    for (const { item } of page.data) {
-      const final = item.type === "agentMessage" && item.phase === "final_answer";
-      if (itemId === undefined ? final : item.id === itemId) {
-        if (!final) throw Error("Selected item is not a final answer");
-        return item;
-      }
-    }
+    const row = page.data.find(({ item }) => item.type === "agentMessage" && item.phase === "final_answer");
+    if (row) return row.item;
     if (page.nextCursor == null) break;
     if (typeof page.nextCursor !== "string" || visited.has(page.nextCursor)) throw Error("Official result paging did not advance");
     cursor = page.nextCursor;
@@ -85,17 +94,15 @@ export async function acknowledgeNativeResult(input: {
   }, input.signal)).thread);
   try { assertManagedThread(thread, result.threadId, result.parentThreadId); }
   catch (cause) { throw Error("Result does not belong to the specified parent and child or registered standalone chat", { cause }); }
+  const latest = await readLatestResultTurn(input.rpc, result.threadId, input.signal);
   if (result.outcome === "answer") {
-    await findFinalAnswer(input.rpc, result.threadId, result.turnId, result.itemId, input.signal);
-  } else {
-    // Failures need a terminal turn receipt; they may have no assistant message.
-    const turns = object(await input.rpc.request("thread/turns/list", {
-      threadId: result.threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded",
-    }, input.signal));
-    const latest = Array.isArray(turns.data) ? turns.data[0] : undefined;
-    if (latest?.id !== result.turnId || latest.status !== result.outcome) {
-      throw Error("The specified terminal failure is not the latest recorded turn");
+    if (latest?.id !== result.turnId || latest.status !== "completed") {
+      throw Error("The selected answer is not from the latest completed turn");
     }
+    const item = await findFinalAnswer(input.rpc, result.threadId, result.turnId, input.signal);
+    if (item.id !== result.itemId) throw Error("The selected answer is no longer the latest final");
+  } else if (latest?.id !== result.turnId || latest.status !== result.outcome) {
+    throw Error("The specified terminal failure is not the latest recorded turn");
   }
   const scope = createHash("sha256").update(input.scope).digest("hex");
   const name = createHash("sha256").update(JSON.stringify({ scope, result })).digest("hex") + ".json";

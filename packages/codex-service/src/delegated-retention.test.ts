@@ -41,7 +41,7 @@ function fixture() {
     } }),
   };
   const manager = createDelegatedRetention(options);
-  return { directory, options, manager, thread, turn, calls,
+  return { directory, options, manager, thread, turn, item, calls,
     setTurnPersisted(value: boolean) { turnPersisted = value; },
     advance(hours: number) { now += hours * HOUR; }, setBusy(value: boolean) { busy = value; }, changeScope() { scope = "new-install"; }, setDescendant(value: "active" | "archived" | undefined) { descendant = value; },
     receipt() { return JSON.parse(readFileSync(join(options.directory, readdirSync(options.directory)[0]!), "utf8")); },
@@ -83,7 +83,7 @@ test("explicit standalone Web registration uses the existing receipt and archive
     f.turn.status = "failed";
     expect(await f.manager.readResult(1, undefined, "child")).toMatchObject({ outcome: "failed" });
     // A final-looking item on a failed turn cannot shorten its retention.
-    await f.manager.acknowledge(1, result);
+    await expect(f.manager.acknowledge(1, result)).rejects.toThrow("latest completed turn");
     expect(f.receipt().dueAt).toBe(enrolledAt + 7 * 24 * HOUR);
     f.turn.status = "completed";
     await f.manager.acknowledge(1, result);
@@ -130,6 +130,22 @@ test("a newer turn invalidates an older acknowledgement without moving time for 
     const due = f.receipt().dueAt; f.advance(1); await f.manager.reconcile(); expect(f.receipt().dueAt).toBe(due);
     expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
     f.advance(7 * 24); expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("archived");
+  } finally { await f.close(); }
+});
+
+test("a replacement final in the same turn invalidates the old receipt and cannot be replaced by stale confirmation", async () => {
+  const f = fixture();
+  try {
+    await f.manager.enroll(1, "parent", "child");
+    await f.manager.acknowledge(1, answer);
+    f.item.id = "new-final";
+    f.advance(12);
+    expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("not_due");
+    await f.manager.acknowledge(1, { ...answer, itemId: "new-final" });
+    const current = f.receipt();
+    await expect(f.manager.acknowledge(1, answer)).rejects.toThrow("no longer the latest final");
+    expect(f.receipt()).toEqual(current);
+    expect(f.calls.some(call => call.method === "thread/archive")).toBe(false);
   } finally { await f.close(); }
 });
 

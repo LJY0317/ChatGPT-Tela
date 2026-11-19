@@ -14,6 +14,21 @@ func telaDelegationThreadId(_ input: String) -> String? {
   return id.uuidString.lowercased()
 }
 
+struct TelaWebTaskResult: Decodable {
+  enum Outcome: String, Decodable { case pending, answer, failed, interrupted }
+  let threadId: String
+  let turnId: String?
+  let itemId: String?
+  let text: String?
+  let outcome: Outcome
+
+  func answer(in requestedThread: String) -> (turn: String, item: String, text: String)? {
+    guard threadId == requestedThread, outcome == .answer, let turnId, !turnId.isEmpty,
+          let itemId, !itemId.isEmpty, let text, !text.isEmpty else { return nil }
+    return (turnId, itemId, text)
+  }
+}
+
 // On-demand official CLI metadata, scoped to this installation's local source.
 struct TelaRetentionStatus: Decodable {
   struct Item: Decodable {
