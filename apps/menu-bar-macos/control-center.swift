@@ -802,13 +802,6 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         open.tag = profile.slot
         open.isEnabled = workInventory.error == nil && profile.connectionInProgress != true && (profile.connected || !operationInProgress)
         row(profile.targetDisplayName, subtitle: account?.native.email, control: open, in: profileCard, emphasized: true)
-        if profile.slot > 1 {
-          let mainApp = actionButton("Open main app", action: #selector(openProfileButton(_:)))
-          mainApp.tag = 1
-          mainApp.isEnabled = !operationInProgress
-          row("ChatGPT updates", subtitle: "Update in the main app, then reopen this profile.",
-              control: mainApp, in: profileCard)
-        }
         divider(in: profileCard)
 
         let toggle = NSSwitch()

@@ -323,9 +323,6 @@
 "Overdue chats stay listed until resolved. Review other affected chats before archiving." = "기한을 넘긴 대화는 해결될 때까지 표시됩니다. 함께 보관될 다른 대화도 먼저 확인하세요.";
 "Review…" = "검토…";
 "Couldn't find ChatGPT in Applications." = "응용 프로그램 폴더에서 ChatGPT를 찾을 수 없습니다.";
-"Open main app" = "기본 앱 열기";
-"ChatGPT updates" = "ChatGPT 업데이트";
-"Update in the main app, then reopen this profile." = "기본 앱에서 업데이트한 뒤 이 프로필을 다시 여세요.";
 "Reopen" = "다시 열기";
 "ChatGPT profiles" = "ChatGPT 프로필";
 "Some profiles still need to reopen." = "일부 프로필을 다시 열어야 합니다.";
