@@ -201,6 +201,29 @@ test("canonical hydration cannot promote unavailable payload, and commits only a
   expect(tracked.conversationRoute).toBe("https://chatgpt.com/c/owned");
 });
 
+test("a folded canonical author can rebind only the exact causal send to its single assistant lineage", () => {
+  const tracked: TurnOwnership = { ...owner(), conversationRoute: "https://chatgpt.com/c/local-chatgpt:00000000-0000-4000-8000-000000000000",
+    causalReceipt: true, observationInputState: () => "unchanged", acceptedRequestDigest: "accepted-wire" };
+  const canonical = { ...user, key: "user:canonical", lineageAnchor: "document/canonical",
+    contentFingerprint: "truncated-rendered-author", foldedRequestDigest: "accepted-wire" };
+  const complete = { ...answer, key: "assistant:canonical", parentUserTurnKey: canonical.key,
+    lineageAnchor: canonical.lineageAnchor };
+  const rendered = snapshot([canonical, complete]);
+  for (const incompatible of [
+    { ...tracked, observationInputState: () => "changed" as const },
+    { ...tracked, causalReceipt: false },
+    { ...tracked, acceptedRequestDigest: "other-wire" },
+  ]) expect(() => resolveAssistantLineage(rendered, incompatible)).toThrow("conversation changed");
+  expect(() => resolveAssistantLineage(snapshot([canonical, complete, { ...canonical, key: "user:competing" }]), { ...tracked }))
+    .toThrow("conversation changed");
+  expect(resolveAssistantLineage(snapshot([canonical]), tracked)).toMatchObject({ identityPending: true, assistants: [] });
+  expect(resolveAssistantLineage(rendered, tracked).assistants).toEqual([complete]);
+  expect(resolveAssistantLineage(snapshot([complete]), tracked).assistants).toEqual([complete]);
+  const hydrated = { ...canonical, key: "user:hydrated", lineageAnchor: "document/hydrated" };
+  const hydratedAnswer = { ...complete, parentUserTurnKey: hydrated.key, lineageAnchor: hydrated.lineageAnchor };
+  expect(resolveAssistantLineage(snapshot([hydrated, hydratedAnswer]), tracked).assistants).toEqual([hydratedAnswer]);
+});
+
 test.each(["canonical transition", "already canonical"])("exact author rekeys its parent and anchor together after %s", mode => {
   const tracked = { ...owner(), observationInputState: () => "changed" as const };
   if (mode === "canonical transition") tracked.conversationRoute = "https://chatgpt.com/";

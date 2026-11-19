@@ -20,6 +20,43 @@ not that an official task or conversation was deleted. Manage tasks and conversa
 in the official app. The retention commands below are source-level management
 operations, not user-facing delegation creation commands.
 
+### Native-to-Web child dispatch
+
+On build `2026111804`, the official Desktop coordinator in profile 2 created two
+children targeting the two Tela Web models. Both stopped at context projection
+before browser submission. The host supplied each assignment in an
+`agent_message` with a visible header and an opaque `encrypted_content` part.
+The assignment was absent from the visible input, so dropping the opaque part
+would send an incomplete task. Neither child returned an answer.
+
+The [official engine supports plaintext collaboration messages](https://github.com/openai/codex/pull/35845)
+when the producer explicitly marks them as plaintext. The installed coordinator
+did not produce that form in either run, and the exposed tool and documented
+agent settings offer no plaintext selector.
+
+The bundled Codex `0.169.0-alpha.11.1` schema exposes plaintext user input and
+`parentTurnId` / `rootTurnId` attribution on `turn/start`. These fields attribute
+turns. They do not create the official subagent relationship or deliver a child
+completion to the parent. The official desktop tools can also create a separate
+Web-model chat and wait by thread ID, which is a distinct workflow from native
+child completion. Direct child dispatch still needs a supported way for the
+host to deliver the entire readable assignment.
+
+### Web answer delivery in standalone chats
+
+On profile 2, two official Desktop Web chats on build `2026111804` produced
+answers in the browser that the app could not collect. The folded renderer
+exposed only part of the submitted text, and hydration changed the rendered
+turn key. Opening the fold could temporarily unmount the author bubble.
+
+Tela now checks a digest placed near the start of the submitted message after
+the exact composer send. A folded receipt can rebind the matching author and
+assistant lineage within the same unchanged document, including a second
+renderer rekey after the route is canonical. Edits, different conversations,
+and competing authors continue to require independent proof.
+Build `2026111807` returned both expected final answers to profile 2's official
+Desktop chat, one from each supported Web model.
+
 ### Concurrent delegation setting: pending host support
 
 The requested policy is **three simultaneous Web-delegated child tasks per profile

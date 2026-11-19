@@ -2091,6 +2091,8 @@ function composer(raw: RawComposer): ChatGptComposerObservation {
 
 function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
   const anchor = raw.lineageAnchor ? fingerprint(raw.lineageAnchor) : undefined;
+  const foldedRequestDigest = raw.role === "user" && raw.userPayloadProbe?.author_collapsed_count === 1
+    ? raw.contentText?.slice(0, 180).match(/\[Tela request ([A-Za-z0-9_-]{43})\]/)?.[1] : undefined;
   const structure = (() => {
     try {
       const witness = raw.bodyStructure;
@@ -2125,6 +2127,7 @@ function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
     ...(raw.parentUserTurnKey ? { parentUserTurnKey: anchor ? `user:anchor:${anchor}` : raw.parentUserTurnKey } : {}),
     ...(anchor ? { lineageAnchor: anchor } : {}),
     ...(raw.contentText !== undefined ? { contentFingerprint: fingerprint(raw.contentText) } : {}),
+    ...(foldedRequestDigest ? { foldedRequestDigest } : {}),
     ...(raw.candidateTexts?.length === 2 ? { candidateFingerprints: Object.freeze(raw.candidateTexts.map(fingerprint)) } : {}),
     ...(raw.userPayloadReason ? { userPayloadReason: raw.userPayloadReason } : {}),
     ...(raw.userPayloadStructure ? { userPayloadStructure: raw.userPayloadStructure } : {}),

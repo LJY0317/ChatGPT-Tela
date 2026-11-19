@@ -38,6 +38,8 @@ export interface ChatGptTurnObservation {
   readonly lineageAnchor?: string;
   /** Author payload only, never whole-bubble innerText; absent means proof unavailable. */
   readonly contentFingerprint?: string;
+  /** Transport receipt visible in a folded author bubble. Requires causal send and route proof. */
+  readonly foldedRequestDigest?: string;
   /** Bounded unequal-chain endpoints; alternatives only, never standalone author proof. */
   readonly candidateFingerprints?: readonly string[];
   readonly userPayloadReason?: string;

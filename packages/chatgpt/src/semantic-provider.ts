@@ -459,7 +459,7 @@ function formatWebPhysicalContextParts(
           content: segment.content,
         })
   ));
-  const text = [
+  const body = [
     "<chatgpt_tela_transport_contract>",
     ...contract,
     "</chatgpt_tela_transport_contract>",
@@ -475,9 +475,11 @@ function formatWebPhysicalContextParts(
       : "The active task context is complete. Execute the latest active request now under the contract above.",
     "</chatgpt_tela_transport_resume>",
   ].join("\n");
+  const requestDigest = fingerprint(body);
+  const text = `[Tela request ${requestDigest}]\n${body}`;
   const composerBytes = Buffer.byteLength(text);
   const contextBytes = lines.reduce((n,line)=>n+Buffer.byteLength(line), Math.max(0,lines.length-1));
-  return {text, composerBytes, contextBytes, protocolBytes:composerBytes-contextBytes};
+  return {text, requestDigest, composerBytes, contextBytes, protocolBytes:composerBytes-contextBytes};
 }
 
 export function formatWebPhysicalContext(context: WebPhysicalContext,
@@ -1784,6 +1786,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
             acceptedObservationRevision: acceptedBoundary.observationRevision,
             acceptedObservationSource: acceptedBoundary.observationSource,
             acceptedUserCharacters: text.length,
+            acceptedRequestDigest: formatted.requestDigest,
             diagnosticLineage: {
               operation_fingerprint: diagnosticFingerprint([request.nativeTaskId, request.nativeTurnId, request.webEpochId].join("\n")),
               native_task_fingerprint: diagnosticFingerprint(request.nativeTaskId),
