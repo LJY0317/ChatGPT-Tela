@@ -105,6 +105,11 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     openTelaDesktopProfile(profile, activates: false, completion: completion)
   }
   private static let desktopRestoreKey = "TelaUpdateDesktopProfiles"
+  private var restoringDesktopApps = false
+  var needsDesktopRestore: Bool {
+    UserDefaults.standard.dictionary(forKey: Self.desktopRestoreKey)?["manual"] as? Bool == true
+  }
+  var canRetryDesktopRestore: Bool { needsDesktopRestore && !restoringDesktopApps && !preparingTermination }
 
   func preserveDesktopApps(targetBuild: String) {
     // Retire the URL-only snapshot: a derived app URL cannot restore profile isolation.
@@ -121,26 +126,69 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   }
 
   func restoreDesktopApps(forBuild expectedBuild: String? = nil) {
-    let retiredSnapshot = UserDefaults.standard.object(forKey: "TelaUpdateDesktopRestore") != nil
-    UserDefaults.standard.removeObject(forKey: "TelaUpdateDesktopRestore")
-    guard let saved = UserDefaults.standard.dictionary(forKey: Self.desktopRestoreKey),
+    restoreDesktopApps(forBuild: expectedBuild, manual: false)
+  }
+
+  func retryDesktopRestore() {
+    guard canRetryDesktopRestore else { return }
+    restoreDesktopApps(forBuild: nil, manual: true)
+  }
+
+  private func restoreDesktopApps(forBuild expectedBuild: String?, manual: Bool) {
+    guard !restoringDesktopApps else { return }
+    let defaults = UserDefaults.standard
+    let retiredSnapshot = defaults.object(forKey: "TelaUpdateDesktopRestore") != nil
+    defaults.removeObject(forKey: "TelaUpdateDesktopRestore")
+    guard var saved = defaults.dictionary(forKey: Self.desktopRestoreKey),
       let build = saved["targetBuild"] as? String,
-      build == (expectedBuild ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String),
+      manual ? needsDesktopRestore : !needsDesktopRestore
+        && build == (expectedBuild ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String),
       let rows = saved["profiles"], let data = try? JSONSerialization.data(withJSONObject: rows),
       let profiles = try? JSONDecoder().decode([TelaDesktopProfile].self, from: data) else {
-      recordMenuDiagnostic("desktop_restore_skipped", fields: ["snapshotPresent": UserDefaults.standard.object(forKey: Self.desktopRestoreKey) != nil, "retiredSnapshot": retiredSnapshot])
+      recordMenuDiagnostic("desktop_restore_skipped", fields: ["snapshotPresent": defaults.object(forKey: Self.desktopRestoreKey) != nil, "retiredSnapshot": retiredSnapshot])
       return
     }
-    UserDefaults.standard.removeObject(forKey: Self.desktopRestoreKey)
-    let running = (try? runningDesktopProfiles()) ?? []
-    let missing = profiles.filter { !running.contains($0) }
-    recordMenuDiagnostic("desktop_restore_started", fields: ["count": missing.count, "alreadyRunning": profiles.count - missing.count])
-    for profile in missing {
+
+    // Keep the original set if status cannot be read. An unknown profile may already be running.
+    saved["manual"] = true
+    let running: [TelaDesktopProfile]
+    do { running = try runningDesktopProfiles() }
+    catch {
+      defaults.set(saved, forKey: Self.desktopRestoreKey)
+      recordMenuDiagnostic("desktop_restore_inventory_failed", fields: ["errorCode": (error as NSError).code])
+      changed?()
+      return
+    }
+    var remaining = profiles.filter { !running.contains($0) }
+    func saveRemaining() {
+      if remaining.isEmpty {
+        defaults.removeObject(forKey: Self.desktopRestoreKey)
+      } else {
+        saved["profiles"] = remaining.map { ["slot": $0.slot, "targetId": $0.targetId] }
+        defaults.set(saved, forKey: Self.desktopRestoreKey)
+      }
+    }
+    saveRemaining()
+    var outstanding = remaining.count
+    recordMenuDiagnostic("desktop_restore_started", fields: ["count": outstanding, "alreadyRunning": profiles.count - outstanding])
+    restoringDesktopApps = outstanding > 0
+    changed?()
+    for profile in remaining {
       reopenDesktop(profile) { [weak self] error in
-        guard error != nil else { return }
         Task { @MainActor in
-          self?.problem = telaText("Couldn't reopen ChatGPT. Open it from Applications.")
-          self?.changed?()
+          guard let self else { return }
+          if error == nil {
+            remaining.removeAll { $0 == profile }
+            // A new update may have captured its own profile list while this app was opening.
+            if self.needsDesktopRestore { saveRemaining() }
+          } else if let error = error as NSError? {
+            recordMenuDiagnostic("desktop_restore_open_failed", fields: ["slot": profile.slot, "errorCode": error.code])
+          }
+          outstanding -= 1
+          if outstanding == 0 {
+            self.restoringDesktopApps = false
+            self.changed?()
+          }
         }
       }
     }

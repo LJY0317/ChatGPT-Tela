@@ -1103,6 +1103,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       let automatic = NSButton(checkboxWithTitle: telaText("Automatically check for updates"), target: self, action: #selector(setAutomaticUpdateChecks(_:)))
       automatic.state = updater?.automaticallyChecksForUpdates == true ? .on : .off
       updates.addArrangedSubview(automatic)
+      if let updater, updater.needsDesktopRestore {
+        let reopen = actionButton("Reopen", action: #selector(retryDesktopRestore))
+        reopen.isEnabled = updater.canRetryDesktopRestore && !operationInProgress
+        row("ChatGPT profiles", subtitle: "Some profiles still need to reopen.", control: reopen, in: updates)
+      }
       let maintain = actionButton("Manage…", action: #selector(openMaintenance))
       maintain.isEnabled = !operationInProgress && installedServiceControlsAvailable()
       row("Repair or remove Tela", control: maintain, in: card("Maintenance"))
@@ -1290,6 +1295,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
 
   func updatePresentationChanged() { if selectedPage == .settings { renderCurrentPage() } }
 
+  @objc private func retryDesktopRestore() { updater?.retryDesktopRestore() }
   @objc private func checkForUpdates() { updater?.checkForUpdates(nil) }
   @objc private func setAutomaticUpdateChecks(_ sender: NSButton) { updater?.automaticallyChecksForUpdates = sender.state == .on }
 

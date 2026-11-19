@@ -91,11 +91,13 @@ import Sparkle
     restore.restoreDesktopApps()
     restore.restoreDesktopApps()
     precondition(opened == [first], "restore must reopen the pre-update profile once")
+    await Task.yield()
     restore.runningDesktopProfiles = { [first, second] }
     restore.preserveDesktopApps(targetBuild: "1")
     restore.runningDesktopProfiles = { [] }
     restore.restoreDesktopApps()
     precondition(opened == [first, first, second], "optional profiles must restore by provider identity")
+    await Task.yield()
     restore.runningDesktopProfiles = { [first, second] }
     restore.preserveDesktopApps(targetBuild: "2")
     restore.restoreDesktopApps()
@@ -105,14 +107,32 @@ import Sparkle
     restore.restoreDesktopApps(forBuild: "2")
     precondition(opened.count == 4 && opened.last == first,
       "an aborted attempt must restore the app it closed without reopening the app that refused to quit")
-    restore.runningDesktopProfiles = { [first] }
-    restore.reopenDesktop = { _, completion in completion(NSError(domain: "NSOSStatusErrorDomain", code: -10814)) }
+    await Task.yield()
+    restore.runningDesktopProfiles = { [first, second] }
     restore.preserveDesktopApps(targetBuild: "1")
     restore.runningDesktopProfiles = { [] }
+    opened.removeAll()
+    restore.reopenDesktop = { profile, completion in
+      opened.append(profile)
+      completion(profile == first ? NSError(domain: "NSOSStatusErrorDomain", code: -10814) : nil)
+    }
     restore.restoreDesktopApps()
     await Task.yield()
-    precondition(restore.problem != nil, "failed owner reopen must not be silent")
-    precondition(UserDefaults.standard.dictionary(forKey: "TelaUpdateDesktopProfiles") == nil, "failed reopen must not keep retry state")
+    precondition(opened == [first, second] && restore.canRetryDesktopRestore,
+      "an unavailable original app needs explicit recovery")
+    let restarted = TelaSparkleUpdater()
+    restarted.runningDesktopProfiles = { throw NSError(domain: "TestInventory", code: 1) }
+    restarted.reopenDesktop = { profile, completion in opened.append(profile); completion(nil) }
+    restarted.restoreDesktopApps()
+    restarted.retryDesktopRestore()
+    precondition(opened == [first, second] && restarted.canRetryDesktopRestore,
+      "startup and unavailable inventory must not cause a second launch")
+    restarted.runningDesktopProfiles = { [] }
+    restarted.retryDesktopRestore()
+    restarted.retryDesktopRestore()
+    await Task.yield()
+    precondition(opened == [first, second, first], "retry must target only the failed profile once")
+    precondition(!restarted.needsDesktopRestore, "successful recovery must clear the pending profile")
     let prior = TelaSparkleUpdater()
     let couldStart = await prior.start()
     precondition(!couldStart, "a source-build prepared handoff must block ordinary startup")

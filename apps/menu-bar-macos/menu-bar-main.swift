@@ -639,12 +639,14 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
     if workInventory.profiles.isEmpty {
       addProfileOpen(1, name: "ChatGPT", to: menu)
     }
-    if updater.availableVersion != nil || updater.preparationStatus != nil || updater.recoveredPendingUpdate {
+    if updater.availableVersion != nil || updater.preparationStatus != nil || updater.recoveredPendingUpdate || updater.needsDesktopRestore {
       menu.addItem(.separator())
       if let status = updater.preparationStatus {
         let item = NSMenuItem(title: status, action: nil, keyEquivalent: "")
         item.isEnabled = false
         menu.addItem(item)
+      } else if updater.needsDesktopRestore {
+        menu.addItem(actionItem(telaText("Reopen ChatGPT…"), action: #selector(openUpdates)))
       } else {
         let item = actionItem(updater.recoveredPendingUpdate ? telaText("Review Update…") : telaText("Check for Updates…"), action: #selector(openUpdates))
         item.isEnabled = updater.canCheck
@@ -673,7 +675,11 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
 
   @objc private func openUpdates() {
     statusMenu.cancelTracking()
-    updater.checkForUpdates(nil)
+    if updater.needsDesktopRestore {
+      DispatchQueue.main.async { [weak self] in self?.controlCenter.showUpdates() }
+    } else {
+      updater.checkForUpdates(nil)
+    }
   }
 
   @objc private func startTela() {

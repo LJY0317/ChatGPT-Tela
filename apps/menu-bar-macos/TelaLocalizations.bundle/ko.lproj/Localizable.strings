@@ -92,7 +92,6 @@
 "Couldn't change capture; check diagnostic settings." = "캡처 설정을 변경할 수 없습니다. 진단 설정을 확인하세요.";
 "Couldn't check your ChatGPT apps. Please try again." = "ChatGPT 앱을 확인할 수 없습니다. 다시 시도하세요.";
 "Couldn't read approval settings." = "승인 설정을 읽을 수 없습니다.";
-"Couldn't reopen ChatGPT. Open it from Applications." = "ChatGPT를 다시 열지 못했습니다. 응용 프로그램 폴더에서 열어 주세요.";
 "Couldn't review these changes. Repair needs the installed version. No changes applied." = "변경 사항을 검토하지 못했습니다. 복구에는 설치된 버전이 필요합니다. 변경 사항은 적용되지 않았습니다.";
 "Couldn't save the language setting." = "언어 설정을 저장할 수 없습니다.";
 "Couldn't verify Chat execution status. Choose Review changes to check maintenance readiness again." = "Chat 실행 상태를 확인하지 못했습니다. 변경 사항 검토로 유지보수 준비 상태를 다시 확인하세요.";
@@ -325,3 +324,7 @@
 "Review…" = "검토…";
 "Couldn't find ChatGPT in Applications." = "응용 프로그램 폴더에서 ChatGPT를 찾을 수 없습니다.";
 "Update from the main ChatGPT app, then reopen this profile." = "기본 ChatGPT 앱에서 업데이트한 뒤 이 프로필을 다시 여세요.";
+"Reopen" = "다시 열기";
+"ChatGPT profiles" = "ChatGPT 프로필";
+"Some profiles still need to reopen." = "일부 프로필을 다시 열어야 합니다.";
+"Reopen ChatGPT…" = "ChatGPT 다시 열기…";
