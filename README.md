@@ -39,7 +39,7 @@ The current Desktop-owned adapter targets Plura Desktop's v2 lifecycle contract.
 Plura launches the official app; Tela connects its local Responses route and
 server model-list augmentation while keeping the built-in `openai` provider identity. No external Native engine or
 launch-time proxy/overlay is used. See [explicit provider setup](docs/official-desktop-provider.md).
-This adapter remains pre-release; source verification and local acceptance do not establish a publicly supported release.
+An Apple Silicon preview verified both profiles with the Plura Desktop 0.1.20 candidate. Plura versions that only expose the v1 contract cannot supply additional profiles to this adapter.
 For a large existing conversation, the official engine may first compact with the previous Native
 model before sending the first Web request. See [the first-transition limit](docs/context-continuity-contract.md#official-engine-pre-turn-compaction).
 The official app owns task creation and delegation. For a connected profile, open
@@ -1123,18 +1123,6 @@ admission only). For example: `{"maxModelCalls":4,"maxInputTokens":300000,"maxEl
 These settings control Tela preparation costs and do not enlarge a model's context window. Defaults
 and exact behavior are documented in [the efficiency contract](docs/token-efficiency.md#continuation-and-preparation).
 
-#### Optional Web compaction engine preview
-
-An optional, separately built and verified Codex engine enables experimental Web plaintext
-compaction while Native models retain their normal behavior. Packages without the required engine
-capability reject unsupported Web compaction. A local macOS arm64 preview passed live and automatic
-Web compaction with exact recall, but long-running default-budget behavior, exhausted-quota Desktop
-submission, Windows/Linux binaries and a notarized consumer release remain unverified. The engine
-is removed with Tela; canonical plaintext summaries remain in Codex history. Build inputs, required
-`nativeEngine` capabilities and the pinned source are documented in
-[the experimental engine source contract](patches/codex/README.md); the standard-engine comparison
-and research evidence are in [the efficiency contract](docs/token-efficiency.md#standard-engine-and-optional-fork).
-
 Work opens each browser task in ChatGPT Temporary Chat. Before the first browser send, Tela checks
 that the leased surface still has the Temporary Chat URL; it refuses to send if ChatGPT returned to
 ordinary saved chat. A Temporary Chat may acquire a `/c/...` URL after its first message while the
@@ -1149,9 +1137,9 @@ bun run cli model-canary --slot 1
 
 The same browser-semantic canary can be run for an explicitly configured extra account, for example
 `bun run cli model-canary --slot 2`. That proves the authenticated Profile 2 browser can discover,
-select, read back, and restore its own current family/effort choices without sending a message. With
-a Plura Desktop version that advertises the model-list overlay contract, Tela also projects those
-Profile 2 `(Web)` rows into its Plura-owned Native model picker.
+select, read back, and restore its own current family/effort choices without sending a message.
+In the official Desktop picker, the configured Tela route appends the selected profile’s Web
+choices to the server’s Native catalog. See [official Desktop routing](docs/official-desktop-provider.md).
 
 Retained Web-context reuse has a separate **passive** live canary. It never opens a browser or sends
 an extra prompt. Use Tela Work normally for at least two turns in the same task, then inspect the
@@ -1168,17 +1156,6 @@ rollover intentionally opened a fresh Web epoch). The command reads no prompt, t
 file content, workspace path, or browser transcript.
 Two sequential Profile 2 Web turns in one disposable Native task completed, and this canary returned
 `pass` with two retained-delta/retained-surface plans. The test Native thread was deleted.
-
-It does not send a ChatGPT message or create Native task authority. The single-profile/default Desktop path is
-live-proven. A source-build Plura Profile 2 canary also proved the app-server catalog projection: 3 Web rows
-appeared beside Native rows in a 10-row `model/list` result. The installed Plura version still needs this
-contract before normal Profile 2 sessions expose those rows. The browser selection boundary itself
-is live-proven on both Profile 1 and Profile 2; the latter currently exposes a different live family catalog,
-which is why Tela treats account/browser discovery as authority rather than assuming one global model list.
-A source-build Profile 2 canary also completed a Native passthrough turn through the runtime-header
-route. A separate Profile 2 Web turn completed with the Temporary Chat send guard active, and its
-disposable Native test thread was deleted. Direct inspection of the ChatGPT history list after that
-turn is still pending.
 
 The current status icon uses an SF Symbol as a placeholder. Its image and future per-menu-item icons are UI
 assets, not protocol/authority identifiers, so they can be replaced later with custom artwork without changing

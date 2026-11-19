@@ -1,4 +1,7 @@
-# Experimental Codex model-local compaction
+# Historical Codex model-local compaction experiment
+
+> Historical reference. Tela no longer packages or selects an external Native engine. Use the
+> [official Desktop connection](../../docs/official-desktop-provider.md) for current setup.
 
 This patch lets an explicitly opted-in model use Codex's existing local, plaintext compaction path
 while other models keep the provider's default compaction. It does not change provider identity,
@@ -118,7 +121,7 @@ require this fork. The installed fork still supplies no-usage automatic-pressure
 estimation, whose equivalent standard behavior has not been verified. The refresh RPC
 also does not invalidate Desktop's picker cache. Keep existing preview compatibility
 while validating the standard path; do not expand the fork to repair proxy ownership
-or terminal-response replay. See [the responsibility review](../../docs/token-efficiency.md#standard-engine-and-optional-fork).
+or terminal-response replay. See [the responsibility review](../../docs/token-efficiency.md#standard-engine-and-historical-fork-experiments).
 
 The catalog patch also reproduces the existing `model-catalog-seed-v1` contract:
 `features.tela_seeded_model_catalog=true` treats `model_catalog_json` as an initial

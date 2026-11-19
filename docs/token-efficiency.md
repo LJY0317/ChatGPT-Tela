@@ -236,10 +236,11 @@ model/effort-bound preparation budget. After a successful summary, optional work
 maintenance must not summarize again merely to meet a soft seed target. Keep the full
 readable input and ordinary fit checks; a different turn or route uses its own budget.
 
-## Standard engine and optional fork
+## Standard engine and historical fork experiments
 
-The engine executing Native tools is required by the current Desktop integration; a
-Tela-specific engine fork is a separate dependency. Prefer public Codex contracts:
+The official Desktop owns Native execution. Earlier fork experiments below are evidence about
+specific fixtures, not supported installation or recovery paths. Current setup uses [official
+Desktop routing](official-desktop-provider.md) and the server-driven model catalog.
 
 | Responsibility | Current evidence and decision |
 | --- | --- |
@@ -247,7 +248,7 @@ Tela-specific engine fork is a separate dependency. Prefer public Codex contract
 | Summary replay and Native switch | A bounded transparent Tela envelope is returned as one `compaction` item. Web reads its historical summary; Native forwarding translates only Tela envelopes to ordinary summary text. Unknown provider-encrypted states keep their existing source-recovery path. |
 | Startup model catalog | Standard `model_catalog_json` exposed a custom Web row through actual `model/list` in the isolated official-engine fixture. This does not prove Desktop picker rendering or live invalidation. |
 | Automatic pressure without usage | The isolated official-engine fixture observed zero automatic compactions with `usage: null`. Synthetic reported usage above the threshold triggered automatic compaction, accepted summaries and subsequent Web planning. This does not establish live provider usage, billing or Desktop behavior. Do not fabricate provider usage in production. |
-| Live catalog refresh | A fork RPC refreshes an engine catalog but does not invalidate Desktop's picker cache. Retain capability-gated compatibility while verifying supported lifecycle behavior; do not add another refresh protocol. |
+| Live catalog refresh | A fork RPC refreshes an engine catalog but does not invalidate Desktop's picker cache. This retired RPC is not part of the current Desktop connection. |
 
 The exact official `rust-v0.166.0-alpha.6` `ModelInfo` source does not contain the
 fork's `compaction_mode` or `prefers_local_compaction` selector. Do not attribute
@@ -256,13 +257,9 @@ An input-only Responses provider need not acquire Native history authority, but
 cannot recover history omitted by its host. This narrower contract does not by
 itself connect the existing ChatGPT Web UI to official Native tool-call output.
 
-The local text transport remains compatible with the installed preview. The legacy Web
-`/responses/compact` endpoint remains unsupported; standard compaction-v2 is supported.
-Terminal source/budget errors use HTTP 400 with their existing recovery codes: the
-standard engine retried 422 three times in the synthetic failure fixture, but made one
-request with 400 and then continued a new turn with the original history. The installed
-older local-compaction loop still retries 400; a status change alone does not repair it.
-No installed engine has been replaced by these source changes.
+Tela supports standard compaction-v2 and does not support the retired Web
+`/responses/compact` endpoint. In the isolated fixture, a terminal HTTP 400 ended the
+failed compaction after one request and a new turn still had access to the original history.
 
 `packages/development-runtime/src/fixtures/standard-engine-compaction.ts` runs a supplied
 engine through public paginated RPC with an isolated temporary home, a supplied public
