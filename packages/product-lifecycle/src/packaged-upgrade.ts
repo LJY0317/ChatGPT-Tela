@@ -3,8 +3,10 @@ import { withPackagedTransitionOwner } from "./transition-owner";
 import { PackagedServiceShutdownNotStartedError } from "./service-shutdown";
 import {
   chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -127,9 +129,18 @@ function writeJournal(path: string, journal: PackagedUpgradeJournal): void {
   const normalized = parseJournal(journal);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.tmp-${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify(normalized, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-  try { chmodSync(temporary, 0o600); } catch { /* Windows ACLs own permissions there. */ }
-  renameSync(temporary, path);
+  const fd = openSync(temporary, "wx", 0o600);
+  try {
+    try {
+      writeFileSync(fd, JSON.stringify(normalized, null, 2) + "\n", "utf8");
+    } finally {
+      closeSync(fd);
+    }
+    try { chmodSync(temporary, 0o600); } catch { /* Windows ACLs own permissions there. */ }
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
 function sameUpgrade(journal: PackagedUpgradeJournal, plan: PackagedUpgradePlan): boolean {

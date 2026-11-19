@@ -76,13 +76,20 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
   });
   const readBuild = input.readBuild ?? (path => execFileSync("/usr/bin/plutil", ["-extract", "CFBundleVersion", "raw", "-o", "-", join(path, "Contents/Info.plist")], { encoding: "utf8" }).trim());
   const path = macApplicationUpdatePath(paths);
+  const temporary = path + ".pending";
   const save = (state: MacApplicationUpdate) => {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    writeFileSync(path + ".pending", JSON.stringify(state) + "\n", { mode: 0o600 });
-    renameSync(path + ".pending", path);
+    try {
+      writeFileSync(temporary, JSON.stringify(state) + "\n", { mode: 0o600, flag: "wx" });
+      renameSync(temporary, path);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
     return state;
   };
   return step("transition", () => withPackagedTransitionOwner({ paths, installId: owner.installId }, async () => {
+    // The lock excludes another writer. Only a rename commits recovery state.
+    rmSync(temporary, { force: true });
     const previous = readMacApplicationUpdate(paths);
     if (previous && previous.installId !== owner.installId) throw Error("application update belongs to another installation");
     if (action === "cancel" && !previous) return { ready: true, productVersion: spec.productVersion };
