@@ -5,7 +5,8 @@ import type { CodexAppServerRpc } from "./app-server";
 
 /** Shared transport; each exported client below has an independent, exact-thread method scope. */
 async function connectScopedRpc(input: {
-  executable: string; codexHome: string; threadId?: string; signal?: AbortSignal; lifecycle?: boolean; metadataThreadIds?: readonly string[];
+  executable: string; codexHome: string; threadId?: string; signal?: AbortSignal; lifecycle?: boolean;
+  delegatedTitle?: boolean; metadataThreadIds?: readonly string[];
 }): Promise<CodexAppServerRpc> {
   input.signal?.throwIfAborted();
   const metadataIds = input.metadataThreadIds ? new Set(input.metadataThreadIds) : undefined;
@@ -70,6 +71,9 @@ async function connectScopedRpc(input: {
     const read = metadataIds ? method === "thread/read"
       : ["thread/read", "thread/items/list", "thread/turns/list"].includes(method);
     const mutation = input.lifecycle && (method === "thread/resume" || method === "thread/archive");
+    const title = input.delegatedTitle && method === "thread/name/set"
+      && typeof p.name === "string" && p.name.startsWith("[Tela Agent] ") && p.name.length <= 200
+      && Object.keys(p).every(k => k === "threadId" || k === "name");
     // archive cascades through spawned descendants. The lifecycle owner may
     // inspect only whether this exact thread has one, not browse the catalog.
     const descendants = input.lifecycle && leased && method === "thread/list"
@@ -77,7 +81,7 @@ async function connectScopedRpc(input: {
       && typeof p.archived === "boolean" && Array.isArray(p.modelProviders) && p.modelProviders.length === 0
       && Array.isArray(p.sourceKinds) && p.sourceKinds.length === 1 && p.sourceKinds[0] === "subAgentThreadSpawn"
       && Object.keys(p).every(k => ["ancestorThreadId", "limit", "useStateDbOnly", "archived", "modelProviders", "sourceKinds"].includes(k));
-    if ((!read && !mutation && !descendants) || !descendants && !(metadataIds ? typeof p?.threadId === "string" && metadataIds.has(p.threadId) : p?.threadId === input.threadId)
+    if ((!read && !mutation && !descendants && !title) || !descendants && !(metadataIds ? typeof p?.threadId === "string" && metadataIds.has(p.threadId) : p?.threadId === input.threadId)
       || method === "thread/read" && p.includeTurns !== false
       || method === "thread/turns/list" && p.itemsView !== "notLoaded"
       || method === "thread/resume" && (p.excludeTurns !== true || Object.keys(p).some(k => !["threadId", "excludeTurns"].includes(k)))
@@ -103,6 +107,13 @@ export function connectDormantThreadRpc(input: {
   executable: string; codexHome: string; threadId: string; signal?: AbortSignal;
 }): Promise<CodexAppServerRpc> {
   return connectScopedRpc({ ...input, lifecycle: true });
+}
+
+/** Allow the Web enrollment owner to name only its exact authenticated child. */
+export function connectDelegatedTitleRpc(input: {
+  executable: string; codexHome: string; threadId: string; signal?: AbortSignal;
+}): Promise<CodexAppServerRpc> {
+  return connectScopedRpc({ ...input, delegatedTitle: true });
 }
 
 /** One short-lived, metadata-only reader for the already-owned surface IDs. */

@@ -16,7 +16,7 @@ type State = {
 export interface DelegatedRetentionProfile {
   /** Install identity + exact configured profile/home; never a model-supplied label. */
   scope: string;
-  connect(threadId: string, lifecycle: boolean): Promise<CodexAppServerRpc>;
+  connect(threadId: string, lifecycle: boolean, delegatedTitle?: boolean): Promise<CodexAppServerRpc>;
 }
 function id(value: string): string {
   if (typeof value !== "string" || !value.trim() || value.length > 512 || /[\x00-\x1f\x7f]/.test(value)) throw Error("Invalid delegation identity");
@@ -145,7 +145,7 @@ export function createDelegatedRetention(input: {
             return existing;
           }
         }
-        const rpc = await profile.connect(threadId, false);
+        const rpc = await profile.connect(threadId, false, firstWebTurnId !== undefined);
         try {
           const data: any = await rpc.request("thread/read", { threadId, includeTurns: false });
           lineage(data?.thread, parentThreadId, threadId);
@@ -163,6 +163,21 @@ export function createDelegatedRetention(input: {
             ...(typeof data.thread.name === "string" ? { title: data.thread.name.slice(0, 200) } : {}) };
           save(k, record);
           event("delegation_retention_enrolled", record);
+          if (firstWebTurnId !== undefined && !record.title?.trimStart().startsWith("[Tela Agent]")) {
+            const summary = record.title?.trim()
+              || (typeof data.thread.preview === "string" ? data.thread.preview.trim().split(/\r?\n/, 1)[0] : undefined)
+              || "Web task";
+            const name = `[Tela Agent] ${summary}`.slice(0, 200);
+            try {
+              await rpc.request("thread/name/set", { threadId, name });
+              save(k, { ...record, title: name });
+              return { ...record, title: name };
+            } catch (error) {
+              emitDiagnosticEvent("chatgpt_tela_codex", "delegation_title_update_failed", {
+                slot, thread_fingerprint: hash(threadId), ...diagnosticFailureFields(error),
+              });
+            }
+          }
           return record;
         } finally { await rpc.close(); }
       });

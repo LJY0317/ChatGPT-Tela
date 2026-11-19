@@ -15,12 +15,18 @@ function fixture() {
   const item: any = { id: "answer", type: "agentMessage", phase: "final_answer", text: "PRIVATE_BODY" };
   const options = { directory: join(directory, "records"), acknowledgementDirectory: join(directory, "ack"),
     now: () => now, automatic: false,
-    profile: (slot: number) => ({ scope: scope + slot, async connect(_: string, lifecycle: boolean) {
+    profile: (slot: number) => ({ scope: scope + slot, async connect(_: string, lifecycle: boolean, delegatedTitle?: boolean) {
       let leased = false;
       return { async close() { leased = false; }, async request(method: string, params?: any): Promise<any> {
         calls.push({ method, lifecycle, slot });
         if (method === "thread/read") return { thread };
         if (method === "thread/turns/list") return { data: [turn] };
+        if (method === "thread/name/set") {
+          expect(delegatedTitle).toBe(true);
+          expect(params.threadId).toBe(thread.id);
+          thread.name = params.name;
+          return {};
+        }
         if (method === "thread/items/list") return { data: [{ turnId: params.turnId ?? "turn", item }], nextCursor: null };
         if (method === "thread/resume") {
           if (!lifecycle || busy) throw Error("WRITER_BUSY");
@@ -328,14 +334,19 @@ test("Native spawn evidence requires review even when restore races across list 
 test("automatic Web enrollment requires the canonical first child turn and never enrolls a later switch", async () => {
   const f = fixture();
   try {
+    f.thread.name = "Review update";
     expect(await f.manager.enroll(1, "parent", "child", "later-web-turn"))
       .toEqual({ enrolled: false, reason: "not_first_turn" });
     expect(readdirSync(f.options.directory)).toEqual([]);
+    expect(f.thread.name).toBe("Review update");
     await f.manager.enroll(1, "parent", "child", "turn");
     expect(f.receipt().threadId).toBe("child");
+    expect(f.thread.name).toBe("[Tela Agent] Review update");
+    expect(f.receipt().title).toBe(f.thread.name);
     const reads = f.calls.length;
     await f.manager.enroll(1, "parent", "child", "turn");
     expect(f.calls.length).toBe(reads);
+    expect(f.calls.filter(c => c.method === "thread/name/set")).toHaveLength(1);
     await expect(f.manager.enroll(1, "foreign", "child", "turn")).rejects.toThrow("lineage");
     expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
     f.advance(7 * 24);

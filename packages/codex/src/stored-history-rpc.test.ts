@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectDormantThreadRpc, connectStoredHistoryRpc, readStoredThreadTitles } from "./stored-history-rpc";
+import { connectDelegatedTitleRpc, connectDormantThreadRpc, connectStoredHistoryRpc, readStoredThreadTitles } from "./stored-history-rpc";
 import { readIndexedNativeItemsPage } from "./native-history-items";
 import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 
@@ -15,11 +15,23 @@ import { observeDiagnosticEvents } from "@chatgpt-tela/core";
     expect(await rpc.request("thread/read", { threadId: "own", includeTurns: false })).toEqual({ method: "thread/read" });
     for (const [method, params] of [
       ["turn/start", { threadId: "own" }], ["thread/archive", { threadId: "own" }],
+      ["thread/name/set", { threadId: "own", name: "[Tela Agent] Review" }],
       ["thread/read", { threadId: "other", includeTurns: false }], ["thread/read", { threadId: "own", includeTurns: true }],
     ] as const) await expect(rpc.request(method, params)).rejects.toThrow("scoped indexed reads");
     await rpc.close();
+    const naming = await connectDelegatedTitleRpc({ executable: file, codexHome: directory, threadId: "own" });
+    try {
+      for (const [method, params] of [
+        ["thread/name/set", { threadId: "other", name: "[Tela Agent] Review" }],
+        ["thread/name/set", { threadId: "own", name: "Review" }],
+        ["thread/resume", { threadId: "own", excludeTurns: true }],
+        ["thread/archive", { threadId: "own" }],
+      ] as const) await expect(naming.request(method, params)).rejects.toThrow();
+      await expect(naming.request("thread/name/set", { threadId: "own", name: "[Tela Agent] Review" }))
+        .resolves.toEqual({ method: "thread/name/set" });
+    } finally { await naming.close(); }
     expect(readFileSync(trace, "utf8").trim().split("\n").map(l => JSON.parse(l).method))
-      .toEqual(["initialize", "initialized", "thread/read"]);
+      .toEqual(["initialize", "initialized", "thread/read", "initialize", "initialized", "thread/name/set"]);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

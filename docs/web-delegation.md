@@ -20,6 +20,11 @@ not that an official task or conversation was deleted. Manage tasks and conversa
 in the official app. The retention commands below are source-level management
 operations, not user-facing delegation creation commands.
 
+When Tela verifies a newly spawned child's first Web turn, it prefixes the
+official chat title with `[Tela Agent]` as part of enrollment. Separate chats
+created by selecting a Web model keep the title given by their creator.
+Using a Web model or adding the prefix does not enroll a chat in retention.
+
 ### Native-to-Web child dispatch
 
 On build `2026111804`, the official Desktop coordinator in profile 2 created two

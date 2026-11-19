@@ -15,7 +15,7 @@ import {
   writeServiceRuntimeDescriptor,
 } from "@chatgpt-tela/service-protocol";
 
-import { connectDormantThreadRpc, connectStoredHistoryRpc } from "@chatgpt-tela/codex";
+import { connectDelegatedTitleRpc, connectDormantThreadRpc, connectStoredHistoryRpc } from "@chatgpt-tela/codex";
 import { resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 
 function required(key: string): string {
@@ -77,7 +77,8 @@ async function main(): Promise<void> {
         if (!home) throw Error("The selected profile has no configured Desktop history location");
         return {
           scope: JSON.stringify([installId, slot, realpathSync(home)]),
-          connect: (threadId, lifecycleAccess) => (lifecycleAccess ? connectDormantThreadRpc : connectStoredHistoryRpc)({
+          connect: (threadId, lifecycleAccess, delegatedTitle) => (lifecycleAccess
+            ? connectDormantThreadRpc : delegatedTitle ? connectDelegatedTitleRpc : connectStoredHistoryRpc)({
             executable: installation.codexExecutable, codexHome: home, threadId, signal: lifecycle.signal,
           }),
         };
