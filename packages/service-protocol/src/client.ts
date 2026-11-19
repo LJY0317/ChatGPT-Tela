@@ -165,7 +165,7 @@ export class CodexServiceClient extends LocalServiceClient {
     | { action: "reconcile"; slot?: number }
     | ({ slot: number } & (
       { action: "observe-web-child"; parentThreadId: string; threadId: string; turnId: string }
-      | ({ action: "enroll"; threadId: string } & ({ parentThreadId: string } | { standalone: true }))
+      | ({ action: "enroll" | "read-result"; threadId: string } & ({ parentThreadId: string } | { standalone: true }))
       | ({ action: "acknowledge"; threadId: string; turnId: string }
         & ({ parentThreadId: string } | { standalone: true })
         & ({ outcome: "answer"; itemId: string } | { outcome: "failed" | "interrupted" }))

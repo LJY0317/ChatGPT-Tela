@@ -137,6 +137,10 @@ export async function startCodexServiceHttpServer(input: {
             return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId, body.turnId));
           }
           if (body.action === "enroll") return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId));
+          if (body.action === "read-result") {
+            return Response.json(await manager.readResult(body.slot, body.parentThreadId, body.threadId, request.signal),
+              { headers: { "cache-control": "no-store" } });
+          }
           if (body.action === "acknowledge" && typeof body.turnId === "string"
             && (body.outcome === "answer" && typeof body.itemId === "string" || ["failed", "interrupted"].includes(body.outcome))) {
             return Response.json(await manager.acknowledge(body.slot, {

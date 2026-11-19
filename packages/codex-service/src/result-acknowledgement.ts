@@ -43,6 +43,30 @@ export function assertManagedThread(thread: any, threadId: string, parentThreadI
     || parentThreadId === undefined && typeof thread.source !== "string") throw Error("Delegation lineage changed");
 }
 
+/** Read the newest final or validate one exact acknowledgement reference. */
+export async function findFinalAnswer(rpc: Pick<CodexAppServerRpc, "request">,
+  threadId: string, turnId: string, itemId?: string, signal?: AbortSignal) {
+  let cursor: string | undefined;
+  const visited = new Set<string>();
+  do {
+    const page = await readIndexedNativeItemsPage(rpc, { threadId, turnId, limit: 32, sortDirection: "desc",
+      ...(cursor ? { cursor } : {}),
+    }, signal);
+    for (const { item } of page.data) {
+      const final = item.type === "agentMessage" && item.phase === "final_answer";
+      if (itemId === undefined ? final : item.id === itemId) {
+        if (!final) throw Error("Selected item is not a final answer");
+        return item;
+      }
+    }
+    if (page.nextCursor == null) break;
+    if (typeof page.nextCursor !== "string" || visited.has(page.nextCursor)) throw Error("Official result paging did not advance");
+    cursor = page.nextCursor;
+    visited.add(cursor);
+  } while (cursor);
+  throw Error("Final answer was not found in the specified turn");
+}
+
 /** Confirmation of one result, not task enrollment, completion, or authority to remove a chat. */
 export async function acknowledgeNativeResult(input: {
   readonly rpc: Pick<CodexAppServerRpc, "request">;
@@ -62,26 +86,7 @@ export async function acknowledgeNativeResult(input: {
   try { assertManagedThread(thread, result.threadId, result.parentThreadId); }
   catch (cause) { throw Error("Result does not belong to the specified parent and child or registered standalone chat", { cause }); }
   if (result.outcome === "answer") {
-    let cursor: string | undefined;
-    const visited = new Set<string>();
-    let found = false;
-    do {
-      const page = await readIndexedNativeItemsPage(input.rpc, {
-        threadId: result.threadId, turnId: result.turnId, limit: 32, sortDirection: "desc",
-        ...(cursor ? { cursor } : {}),
-      }, input.signal);
-      const item = page.data.find(row => row.item.id === result.itemId)?.item;
-      if (item) {
-        if (item.type !== "agentMessage" || item.phase !== "final_answer") throw Error("Selected item is not a final answer");
-        found = true;
-        break;
-      }
-      if (page.nextCursor == null) break;
-      if (typeof page.nextCursor !== "string" || visited.has(page.nextCursor)) throw Error("Official result paging did not advance");
-      cursor = page.nextCursor;
-      visited.add(cursor);
-    } while (cursor);
-    if (!found) throw Error("Final answer was not found in the specified turn");
+    await findFinalAnswer(input.rpc, result.threadId, result.turnId, result.itemId, input.signal);
   } else {
     // Failures need a terminal turn receipt; they may have no assistant message.
     const turns = object(await input.rpc.request("thread/turns/list", {

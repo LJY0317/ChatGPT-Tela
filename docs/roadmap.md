@@ -75,7 +75,10 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   run verified leaf archival and preservation after manual restore.
   Newly executing Web children now notify that same registry; canonical lineage and
   first-turn checks exclude ordinary chats and later model switches. Other Native
-  children require explicit enrollment. Retention is exactly 12h from verified latest-answer
+  children and standalone Web chats require explicit enrollment. The source CLI reads
+  the registered chat's latest final and exact receipt IDs; acknowledgement remains a
+  separate action. Automatic standalone enrollment still needs an official creation
+  callback or a supported profile-scoped creation API. Retention is exactly 12h from verified latest-answer
   collection, otherwise 7d from first enrollment; missing timestamps and new uncollected turns
   do not extend the fallback. Blocked chats stay registered and Work exposes a review list.
   Exact app-owned task stop and approval for affected descendants remain incomplete.

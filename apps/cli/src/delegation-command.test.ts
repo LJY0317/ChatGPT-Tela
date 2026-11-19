@@ -9,12 +9,14 @@ test("source and packaged delegation command binds the Native parent and exact s
   await runDelegationCommand(["acknowledge-result", "--thread", "child", "--turn", "turn", "--outcome", "interrupted"], input);
   await runDelegationCommand(["reconcile-delegations", "--slot", "2"], input);
   await runDelegationCommand(["retain-delegation", "--standalone", "--thread", "independent", "--slot", "1"], input);
+  await runDelegationCommand(["read-delegation-result", "--standalone", "--thread", "independent", "--slot", "1"], input);
   expect(requests).toEqual([
     { action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" },
     { action: "acknowledge", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "answer", itemId: "final" },
     { action: "acknowledge", slot: 1, parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "interrupted" },
     { action: "reconcile", slot: 2 },
     { action: "enroll", standalone: true, threadId: "independent", slot: 1 },
+    { action: "read-result", standalone: true, threadId: "independent", slot: 1 },
   ]);
 });
 

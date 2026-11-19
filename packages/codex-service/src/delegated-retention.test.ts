@@ -66,6 +66,19 @@ test("explicit standalone Web registration uses the existing receipt and archive
     f.advance(1);
     await f.manager.enroll(1, undefined, "child");
     expect(f.receipt().enrolledAt).toBe(enrolledAt);
+    await expect(f.manager.readResult(2, undefined, "child")).rejects.toThrow("Register");
+    await expect(f.manager.readResult(1, "foreign-parent", "child")).rejects.toThrow("Register");
+    expect(await f.manager.readResult(1, undefined, "child")).toEqual({ ...result, text: "PRIVATE_BODY" });
+    expect(f.receipt().dueAt).toBe(enrolledAt + 7 * 24 * HOUR);
+    expect(f.receipt().acknowledgement).toBeUndefined();
+    f.turn.status = "inProgress";
+    expect(await f.manager.readResult(1, undefined, "child")).toEqual({ threadId: "child", turnId: "turn", outcome: "pending" });
+    f.turn.status = "failed";
+    expect(await f.manager.readResult(1, undefined, "child")).toMatchObject({ outcome: "failed" });
+    // A final-looking item on a failed turn cannot shorten its retention.
+    await f.manager.acknowledge(1, result);
+    expect(f.receipt().dueAt).toBe(enrolledAt + 7 * 24 * HOUR);
+    f.turn.status = "completed";
     await f.manager.acknowledge(1, result);
     expect(f.receipt().dueAt).toBe(enrolledAt + 13 * HOUR);
     f.advance(12);

@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync
 import { join } from "node:path";
 import { readIndexedNativeItemsPage, type CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { acknowledgeNativeResult, assertManagedThread, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
+import { acknowledgeNativeResult, assertManagedThread, findFinalAnswer, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
 
 const DAY = 86_400_000, MAX_BYTES = 4 * 1024 * 1024;
 const HALF_DAY = DAY / 2;
@@ -23,15 +23,15 @@ function id(value: string): string {
   return value;
 }
 /** Exactly two clocks. Observations, failures and missing metadata cannot extend either. */
-function archiveDeadline(record: State, latestTurnId?: string): number {
+function archiveDeadline(record: State, latestTurn?: { id?: string; status?: string }): number {
   const ack = record.acknowledgement;
   const collectedAt = ack?.result?.outcome === "answer" && ack.scope === record.scope
     && ack.result.threadId === record.threadId && ack.result.parentThreadId === record.parentThreadId
-    && ack.result.turnId === latestTurnId ? Date.parse(ack.acknowledgedAt) : NaN;
+    && latestTurn?.status === "completed" && ack.result.turnId === latestTurn.id ? Date.parse(ack.acknowledgedAt) : NaN;
   return Number.isFinite(collectedAt) ? collectedAt + HALF_DAY : record.enrolledAt + 7 * DAY;
 }
-async function latest(rpc: CodexAppServerRpc, threadId: string): Promise<any> {
-  const result: any = await rpc.request("thread/turns/list", { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" });
+async function latest(rpc: CodexAppServerRpc, threadId: string, signal?: AbortSignal): Promise<any> {
+  const result: any = await rpc.request("thread/turns/list", { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" }, signal);
   return result?.data?.[0];
 }
 
@@ -183,6 +183,32 @@ export function createDelegatedRetention(input: {
         } finally { await rpc.close(); }
       });
     },
+    readResult(slot: number, parentThreadId: string | undefined, threadId: string, signal?: AbortSignal) {
+      return serial(async () => {
+        signal?.throwIfAborted();
+        const profile = input.profile(slot), scope = hash(profile.scope);
+        const record = records.get(key(scope, id(threadId)));
+        if (!record || record.slot !== slot || record.parentThreadId !== parentThreadId) {
+          throw Error("Register the selected Web delegation first");
+        }
+        const rpc = await profile.connect(threadId, false);
+        try {
+          const data: any = await rpc.request("thread/read", { threadId, includeTurns: false }, signal);
+          assertManagedThread(data?.thread, threadId, parentThreadId);
+          const turn = await latest(rpc, threadId, signal);
+          const turnId = id(turn?.id);
+          const reference = { threadId, turnId };
+          if (turn.status === "inProgress") return { ...reference, outcome: "pending" as const };
+          if (turn.status === "failed" || turn.status === "interrupted") {
+            return { ...reference, outcome: turn.status as "failed" | "interrupted" };
+          }
+          if (turn.status !== "completed") throw Error("The latest delegation turn has an unknown status");
+          const item = await findFinalAnswer(rpc, threadId, turnId, undefined, signal);
+          if (typeof item.text !== "string" || !item.text.trim()) throw Error("Final answer text is unavailable");
+          return { ...reference, outcome: "answer" as const, itemId: item.id, text: item.text };
+        } finally { await rpc.close(); }
+      });
+    },
     acknowledge(slot: number, result: ResultReference) {
       return serial(async () => {
         const profile = input.profile(slot), scope = hash(profile.scope), k = key(scope, result.threadId);
@@ -201,7 +227,7 @@ export function createDelegatedRetention(input: {
             if (record.parentThreadId !== result.parentThreadId) throw Error("Acknowledgement parent changed");
             const turn = await latest(rpc, result.threadId);
             const next = { ...record, acknowledgement };
-            next.dueAt = archiveDeadline(next, turn?.id);
+            next.dueAt = archiveDeadline(next, turn);
             delete next.reviewAfter;
             save(k, next);
             if (record.acknowledgement?.acknowledgedAt !== acknowledgement.acknowledgedAt
@@ -242,12 +268,12 @@ export function createDelegatedRetention(input: {
             if (resumed.thread.status?.type !== "idle") throw Error("Delegation is not idle");
             // Without a collected answer, no completion timestamp or turn read
             // is needed to apply the fixed seven-day fallback to an idle owner.
-            let latestTurnId: string | undefined;
+            let latestTurn: { id?: string; status?: string } | undefined;
             if (record.acknowledgement?.result?.outcome === "answer") {
-              try { latestTurnId = (await latest(rpc, record.threadId))?.id; }
+              try { latestTurn = await latest(rpc, record.threadId); }
               catch (error) { report(error); } // Unknown receipt validity uses the same fallback.
             }
-            const next = { ...record, dueAt: archiveDeadline(record, latestTurnId) };
+            const next = { ...record, dueAt: archiveDeadline(record, latestTurn) };
             delete next.reviewAfter;
             delete next.issue;
             if (next.dueAt > now()) { save(k, next); outcomes.push({ threadId: record.threadId, status: "not_due" }); continue; }

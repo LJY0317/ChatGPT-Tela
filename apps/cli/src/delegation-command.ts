@@ -4,7 +4,7 @@ import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-
 import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 import { profileSlotFromArguments } from "./profile-selection";
 
-export const DELEGATION_COMMANDS = ["retain-delegation", "acknowledge-result", "reconcile-delegations"];
+export const DELEGATION_COMMANDS = ["retain-delegation", "read-delegation-result", "acknowledge-result", "reconcile-delegations"];
 
 /** Source and installed launchers use the same command and existing owned service. */
 export async function runDelegationCommand(args: readonly string[], input: {
@@ -32,6 +32,7 @@ export async function runDelegationCommand(args: readonly string[], input: {
   let request: Parameters<CodexServiceClient["manageDelegation"]>[0];
   if (command === "reconcile-delegations") request = { action: "reconcile", ...(slot === undefined ? {} : { slot }) };
   else if (command === "retain-delegation") request = { action: "enroll", slot: slot!, ...owner, threadId: required("--thread") };
+  else if (command === "read-delegation-result") request = { action: "read-result", slot: slot!, ...owner, threadId: required("--thread") };
   else {
     const outcome = option("--outcome") ?? "answer";
     if (!["answer", "failed", "interrupted"].includes(outcome)

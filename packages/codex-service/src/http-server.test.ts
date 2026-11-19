@@ -563,7 +563,7 @@ test("owned management client connects observed Web creation, acknowledgement an
         const thread = { id: "child", status: { type: "idle" }, source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } };
         if (["thread/read", "thread/resume"].includes(method)) return { thread };
         if (method === "thread/turns/list") return { data: [{ id: "turn", status: "completed", completedAt: 1_000_000 }] };
-        if (method === "thread/items/list") return { data: [{ turnId: params.turnId ?? "turn", item: { id: "answer", type: "agentMessage", phase: "final_answer" } }], nextCursor: null };
+        if (method === "thread/items/list") return { data: [{ turnId: params.turnId ?? "turn", item: { id: "answer", type: "agentMessage", phase: "final_answer", text: "fixture response" } }], nextCursor: null };
         if (method === "thread/list") return { data: [], nextCursor: null };
         if (method === "thread/archive") return {};
         throw Error("Unexpected Native action");
@@ -584,6 +584,12 @@ test("owned management client connects observed Web creation, acknowledgement an
     const enrolled = readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8");
     await client.manageDelegation({ action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" });
     expect(readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8")).toBe(enrolled);
+    expect(await client.manageDelegation({ action: "read-result", slot: 2, parentThreadId: "parent", threadId: "child" }))
+      .toEqual({ threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer", text: "fixture response" });
+    const unauthorizedAnswer = await fetch(new URL("v1/codex/delegations", server.endpoint), {
+      method: "POST", body: JSON.stringify({ action: "read-result", slot: 2, parentThreadId: "parent", threadId: "child" }),
+    });
+    expect(unauthorizedAnswer.status).toBe(401);
     expect(await client.manageDelegation({ action: "acknowledge", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer" }))
       .toMatchObject({ enrolled: true, automaticArchiveEnabled: true, automaticDeleteEnabled: false });
     now += 12 * 3_600_000;
