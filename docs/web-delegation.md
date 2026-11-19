@@ -26,8 +26,10 @@ created by selecting a Web model keep the title given by their creator.
 Using a Web model or adding the prefix does not enroll a chat in retention.
 To opt in an independent Web chat, use
 `chatgpt-tela retain-delegation --standalone --thread CHAT --slot N`.
-The selected profile must have the exact standalone chat, a Web model, and
-a recorded turn. The source CLI can read the latest result of an enrolled chat:
+The selected profile must already know the exact standalone chat and its Web
+model. The caller can enroll it as soon as those details are visible in official
+history, including before the first turn saves. The source CLI can read the latest
+result of an enrolled chat:
 
 ```sh
 chatgpt-tela read-delegation-result --standalone --thread CHAT --slot N
@@ -35,7 +37,7 @@ chatgpt-tela acknowledge-result --standalone --thread CHAT --slot N --turn TURN 
 ```
 
 The read returns the exact turn, final item and text, or the current turn's pending,
-failed or interrupted status. Run acknowledgement after consuming the final answer;
+failed or interrupted status. A registered chat with no saved turn is pending without a turn ID. Run acknowledgement after consuming the final answer;
 reading alone does not change the deadline. The service stores the receipt without the
 answer body. The desktop host's separate-chat creation tool currently returns a thread
 identity to its caller, but it exposes no verified creation callback to Tela. Its caller

@@ -32,7 +32,10 @@ function archiveDeadline(record: State, latestTurn?: { id?: string; status?: str
 }
 async function latest(rpc: CodexAppServerRpc, threadId: string, signal?: AbortSignal): Promise<any> {
   const result: any = await rpc.request("thread/turns/list", { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" }, signal);
-  return result?.data?.[0];
+  if (!Array.isArray(result?.data) || result.data.length > 1 || result.data.length === 0 && result.nextCursor != null) {
+    throw Error("Official latest-turn metadata is unavailable");
+  }
+  return result.data[0];
 }
 
 /** A restored child can move between active/archived list queries. Native
@@ -149,8 +152,10 @@ export function createDelegatedRetention(input: {
           const data: any = await rpc.request("thread/read", { threadId, includeTurns: false });
           assertManagedThread(data?.thread, threadId, parentThreadId);
           if (existing && existing.archivedAt == null) return existing;
-          if (standalone && (!/^chatgpt-tela-web\/family\/[a-f0-9]{20}$/.test(data.thread.model ?? "")
-            || !(await latest(rpc, threadId))?.id)) throw Error("The selected standalone chat has no recorded Web task");
+          if (standalone && (typeof data.thread.model !== "string"
+            || !/^chatgpt-tela-web\/family\/[a-f0-9]{20}$/.test(data.thread.model))) {
+            throw Error("The selected standalone chat does not have a Web model");
+          }
           if (firstWebTurnId !== undefined) {
             const first: any = await rpc.request("thread/turns/list", {
               threadId, limit: 1, sortDirection: "asc", itemsView: "notLoaded",
@@ -196,7 +201,8 @@ export function createDelegatedRetention(input: {
           const data: any = await rpc.request("thread/read", { threadId, includeTurns: false }, signal);
           assertManagedThread(data?.thread, threadId, parentThreadId);
           const turn = await latest(rpc, threadId, signal);
-          const turnId = id(turn?.id);
+          if (turn === undefined) return { threadId, outcome: "pending" as const };
+          const turnId = id(turn.id);
           const reference = { threadId, turnId };
           if (turn.status === "inProgress") return { ...reference, outcome: "pending" as const };
           if (turn.status === "failed" || turn.status === "interrupted") {

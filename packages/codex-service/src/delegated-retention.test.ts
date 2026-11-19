@@ -8,6 +8,7 @@ const HOUR = 3_600_000;
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "tela-managed-retention-"));
   let now = 1_000_000_000, scope = "install/profile-one", busy = false, descendant: "active" | "archived" | undefined;
+  let turnPersisted = true;
   const calls: { method: string; lifecycle: boolean; slot: number }[] = [];
   const thread: any = { id: "child", parentThreadId: "parent", status: { type: "idle" },
     source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } };
@@ -20,7 +21,7 @@ function fixture() {
       return { async close() { leased = false; }, async request(method: string, params?: any): Promise<any> {
         calls.push({ method, lifecycle, slot });
         if (method === "thread/read") return { thread };
-        if (method === "thread/turns/list") return { data: [turn] };
+        if (method === "thread/turns/list") return { data: turnPersisted ? [turn] : [] };
         if (method === "thread/name/set") {
           expect(delegatedTitle).toBe(true);
           expect(params.threadId).toBe(thread.id);
@@ -41,6 +42,7 @@ function fixture() {
   };
   const manager = createDelegatedRetention(options);
   return { directory, options, manager, thread, turn, calls,
+    setTurnPersisted(value: boolean) { turnPersisted = value; },
     advance(hours: number) { now += hours * HOUR; }, setBusy(value: boolean) { busy = value; }, changeScope() { scope = "new-install"; }, setDescendant(value: "active" | "archived" | undefined) { descendant = value; },
     receipt() { return JSON.parse(readFileSync(join(options.directory, readdirSync(options.directory)[0]!), "utf8")); },
     async close() { await manager.close(); rmSync(directory, { recursive: true, force: true }); } };
@@ -56,10 +58,15 @@ test("explicit standalone Web registration uses the existing receipt and archive
     f.thread.source = "vscode";
     f.thread.parentThreadId = null;
     f.thread.model = "gpt-native";
-    await expect(f.manager.enroll(1, undefined, "child")).rejects.toThrow("no recorded Web task");
+    await expect(f.manager.enroll(1, undefined, "child")).rejects.toThrow("does not have a Web model");
     f.thread.model = "chatgpt-tela-web/family/12345678901234567890";
     f.thread.name = "Standalone";
+    f.setTurnPersisted(false);
+    const beforeRegistration = f.calls.length;
     await f.manager.enroll(1, undefined, "child");
+    expect(f.calls.slice(beforeRegistration).map(call => call.method)).toEqual(["thread/read", "thread/name/set"]);
+    expect(await f.manager.readResult(1, undefined, "child")).toEqual({ threadId: "child", outcome: "pending" });
+    f.setTurnPersisted(true);
     expect(f.receipt().parentThreadId).toBeUndefined();
     expect(f.receipt().title).toBe("[Tela Agent] Standalone");
     const enrolledAt = f.receipt().enrolledAt;
