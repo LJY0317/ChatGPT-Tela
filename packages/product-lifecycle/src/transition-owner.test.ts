@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,6 +8,7 @@ import { ensureOwnershipManifest } from "./ownership-store";
 import { readOwnershipManifest } from "./ownership";
 import { resolveProductPaths } from "./layout";
 import { withPackagedTransitionOwner } from "./transition-owner";
+import { macApplicationUpdatePath } from "./packaged-transition";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -65,6 +66,40 @@ test("an independently running coordinator exits without cleanup; next owner pre
   } finally { child.stdin.write("exit\n"); child.stdin.end(); }
   expect(await child.exited).toBe(23);
   await withPackagedTransitionOwner(input, async () => { expect(readFileSync(checkpoint, "utf8")).toBe("quiescing"); });
+});
+
+test("a killed initializer is recovered at the same inode and only scratch is dropped", async () => {
+  const input = await fixture();
+  await withPackagedTransitionOwner(input, async () => {});
+  const directory = join(input.paths.stateRoot, "install", "coordinator");
+  const path = join(directory, "writer.sqlite");
+  rmSync(path); // Start a new initialization in this isolated owned installation.
+  const journal = macApplicationUpdatePath(input.paths);
+  writeFileSync(journal, "last committed checkpoint");
+  writeFileSync(journal + ".pending", "interrupted scratch");
+  const child = Bun.spawn([process.execPath, "--eval", `
+    import { DatabaseSync } from 'node:sqlite';
+    const db = new DatabaseSync(${JSON.stringify(path)});
+    db.exec("BEGIN IMMEDIATE; PRAGMA application_id=1413827649; CREATE TABLE authority (install_id TEXT PRIMARY KEY);");
+    console.log("initializing");
+    await Bun.stdin.stream().getReader().read();
+  `], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  let inode!: number;
+  try {
+    const ready = await child.stdout.getReader().read();
+    expect(new TextDecoder().decode(ready.value)).toContain("initializing");
+    inode = statSync(path).ino;
+    await expect(withPackagedTransitionOwner(input, async () => {})).rejects.toThrow("another installer owns");
+  } finally {
+    child.kill(9);
+    await child.exited;
+  }
+  await withPackagedTransitionOwner(input, async () => {
+    expect(statSync(path).ino).toBe(inode);
+    expect(readFileSync(journal, "utf8")).toBe("last committed checkpoint");
+    expect(readdirSync(join(input.paths.stateRoot, "install"))).not.toContain("application-update-v1.json.pending");
+  });
+  expect(readdirSync(directory).sort()).toEqual([".chatgpt-tela-owner.json", "writer.sqlite"]);
 });
 
 test("an unowned database is preserved and never treated as an expired owner", async () => {

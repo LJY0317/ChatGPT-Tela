@@ -88,8 +88,6 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
     return state;
   };
   return step("transition", () => withPackagedTransitionOwner({ paths, installId: owner.installId }, async () => {
-    // The lock excludes another writer. Only a rename commits recovery state.
-    rmSync(temporary, { force: true });
     const previous = readMacApplicationUpdate(paths);
     if (previous && previous.installId !== owner.installId) throw Error("application update belongs to another installation");
     if (action === "cancel" && !previous) return { ready: true, productVersion: spec.productVersion };

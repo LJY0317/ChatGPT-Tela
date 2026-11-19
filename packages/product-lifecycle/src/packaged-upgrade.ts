@@ -128,7 +128,7 @@ export function readPackagedUpgradeJournal(path: string): PackagedUpgradeJournal
 function writeJournal(path: string, journal: PackagedUpgradeJournal): void {
   const normalized = parseJournal(journal);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.tmp-${process.pid}`;
+  const temporary = path + ".pending";
   const fd = openSync(temporary, "wx", 0o600);
   try {
     try {

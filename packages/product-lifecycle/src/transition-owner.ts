@@ -1,11 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
-import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, linkSync, lstatSync, rmSync } from "node:fs";
+import { closeSync, lstatSync, openSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { prepareOwnedDirectory } from "./directory-registration";
 import { readOwnershipManifest } from "./ownership";
 import type { ProductPaths } from "./layout";
-import { assertNoPackagedUninstall, packagedUninstallJournalPath, readPackagedTransitionValue } from "./packaged-transition";
+import { assertNoPackagedUninstall, macApplicationUpdatePath, packagedUninstallJournalPath, packagedUpgradeJournalPath, readPackagedTransitionValue } from "./packaged-transition";
 
 const APPLICATION_ID = 0x54454c41;
 
@@ -37,53 +36,57 @@ export async function withPackagedTransitionOwner<T>(input: {
     resource: { kind: "directory", id: "transition-coordinator", owner: "product", path: directory, dataClass: "state" } });
   if (prepared.state === "external-existing") throw new Error("transition coordinator directory is not owned");
   const path = join(directory, "writer.sqlite");
-  if (!existsSync(path)) {
-    const temporary = join(directory, `writer-${randomUUID()}.sqlite`);
-    let created: DatabaseSync | undefined;
-    try {
-      created = new DatabaseSync(temporary);
-      // Bun 1.4 can keep a prepared statement's SQLite handle open after
-      // close() on Windows, preventing removal of the unpublished hardlink.
-      // Encode the manifest-owned ID as a SQLite hex literal (never SQL text).
-      created.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=1;
-        CREATE TABLE authority (install_id TEXT PRIMARY KEY);
-        INSERT INTO authority VALUES (CAST(X'${installIdHex}' AS TEXT));`);
-      created.close(); created = undefined;
-      chmodSync(temporary, 0o600);
-      // Publish without replacing an inode another coordinator may have locked.
-      try { linkSync(temporary, path); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-    } finally { created?.close(); rmSync(temporary, { force: true }); }
-  }
+  // Create the canonical inode exclusively. SQLite recovers interrupted initialization in place.
+  try { closeSync(openSync(path, "wx", 0o600)); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) throw new Error("transition coordinator database is unsafe");
   const database = new DatabaseSync(path);
   let locked = false;
+  const lock = () => {
+    try { database.exec("BEGIN IMMEDIATE"); locked = true; }
+    catch (error) { throw new Error("another installer owns this transition; do not retry or replace its lock", { cause: error }); }
+  };
+  const prove = (expression: string) => {
+    // Avoid leaving JS-owned prepared statements open on Bun for Windows.
+    database.exec(`DROP TABLE IF EXISTS temp.owner_proof;
+      CREATE TEMP TABLE owner_proof(v INTEGER NOT NULL CHECK(v=1));
+      INSERT INTO temp.owner_proof VALUES (${expression});
+      DROP TABLE temp.owner_proof;`);
+  };
   try {
-    // Verify the on-disk owner and both file-format guards without a
-    // JavaScript-owned prepared statement. Bun 1.4 on Windows can retain
-    // those statements' file handles after DatabaseSync.close(), which
-    // prevents a later signed uninstall from deleting this owned directory.
-    // An unsatisfied CHECK fails closed; all inputs in the SQL are hex or
-    // fixed constants, never interpolated manifest text.
+    database.exec("PRAGMA busy_timeout=0");
+    lock();
+    const current = lstatSync(path);
+    if (current.dev !== stat.dev || current.ino !== stat.ino || current.isSymbolicLink()) throw new Error("transition coordinator database was replaced");
+    let uninitialized = false;
     try {
-      database.exec(`PRAGMA busy_timeout=0;
-        CREATE TEMP TABLE owner_proof(v INTEGER NOT NULL CHECK(v=1));
-        INSERT INTO temp.owner_proof VALUES (
-          (SELECT application_id FROM pragma_application_id) = ${APPLICATION_ID}
-          AND (SELECT user_version FROM pragma_user_version) = 1
-          AND (SELECT install_id FROM authority LIMIT 1) = CAST(X'${installIdHex}' AS TEXT)
-          AND (SELECT count(*) FROM authority) = 1
-        );
-        DROP TABLE temp.owner_proof;`);
+      prove(`(SELECT application_id FROM pragma_application_id) = 0
+        AND (SELECT user_version FROM pragma_user_version) = 0
+        AND NOT EXISTS (SELECT 1 FROM main.sqlite_master)`);
+      uninitialized = true;
+    } catch { /* An existing database must pass the owner check below. */ }
+    if (uninitialized) {
+      database.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=1;
+        CREATE TABLE authority (install_id TEXT PRIMARY KEY);
+        INSERT INTO authority VALUES (CAST(X'${installIdHex}' AS TEXT));`);
+      database.exec("COMMIT"); locked = false;
+      // Keep the same database inode and re-acquire before admitting work.
+      lock();
+    }
+    try {
+      prove(`(SELECT application_id FROM pragma_application_id) = ${APPLICATION_ID}
+        AND (SELECT user_version FROM pragma_user_version) = 1
+        AND (SELECT install_id FROM authority LIMIT 1) = CAST(X'${installIdHex}' AS TEXT)
+        AND (SELECT count(*) FROM authority) = 1`);
     } catch {
       throw new Error("transition coordinator database ownership is invalid");
     }
-    try { database.exec("BEGIN IMMEDIATE"); locked = true; }
-    catch (error) { throw new Error("another installer owns this transition; do not retry or replace its lock", { cause: error }); }
-    const current = lstatSync(path);
-    if (current.dev !== stat.dev || current.ino !== stat.ino || current.isSymbolicLink()) throw new Error("transition coordinator database was replaced");
     admit();
+    // Only the renamed journal commits recovery state; a dead writer may leave its scratch file.
+    for (const journal of [macApplicationUpdatePath(input.paths), packagedUpgradeJournalPath(input.paths)]) {
+      rmSync(journal + ".pending", { force: true });
+    }
     return await action();
   } finally {
     if (locked) database.exec("ROLLBACK");
