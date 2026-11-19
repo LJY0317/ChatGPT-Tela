@@ -1755,8 +1755,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     }
     openTelaDesktopProfile(TelaDesktopProfile(slot: slot, targetId: targetId), activates: true) { [weak self] error in
       Task { @MainActor in
-        guard let self, error != nil else { return }
-        self.profileFailure = "Couldn't open ChatGPT. Please try again."
+        guard let self, let error = error as NSError? else { return }
+        self.connectionProfileSlot = slot
+        self.profileFailure = slot == 1 && error.domain == "TelaDesktopOpen" && error.code == 5
+          ? "Couldn't find ChatGPT in Applications."
+          : "Couldn't open ChatGPT. Please try again."
         self.selectedPage = .work; self.show()
       }
     }

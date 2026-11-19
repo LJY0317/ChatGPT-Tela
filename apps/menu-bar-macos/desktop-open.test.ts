@@ -29,13 +29,17 @@ import { spawnSync } from "node:child_process";
   let a=URL(fileURLWithPath:CommandLine.arguments[1]), b=URL(fileURLWithPath:CommandLine.arguments[2])
   let domain=CommandLine.arguments[3]
   defer { for app in NSWorkspace.shared.runningApplications where app.bundleIdentifier == domain { app.terminate() } }
+  let applicationDirectory=a.deletingLastPathComponent()
+  let clone=applicationDirectory.appendingPathComponent("runtime").appendingPathComponent("ChatGPT.app")
+  let selectsOriginal=telaDefaultDesktopApplicationURL(applicationDirectories:[applicationDirectory],registeredApplications:{_ in [clone,a]}) == a
+  let rejectsClone=telaDefaultDesktopApplicationURL(applicationDirectories:[applicationDirectory],registeredApplications:{_ in [clone]}) == nil
   let configuration=NSWorkspace.OpenConfiguration(); configuration.activates=false; configuration.createsNewApplicationInstance=true
   let second:NSRunningApplication?=await withCheckedContinuation { done in NSWorkspace.shared.openApplication(at:b,configuration:configuration){app,_ in done.resume(returning:app)} }
   let firstError:Error?=await withCheckedContinuation { done in openTelaDesktopApplication(at:a,activates:false){done.resume(returning:$0)} }
   let first=NSWorkspace.shared.runningApplications.first { $0.bundleURL?.standardizedFileURL == a.standardizedFileURL }
   let again:Error?=await withCheckedContinuation { done in openTelaDesktopApplication(at:a,activates:false){done.resume(returning:$0)} }
   let result:[String:Any]=["bothOpened":first != nil && second != nil,"distinctProcesses":first?.processIdentifier != second?.processIdentifier,
-   "success":firstError == nil && again == nil,"instanceCount":NSWorkspace.shared.runningApplications.filter{$0.bundleIdentifier == domain}.count]
+   "success":firstError == nil && again == nil,"selectsOriginal":selectsOriginal,"rejectsClone":rejectsClone,"instanceCount":NSWorkspace.shared.runningApplications.filter{$0.bundleIdentifier == domain}.count]
   let data=try! JSONSerialization.data(withJSONObject:result);print(String(data:data,encoding:.utf8)!)
  }
 }`);
@@ -43,6 +47,6 @@ import { spawnSync } from "node:child_process";
     expect(compiled.status, compiled.stderr).toBe(0);
     const run = spawnSync(binary, [...apps, domain], { encoding: "utf8", timeout: 30_000 });
     expect(run.status, run.stderr).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual({ bothOpened: true, distinctProcesses: true, success: true, instanceCount: 2 });
+    expect(JSON.parse(run.stdout)).toEqual({ bothOpened: true, distinctProcesses: true, success: true, selectsOriginal: true, rejectsClone: true, instanceCount: 2 });
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 45_000);

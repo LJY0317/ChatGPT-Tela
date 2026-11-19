@@ -14,7 +14,7 @@ func telaDefaultDesktopApplicationURL(applicationDirectories: [URL] = FileManage
     if matches.count == 1 { return matches.first }
     if matches.count > 1 { return nil }
   }
-  return candidates.count == 1 ? candidates.first : nil
+  return nil
 }
 
 /// Standard Launch Services open/reopen; no Tela connection or profile mutation is involved.

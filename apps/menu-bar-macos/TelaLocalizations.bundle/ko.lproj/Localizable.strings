@@ -323,3 +323,4 @@
 "Review chat cleanup" = "대화 정리 확인";
 "Overdue chats stay listed until resolved. Review other affected chats before archiving." = "기한을 넘긴 대화는 해결될 때까지 표시됩니다. 함께 보관될 다른 대화도 먼저 확인하세요.";
 "Review…" = "검토…";
+"Couldn't find ChatGPT in Applications." = "응용 프로그램 폴더에서 ChatGPT를 찾을 수 없습니다.";
