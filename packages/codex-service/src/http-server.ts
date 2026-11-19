@@ -130,15 +130,18 @@ export async function startCodexServiceHttpServer(input: {
           const validSlot = Number.isInteger(body.slot) && body.slot >= 1 && body.slot <= 99;
           if (body.action === "reconcile" && (body.slot === undefined || validSlot)) return Response.json(await manager.reconcile(body.slot));
           if (!validSlot) return error(400, "Invalid delegation profile");
-          if (typeof body.parentThreadId !== "string" || typeof body.threadId !== "string") return error(400, "Invalid delegation identity");
-          if (body.action === "observe-web-child" && typeof body.turnId === "string") {
+          const validOwner = body.standalone === true ? body.parentThreadId === undefined
+            : body.standalone === undefined && typeof body.parentThreadId === "string";
+          if (!validOwner || typeof body.threadId !== "string") return error(400, "Invalid delegation identity");
+          if (body.action === "observe-web-child" && typeof body.turnId === "string" && typeof body.parentThreadId === "string") {
             return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId, body.turnId));
           }
           if (body.action === "enroll") return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId));
           if (body.action === "acknowledge" && typeof body.turnId === "string"
             && (body.outcome === "answer" && typeof body.itemId === "string" || ["failed", "interrupted"].includes(body.outcome))) {
             return Response.json(await manager.acknowledge(body.slot, {
-              parentThreadId: body.parentThreadId, threadId: body.threadId, turnId: body.turnId,
+              ...(body.parentThreadId === undefined ? {} : { parentThreadId: body.parentThreadId }),
+              threadId: body.threadId, turnId: body.turnId,
               ...(body.outcome === "answer" ? { outcome: "answer", itemId: body.itemId } : { outcome: body.outcome }),
             }));
           }

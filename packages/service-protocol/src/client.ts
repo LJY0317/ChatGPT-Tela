@@ -165,8 +165,9 @@ export class CodexServiceClient extends LocalServiceClient {
     | { action: "reconcile"; slot?: number }
     | ({ slot: number } & (
       { action: "observe-web-child"; parentThreadId: string; threadId: string; turnId: string }
-      | { action: "enroll"; parentThreadId: string; threadId: string }
-      | ({ action: "acknowledge"; parentThreadId: string; threadId: string; turnId: string }
+      | ({ action: "enroll"; threadId: string } & ({ parentThreadId: string } | { standalone: true }))
+      | ({ action: "acknowledge"; threadId: string; turnId: string }
+        & ({ parentThreadId: string } | { standalone: true })
         & ({ outcome: "answer"; itemId: string } | { outcome: "failed" | "interrupted" }))
     )), signal?: AbortSignal): Promise<unknown> {
     return this.request("v1/codex/delegations", "POST", input, signal);

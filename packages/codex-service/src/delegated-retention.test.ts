@@ -47,6 +47,32 @@ function fixture() {
 }
 const answer = { parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer" } as const;
 
+test("explicit standalone Web registration uses the existing receipt and archive lifecycle", async () => {
+  const f = fixture();
+  const { parentThreadId: _, ...result } = answer;
+  try {
+    await expect(f.manager.acknowledge(1, result)).rejects.toThrow("Register");
+    await expect(f.manager.enroll(1, undefined, "child")).rejects.toThrow("lineage");
+    f.thread.source = "vscode";
+    f.thread.parentThreadId = null;
+    f.thread.model = "gpt-native";
+    await expect(f.manager.enroll(1, undefined, "child")).rejects.toThrow("no recorded Web task");
+    f.thread.model = "chatgpt-tela-web/family/12345678901234567890";
+    f.thread.name = "Standalone";
+    await f.manager.enroll(1, undefined, "child");
+    expect(f.receipt().parentThreadId).toBeUndefined();
+    expect(f.receipt().title).toBe("[Tela Agent] Standalone");
+    const enrolledAt = f.receipt().enrolledAt;
+    f.advance(1);
+    await f.manager.enroll(1, undefined, "child");
+    expect(f.receipt().enrolledAt).toBe(enrolledAt);
+    await f.manager.acknowledge(1, result);
+    expect(f.receipt().dueAt).toBe(enrolledAt + 13 * HOUR);
+    f.advance(12);
+    expect((await f.manager.reconcile()).outcomes).toEqual([{ threadId: "child", status: "archived" }]);
+  } finally { await f.close(); }
+});
+
 test("only explicitly enrolled official children are archived; unconfirmed clock is seven days", async () => {
   const f = fixture();
   try {

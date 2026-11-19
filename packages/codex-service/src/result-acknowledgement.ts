@@ -8,7 +8,7 @@ const RETENTION_MS = 60 * 86_400_000;
 const RETENTION_BYTES = 4 * 1024 * 1024;
 
 export type ResultReference = {
-  readonly parentThreadId: string;
+  readonly parentThreadId?: string;
   readonly threadId: string;
   readonly turnId: string;
 } & ({ readonly outcome: "answer"; readonly itemId: string }
@@ -27,12 +27,20 @@ function object(value: unknown): Record<string, any> {
 }
 
 function resultReference(value: ResultReference): ResultReference {
-  const ids = [value.parentThreadId, value.threadId, value.turnId,
+  const ids = [...(value.parentThreadId === undefined ? [] : [value.parentThreadId]), value.threadId, value.turnId,
     ...(value.outcome === "answer" ? [value.itemId] : [])];
   if (ids.some(id => typeof id !== "string" || !id.trim() || id.length > 512)
     || !["answer", "failed", "interrupted"].includes(value.outcome)) throw Error("Invalid result reference");
-  return { parentThreadId: value.parentThreadId, threadId: value.threadId, turnId: value.turnId,
+  return { ...(value.parentThreadId === undefined ? {} : { parentThreadId: value.parentThreadId }),
+    threadId: value.threadId, turnId: value.turnId,
     ...(value.outcome === "answer" ? { outcome: value.outcome, itemId: value.itemId } : { outcome: value.outcome }) };
+}
+
+export function assertManagedThread(thread: any, threadId: string, parentThreadId?: string): void {
+  const spawnParent = thread?.source?.subAgent?.thread_spawn?.parent_thread_id;
+  if (thread?.id !== threadId || spawnParent !== parentThreadId
+    || thread.parentThreadId != null && thread.parentThreadId !== parentThreadId
+    || parentThreadId === undefined && typeof thread.source !== "string") throw Error("Delegation lineage changed");
 }
 
 /** Confirmation of one result, not task enrollment, completion, or authority to remove a chat. */
@@ -51,11 +59,8 @@ export async function acknowledgeNativeResult(input: {
   const thread = object(object(await input.rpc.request("thread/read", {
     threadId: result.threadId, includeTurns: false,
   }, input.signal)).thread);
-  const source = object(object(object(thread.source).subAgent).thread_spawn);
-  if (thread.id !== result.threadId || source.parent_thread_id !== result.parentThreadId
-    || thread.parentThreadId != null && thread.parentThreadId !== result.parentThreadId) {
-    throw Error("Result does not belong to the specified parent and child");
-  }
+  try { assertManagedThread(thread, result.threadId, result.parentThreadId); }
+  catch (cause) { throw Error("Result does not belong to the specified parent and child or registered standalone chat", { cause }); }
   if (result.outcome === "answer") {
     let cursor: string | undefined;
     const visited = new Set<string>();

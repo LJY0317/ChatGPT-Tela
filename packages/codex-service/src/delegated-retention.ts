@@ -3,13 +3,13 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync
 import { join } from "node:path";
 import { readIndexedNativeItemsPage, type CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { acknowledgeNativeResult, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
+import { acknowledgeNativeResult, assertManagedThread, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
 
 const DAY = 86_400_000, MAX_BYTES = 4 * 1024 * 1024;
 const HALF_DAY = DAY / 2;
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 type State = {
-  version: 1; scope: string; slot: number; parentThreadId: string; threadId: string;
+  version: 1; scope: string; slot: number; parentThreadId?: string; threadId: string;
   enrolledAt: number; dueAt: number; acknowledgement?: ResultAcknowledgement;
   archivedAt?: number; archivePending?: true; reviewAfter?: number; issue?: string; title?: string;
 };
@@ -21,10 +21,6 @@ export interface DelegatedRetentionProfile {
 function id(value: string): string {
   if (typeof value !== "string" || !value.trim() || value.length > 512 || /[\x00-\x1f\x7f]/.test(value)) throw Error("Invalid delegation identity");
   return value;
-}
-function lineage(thread: any, parent: string, child: string): void {
-  if (thread?.id !== child || thread.source?.subAgent?.thread_spawn?.parent_thread_id !== parent
-    || thread.parentThreadId != null && thread.parentThreadId !== parent) throw Error("Delegation lineage changed");
 }
 /** Exactly two clocks. Observations, failures and missing metadata cannot extend either. */
 function archiveDeadline(record: State, latestTurnId?: string): number {
@@ -94,7 +90,7 @@ export function createDelegatedRetention(input: {
       || !Number.isFinite(record.dueAt) || record.reviewAfter != null && !Number.isFinite(record.reviewAfter)
       || record.archivedAt != null && !Number.isFinite(record.archivedAt)
       || key(record.scope, id(record.threadId)) + ".json" !== file) throw Error("Invalid delegation state");
-    id(record.parentThreadId);
+    if (record.parentThreadId !== undefined) id(record.parentThreadId);
     if (record.archivedAt != null && now() - record.archivedAt > 60 * DAY) unlinkSync(join(input.directory, file));
     else {
       // Old completion-based deadlines must not postpone the fixed fallback.
@@ -130,10 +126,12 @@ export function createDelegatedRetention(input: {
   });
   const report = (error: unknown) => emitDiagnosticEvent("chatgpt_tela_codex", "delegation_retention_failed", diagnosticFailureFields(error));
   const api = {
-    enroll(slot: number, parentThreadId: string, threadId: string, firstWebTurnId?: string) {
+    enroll(slot: number, parentThreadId: string | undefined, threadId: string, firstWebTurnId?: string) {
       return serial(async () => {
         if (!Number.isInteger(slot) || slot < 1 || slot > 99) throw Error("Invalid profile slot");
-        id(parentThreadId); id(threadId);
+        if (parentThreadId !== undefined) id(parentThreadId);
+        id(threadId);
+        const standalone = parentThreadId === undefined;
         const profile = input.profile(slot), scope = hash(profile.scope), k = key(scope, threadId);
         const existing = records.get(k);
         if (firstWebTurnId !== undefined) {
@@ -145,11 +143,14 @@ export function createDelegatedRetention(input: {
             return existing;
           }
         }
-        const rpc = await profile.connect(threadId, false, firstWebTurnId !== undefined);
+        const nameWebChat = standalone || firstWebTurnId !== undefined;
+        const rpc = await profile.connect(threadId, false, nameWebChat);
         try {
           const data: any = await rpc.request("thread/read", { threadId, includeTurns: false });
-          lineage(data?.thread, parentThreadId, threadId);
+          assertManagedThread(data?.thread, threadId, parentThreadId);
           if (existing && existing.archivedAt == null) return existing;
+          if (standalone && (!/^chatgpt-tela-web\/family\/[a-f0-9]{20}$/.test(data.thread.model ?? "")
+            || !(await latest(rpc, threadId))?.id)) throw Error("The selected standalone chat has no recorded Web task");
           if (firstWebTurnId !== undefined) {
             const first: any = await rpc.request("thread/turns/list", {
               threadId, limit: 1, sortDirection: "asc", itemsView: "notLoaded",
@@ -159,11 +160,11 @@ export function createDelegatedRetention(input: {
             if (first?.data?.[0]?.id !== firstWebTurnId) return { enrolled: false, reason: "not_first_turn" };
           }
           const enrolledAt = now();
-          const record: State = { version: 1, scope, slot, parentThreadId, threadId, enrolledAt, dueAt: enrolledAt + 7 * DAY,
+          const record: State = { version: 1, scope, slot, ...(standalone ? {} : { parentThreadId }), threadId, enrolledAt, dueAt: enrolledAt + 7 * DAY,
             ...(typeof data.thread.name === "string" ? { title: data.thread.name.slice(0, 200) } : {}) };
           save(k, record);
           event("delegation_retention_enrolled", record);
-          if (firstWebTurnId !== undefined && !record.title?.trimStart().startsWith("[Tela Agent]")) {
+          if (nameWebChat && !record.title?.trimStart().startsWith("[Tela Agent]")) {
             const summary = record.title?.trim()
               || (typeof data.thread.preview === "string" ? data.thread.preview.trim().split(/\r?\n/, 1)[0] : undefined)
               || "Web task";
@@ -185,11 +186,14 @@ export function createDelegatedRetention(input: {
     acknowledge(slot: number, result: ResultReference) {
       return serial(async () => {
         const profile = input.profile(slot), scope = hash(profile.scope), k = key(scope, result.threadId);
+        const record = records.get(k);
+        if (result.parentThreadId === undefined && (!record || record.parentThreadId !== undefined)) {
+          throw Error("Register the selected standalone Web chat first");
+        }
         const rpc = await profile.connect(result.threadId, false);
         try {
           const verified = await acknowledgeNativeResult({ rpc, result,
             directory: input.acknowledgementDirectory, scope: profile.scope, now: now() });
-          const record = records.get(k);
           const acknowledgement = record?.acknowledgement?.scope === scope
             && JSON.stringify(record.acknowledgement.result) === JSON.stringify(verified.result)
             ? record.acknowledgement : verified;
@@ -233,7 +237,7 @@ export function createDelegatedRetention(input: {
             // release naturally; never send turn/start, interrupt, delete or retry.
             const resumed: any = await rpc.request("thread/resume", { threadId: record.threadId, excludeTurns: true });
             reason = "ownership_changed";
-            lineage(resumed?.thread, record.parentThreadId, record.threadId);
+            assertManagedThread(resumed?.thread, record.threadId, record.parentThreadId);
             reason = "running";
             if (resumed.thread.status?.type !== "idle") throw Error("Delegation is not idle");
             // Without a collected answer, no completion timestamp or turn read
