@@ -327,3 +327,14 @@
 "ChatGPT profiles" = "ChatGPT 프로필";
 "Some profiles still need to reopen." = "일부 프로필을 다시 열어야 합니다.";
 "Reopen ChatGPT…" = "ChatGPT 다시 열기…";
+
+"Track Web task…" = "Web 작업 등록…";
+"Track a Web task" = "Web 작업 등록";
+"Tracked tasks are archived after 7 days, or 12 hours after you confirm the answer." = "등록한 작업은 7일 뒤, 답변 회수를 확인하면 12시간 뒤 보관됩니다.";
+"Paste a ChatGPT task link" = "ChatGPT 작업 링크 붙여넣기";
+"ChatGPT task link" = "ChatGPT 작업 링크";
+"Choose a profile" = "프로필 선택";
+"Track task" = "작업 등록";
+"Choose the profile and paste a ChatGPT task link." = "프로필을 선택하고 ChatGPT 작업 링크를 붙여넣으세요.";
+"Web task tracked." = "Web 작업을 등록했습니다.";
+"Couldn’t track this task. Check its profile and Web model." = "작업을 등록할 수 없습니다. 프로필과 Web 모델을 확인하세요.";

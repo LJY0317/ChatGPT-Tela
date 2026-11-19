@@ -1,5 +1,13 @@
 import Foundation
 @main struct Probe { @MainActor static func main() {
+let taskId = "12345678-1234-4abc-8123-123456789abc"
+precondition(telaDelegationThreadId(" codex://threads/\(taskId) ") == taskId)
+precondition(telaDelegationThreadId(taskId.uppercased()) == taskId)
+for invalid in ["https://chatgpt.com/share/\(taskId)", "codex://threads/\(taskId)?other=1",
+                "codex://threads/\(taskId)/extra", "codex://another/\(taskId)",
+                "codex://user@threads/\(taskId)"] {
+  precondition(telaDelegationThreadId(invalid) == nil)
+}
 var state = TelaWorkInventory()
 let profile = TelaWorkProfile(slot: 1, targetDisplayName: "ChatGPT", targetState: "running", targetSessionState: "ready", controlState: "restart-required")
 state.loaded([profile]); precondition(state.error == nil)

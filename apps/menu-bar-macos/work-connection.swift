@@ -3,6 +3,17 @@ import TelaLocalization
 #endif
 import Foundation
 
+func telaDelegationThreadId(_ input: String) -> String? {
+  let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+  if let id = UUID(uuidString: value) { return id.uuidString.lowercased() }
+  guard let link = URLComponents(string: value),
+        link.scheme == "codex", link.host == "threads",
+        link.user == nil, link.password == nil, link.port == nil,
+        link.query == nil, link.fragment == nil,
+        let id = UUID(uuidString: String(link.percentEncodedPath.dropFirst())) else { return nil }
+  return id.uuidString.lowercased()
+}
+
 // On-demand official CLI metadata, scoped to this installation's local source.
 struct TelaRetentionStatus: Decodable {
   struct Item: Decodable {

@@ -24,8 +24,9 @@ When Tela verifies a newly spawned child's first Web turn, it prefixes the
 official chat title with `[Tela Agent]` as part of enrollment. Separate chats
 created by selecting a Web model keep the title given by their creator.
 Using a Web model or adding the prefix does not enroll a chat in retention.
-To opt in an independent Web chat, use
-`chatgpt-tela retain-delegation --standalone --thread CHAT --slot N`.
+To opt in an independent Web chat, use **Control Center → Work → Track Web task…**,
+paste its ChatGPT task link, and select the matching profile if asked. From the
+command line, use `chatgpt-tela retain-delegation --standalone --thread CHAT --slot N`.
 The selected profile must already know the exact standalone chat and its Web
 model. The caller can enroll it as soon as those details are visible in official
 history, including before the first turn saves. The source CLI can read the latest
