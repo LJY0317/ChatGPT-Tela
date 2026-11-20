@@ -109,13 +109,13 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     const diagnostics: Record<string, unknown>[] = [];
     const unobserve = observeDiagnosticEvents(row => { if (row.stage === "desktop_activity_unobservable") diagnostics.push(row); });
     try {
-      expect(await service.shutdownReadiness()).toBe("blocked");
+      expect(await service.shutdownReadiness()).toBe("native_activity_unobservable");
       expect(diagnostics).toMatchObject([{ slot: 1, target_kind: "default-desktop",
         state: "restart-required", endpoint_available: false, policy: "selected" }]);
       await expect(client.waitForShutdownReadiness()).rejects.toMatchObject({ reason: "native_activity_unobservable" });
       await expect(update.wait("codex")).rejects.toMatchObject({ service: "codex", cause: { reason: "native_activity_unobservable" } });
     } finally { unobserve?.(); }
-    await expect(update.prepare("codex")).rejects.toThrow();
+    await expect(update.prepare("codex")).rejects.toMatchObject({ service: "codex", cause: { reason: "native_activity_unobservable" } });
     await expect(update.wait("codex")).rejects.toThrow();
     await expect(service.waitForShutdownReadiness()).rejects.toThrow();
     await expect(service.stopProfile(1)).rejects.toThrow("may still be using the Tela route");

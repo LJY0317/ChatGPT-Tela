@@ -36,6 +36,7 @@ export interface ServiceStatus {
   readonly detail?: string;
   /** Advisory only: actual shutdown admission remains atomic at the service. */
   readonly shutdownReadiness?: "ready" | "blocked";
+  readonly shutdownBlockedReason?: "native_activity_unobservable";
 }
 
 export interface CodexToolInventoryRequest {
@@ -410,7 +411,9 @@ export function parseServiceStatus(value: unknown): ServiceStatus {
   return Object.freeze({ contractVersion: 1, service: item.service as TelaServiceId,
     instanceId: text(item.instanceId, "service status instance id"), state: item.state as ServiceStatus["state"],
     ...(item.detail === undefined ? {} : { detail: text(item.detail, "service status detail") }),
-    ...(item.shutdownReadiness === undefined ? {} : { shutdownReadiness: item.shutdownReadiness as "ready" | "blocked" }) });
+    ...(item.shutdownReadiness === undefined ? {} : { shutdownReadiness: item.shutdownReadiness as "ready" | "blocked" }),
+    ...(item.shutdownReadiness === "blocked" && item.shutdownBlockedReason === "native_activity_unobservable"
+      ? { shutdownBlockedReason: item.shutdownBlockedReason } : {}) });
 }
 
 function object(value: unknown, field: string): Record<string, unknown> {

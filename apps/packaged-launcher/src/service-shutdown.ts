@@ -68,7 +68,11 @@ export function ownedServiceShutdown(installId: string, paths: ProductPaths) {
     const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json"),
       shutdownReadiness: true, requestTimeoutMs: PACKAGED_TRANSITION_TIMEOUT_MS });
     if (!current || current.status.state !== "ready") throw new Error(`${service} runtime is not ready for maintenance`);
-    if (current.status.shutdownReadiness === "blocked") throw new PackagedServiceShutdownNotStartedError(service);
+    if (current.status.shutdownReadiness === "blocked") {
+      throw new PackagedServiceShutdownNotStartedError(service, {
+        cause: new ServiceShutdownNotStartedError(current.status.shutdownBlockedReason),
+      });
+    }
     // The owner repeats admission on actual shutdown; work can begin after preflight.
   };
   return Object.assign(shutdown, {

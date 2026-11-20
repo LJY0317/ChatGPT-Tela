@@ -164,7 +164,7 @@ export interface CodexService {
   readonly config: CodexServiceConfig;
   readonly tools: TurnBridgeBackend;
   serviceStatus(): ServiceStatus;
-  shutdownReadiness(): Promise<"ready" | "blocked">;
+  shutdownReadiness(): Promise<ShutdownReadiness>;
   waitForShutdownReadiness(signal?: AbortSignal): Promise<void>;
   profiles(): Promise<readonly CodexProfileStatus[]>;
   startProfile(slot: number, options?: ProfileStartOptions): Promise<CodexProfileStatus>;
@@ -191,6 +191,8 @@ export interface CodexService {
 }
 
 /** The Codex owner proved shutdown did not begin because work is active or unverifiable. */
+type ShutdownReadiness = "ready" | "blocked" | "native_activity_unobservable";
+
 export class CodexShutdownNotStartedError extends Error {
   constructor(readonly reason: "work_not_ready" | "native_activity_unobservable" = "work_not_ready") {
     super(reason === "native_activity_unobservable"
@@ -481,7 +483,7 @@ export async function startCodexService(input: {
     emitDiagnosticEvent("chatgpt_tela_codex", "profile_turns_interrupted", { slot, count });
   };
 
-  const profileShutdownReadiness = async (profile: OwnedProfile, duringStop = false): Promise<"ready" | "blocked"> => {
+  const profileShutdownReadiness = async (profile: OwnedProfile, duringStop = false): Promise<ShutdownReadiness> => {
     // A verified cleanup receipt retires the Web/Native admission endpoint.
     // Only this same child's exit remains; never query its closed preview URL.
     if (profile.cleanupAcknowledged) return "ready";
@@ -489,7 +491,7 @@ export async function startCodexService(input: {
     const signal = duringStop ? undefined : input.signal;
     const blocked = (reason_class: string) => {
       emitDiagnosticEvent("chatgpt_tela_codex", "profile_shutdown_blocked", { slot: profile.slot, reason_class });
-      return "blocked" as const;
+      return reason_class === "native_activity_unobservable" ? reason_class : "blocked";
     };
     if ((!duringStop && (profile.stopping || stoppingProfiles.has(profile.slot) || starting.has(profile.slot)))
       || profile.child.exitCode !== null || profile.child.signalCode !== null) return blocked("profile_transition");
@@ -523,11 +525,12 @@ export async function startCodexService(input: {
     return "ready";
   };
 
-  const shutdownReadiness = async (duringClose = false): Promise<"ready" | "blocked"> => {
+  const shutdownReadiness = async (duringClose = false): Promise<ShutdownReadiness> => {
     if ((!duringClose && (stopping || starting.size > 0)) || stoppingProfiles.size > 0) return "blocked";
     try {
       for (const profile of owned.values()) {
-        if (await profileShutdownReadiness(profile, duringClose) !== "ready") return "blocked";
+        const readiness = await profileShutdownReadiness(profile, duringClose);
+        if (readiness !== "ready") return readiness;
       }
       return "ready";
     } catch (error) {
@@ -714,7 +717,10 @@ export async function startCodexService(input: {
         // Account UI, unsettled delegation or a newly admitted turn is not proof
         // of completion. Return to the caller rather than poll an unchanged gate.
         phase = "final_readiness"; slot = undefined;
-        if (await shutdownReadiness() !== "ready") throw new CodexShutdownNotStartedError();
+        const readiness = await shutdownReadiness();
+        if (readiness !== "ready") {
+          throw new CodexShutdownNotStartedError(readiness === "blocked" ? "work_not_ready" : readiness);
+        }
       } catch (error) {
         emitDiagnosticEvent("chatgpt_tela_codex", "shutdown_wait_failed", {
           phase, ...(slot === undefined ? {} : { slot }), failure_class: diagnosticFailureClass(error),
@@ -1263,7 +1269,10 @@ export async function startCodexService(input: {
       const stoppedSlots: number[] = [];
       closing = (async () => {
         stopping = true;
-        if (await shutdownReadiness(true) !== "ready") throw new CodexShutdownNotStartedError();
+        const readiness = await shutdownReadiness(true);
+        if (readiness !== "ready") {
+          throw new CodexShutdownNotStartedError(readiness === "blocked" ? "work_not_ready" : readiness);
+        }
         // Admission is closed before taking this snapshot. An already-admitted
         // start may publish its child late; drain it before enumerating owners.
         await Promise.all([...starting.values()].map(operation => operation.settled));

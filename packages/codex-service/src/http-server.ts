@@ -94,11 +94,12 @@ export async function startCodexServiceHttpServer(input: {
           const degraded = status.state === "ready" && input.startupComplete?.() === false;
           const base = degraded ? { ...status, state: "degraded" as const, detail: "Restoring saved profile connections" } : status;
           if (url.searchParams.get("shutdown-readiness") !== "1") return Response.json(base);
-          let shutdownReadiness: "ready" | "blocked" = "blocked";
+          let readiness: Awaited<ReturnType<typeof input.service.shutdownReadiness>> = "blocked";
           if (!degraded && status.state === "ready") {
-            try { shutdownReadiness = await input.service.shutdownReadiness(); } catch { /* Unknown activity blocks shutdown. */ }
+            try { readiness = await input.service.shutdownReadiness(); } catch { /* Unknown activity blocks shutdown. */ }
           }
-          return Response.json({ ...base, shutdownReadiness });
+          return Response.json({ ...base, shutdownReadiness: readiness === "ready" ? "ready" : "blocked",
+            ...(readiness === "native_activity_unobservable" ? { shutdownBlockedReason: readiness } : {}) });
         }
         if (request.method === "POST" && url.pathname === "/v1/wait-shutdown-readiness") {
           if (input.startupComplete?.() === false) return error(409, "Profile restoration is still in progress");
