@@ -443,3 +443,57 @@ test("automatic Web metadata cannot enroll a normal chat or claim another Native
     expect(readdirSync(f.options.directory)).toEqual([]);
   } finally { await f.close(); }
 });
+
+test("an unpersisted first Web turn survives restart and archives a failed child at its original deadline", async () => {
+  const f = fixture();
+  let restarted: ReturnType<typeof createDelegatedRetention> | undefined;
+  try {
+    f.thread.name = "Review update";
+    f.setTurnPersisted(false);
+    const result = await f.manager.enroll(1, "parent", "child", "turn");
+    expect(result).toEqual({ enrolled: false, reason: "first_turn_pending" });
+    expect(f.manager.status(true)).toMatchObject({ tracked: [] });
+    expect(f.thread.name).toBe("Review update");
+    const { dueAt, enrolledAt } = f.receipt();
+    expect(dueAt - enrolledAt).toBe(7 * 24 * HOUR);
+    await f.manager.close();
+
+    restarted = createDelegatedRetention(f.options);
+    f.advance(7 * 24 - 1);
+    f.turn.status = "failed";
+    f.setTurnPersisted(true);
+    expect((await restarted.listForParent(1, "other-parent")).tracked).toEqual([]);
+    expect(f.thread.name).toBe("Review update");
+    expect((await restarted.listForParent(1, "parent")).tracked).toMatchObject([{
+      threadId: "child", title: "[Tela Agent] Review update", enrolledAt, dueAt,
+    }]);
+    expect(await restarted.readResult(1, "parent", "child")).toMatchObject({ outcome: "failed" });
+    expect((await restarted.reconcile(undefined, true)).outcomes).toEqual([]);
+    f.advance(1);
+    expect((await restarted.reconcile(undefined, true)).outcomes).toEqual([{ threadId: "child", status: "archived" }]);
+    expect(f.calls.filter(call => call.method === "thread/archive")).toHaveLength(1);
+  } finally { await restarted?.close(); await f.close(); }
+});
+
+test("an unverified observation never changes a conversation and expires if the first turn cannot match", async () => {
+  for (const history of ["empty", "different", "matching"] as const) {
+    const f = fixture();
+    try {
+      f.setTurnPersisted(false);
+      await f.manager.enroll(1, "parent", "child", "turn");
+      if (history !== "empty") {
+        f.setTurnPersisted(true);
+        if (history === "different") f.turn.id = "older-native-turn";
+      }
+      f.advance(7 * 24);
+      const { outcomes } = await f.manager.reconcile(undefined, true);
+      if (history === "matching") {
+        expect(outcomes).toEqual([{ threadId: "child", status: "archived" }]);
+      } else {
+        expect(outcomes).toEqual([]);
+        expect(readdirSync(f.options.directory)).toEqual([]);
+        expect(f.calls.some(call => ["thread/name/set", "thread/archive"].includes(call.method))).toBe(false);
+      }
+    } finally { await f.close(); }
+  }
+});

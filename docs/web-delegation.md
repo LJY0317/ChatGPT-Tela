@@ -171,10 +171,15 @@ successfully enrolled it through the actual read-only history client before retu
 its first synthetic answer. This used no external model call or consumer profile.
 It proves that boundary, not consumer Desktop installation or timed archival.
 
-This path depends on the host supplying parent identity with its first Web request and
-making that first turn readable. Missing evidence is not replaced with title matching
-or adoption of older chats. Registration success is durable only after the service has
-saved the record; dispatch alone is not success. Explicit enrollment remains available:
+If the official parent/child lineage is already readable but the first turn is still
+unavailable, the service saves the observation in the existing registry. Listing that
+parent's tasks or running normal retention reconciliation can confirm it without moving
+the seven-day deadline. Pending observations cannot be named, listed as managed, or
+archived until the exact first turn matches. A readable different first turn, or a
+readable empty history at the seven-day deadline, discards the observation.
+
+The host must supply the parent identity and the service must be able to verify the
+thread lineage when notified. Explicit enrollment remains available:
 
 Use the Native coordinator's existing command tool after creating a selected child:
 

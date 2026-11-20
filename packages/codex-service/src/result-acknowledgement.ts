@@ -44,9 +44,9 @@ export function assertManagedThread(thread: any, threadId: string, parentThreadI
 }
 
 async function readResultTurnsPage(rpc: Pick<CodexAppServerRpc, "request">, threadId: string,
-  limit: number, cursor?: string, signal?: AbortSignal) {
+  limit: number, cursor?: string, signal?: AbortSignal, sortDirection: "asc" | "desc" = "desc") {
   const result = object(await rpc.request("thread/turns/list", {
-    threadId, limit, sortDirection: "desc", itemsView: "notLoaded", ...(cursor ? { cursor } : {}),
+    threadId, limit, sortDirection, itemsView: "notLoaded", ...(cursor ? { cursor } : {}),
   }, signal));
   if (!Array.isArray(result.data) || result.data.length > limit
     || (result.nextCursor != null && (typeof result.nextCursor !== "string" || !result.nextCursor || !result.data.length))) {
@@ -58,6 +58,10 @@ async function readResultTurnsPage(rpc: Pick<CodexAppServerRpc, "request">, thre
     return { id: turn.id, status: turn.status };
   });
   return { turns, nextCursor: result.nextCursor as string | undefined | null };
+}
+
+export async function readFirstResultTurn(rpc: Pick<CodexAppServerRpc, "request">, threadId: string) {
+  return (await readResultTurnsPage(rpc, threadId, 1, undefined, undefined, "asc")).turns[0];
 }
 
 export async function readLatestResultTurn(rpc: Pick<CodexAppServerRpc, "request">,

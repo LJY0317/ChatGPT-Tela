@@ -555,7 +555,7 @@ test("tracked Web child supports result collection and due archive without a Nat
   const directory = mkdtempSync(join(tmpdir(), "tela-retention-http-"));
   let now = 1_000_000_000;
   const methods: string[] = [];
-  let failedFollowUp = false;
+  let failedFollowUp = false, firstTurnPersisted = false;
   const manager = createDelegatedRetention({ directory: join(directory, "records"), acknowledgementDirectory: join(directory, "ack"),
     automatic: false, now: () => now,
     profile(slot) { return { scope: `installed-profile-${slot}`, async connect() { expect(slot).toBe(2); return {
@@ -564,6 +564,7 @@ test("tracked Web child supports result collection and due archive without a Nat
         const thread = { id: "child", status: { type: "idle" }, source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } };
         if (["thread/read", "thread/resume"].includes(method)) return { thread };
         if (method === "thread/turns/list") {
+          if (!firstTurnPersisted) return { data: [], nextCursor: null };
           if (failedFollowUp && !params.cursor) return {
             data: [{ id: "follow-up", status: "interrupted" }], nextCursor: "older",
           };
@@ -581,12 +582,17 @@ test("tracked Web child supports result collection and due archive without a Nat
   const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
     installId: "fixture", pid: process.pid, endpoint: server.endpoint.href, bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
   try {
-    await client.manageDelegation({ action: "observe-web-child", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn" });
+    expect(await client.manageDelegation({ action: "observe-web-child", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn" }))
+      .toEqual({ enrolled: false, reason: "first_turn_pending" });
     const url = new URL("v1/codex/delegations", server.endpoint);
     const headers = { authorization: `Bearer ${server.bearerToken}` };
     const post = (body: Record<string, unknown>) => fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
     const snapshot = await fetch(url, { headers });
     expect(await snapshot.json()).toEqual({ overdue: [], automaticDeleteEnabled: false });
+    const list = { action: "list-tracked", parentThreadId: "parent", slot: 2 } as const;
+    expect(await client.manageDelegation(list)).toEqual({ slot: 2, tracked: [] });
+    firstTurnPersisted = true;
+    expect(await client.manageDelegation(list)).toMatchObject({ slot: 2, tracked: [{ threadId: "child", enrolledAt: now }] });
     const trackedUrl = new URL(url);
     trackedUrl.searchParams.set("include", "tracked");
     const beforeListing = methods.length;
@@ -595,7 +601,6 @@ test("tracked Web child supports result collection and due archive without a Nat
       overdue: [], automaticDeleteEnabled: false,
       tracked: [{ slot: 2, threadId: "child", title: "[Tela Agent] Web task", enrolledAt: now }],
     });
-    const list = { action: "list-tracked", parentThreadId: "parent", slot: 2 } as const;
     expect(await client.manageDelegation(list)).toMatchObject({ slot: 2, tracked: [{ threadId: "child", enrolledAt: now }] });
     expect(await client.manageDelegation({ ...list, slot: 1 })).toEqual({ slot: 1, tracked: [] });
     expect(await client.manageDelegation({ ...list, parentThreadId: "other" })).toEqual({ slot: 2, tracked: [] });

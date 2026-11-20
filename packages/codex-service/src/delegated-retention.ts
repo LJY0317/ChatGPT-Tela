@@ -3,14 +3,14 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync
 import { join } from "node:path";
 import { readIndexedNativeItemsPage, type CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { acknowledgeNativeResult, assertManagedThread, findFinalAnswer, readLatestResultTurn, readPreviousResultAnswer, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
+import { acknowledgeNativeResult, assertManagedThread, findFinalAnswer, readFirstResultTurn, readLatestResultTurn, readPreviousResultAnswer, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
 
 const DAY = 86_400_000, MAX_BYTES = 4 * 1024 * 1024;
-const HALF_DAY = DAY / 2;
+const HALF_DAY = DAY / 2, METADATA_RETENTION = 60 * DAY;
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 type State = {
   version: 1; scope: string; slot: number; parentThreadId?: string; threadId: string;
-  enrolledAt: number; dueAt: number; acknowledgement?: ResultAcknowledgement;
+  enrolledAt: number; dueAt: number; pendingFirstTurnId?: string; acknowledgement?: ResultAcknowledgement;
   archivedAt?: number; releasedAt?: number; archivePending?: true; reviewAfter?: number; issue?: string; title?: string;
 };
 const settledAt = (record: State) => record.archivedAt ?? record.releasedAt;
@@ -87,8 +87,9 @@ export function createDelegatedRetention(input: {
       || record.releasedAt != null && !Number.isFinite(record.releasedAt)
       || key(record.scope, id(record.threadId)) + ".json" !== file) throw Error("Invalid delegation state");
     if (record.parentThreadId !== undefined) id(record.parentThreadId);
+    if (record.pendingFirstTurnId !== undefined) id(record.pendingFirstTurnId);
     const settled = settledAt(record);
-    if (settled != null && now() - settled > 60 * DAY) unlinkSync(join(input.directory, file));
+    if (settled != null && now() - settled > METADATA_RETENTION) unlinkSync(join(input.directory, file));
     else {
       // Old completion-based deadlines must not postpone the fixed fallback.
       record.dueAt = Math.min(record.dueAt, record.enrolledAt + 7 * DAY);
@@ -122,6 +123,48 @@ export function createDelegatedRetention(input: {
     ...(reason ? { reason_class: reason } : {}),
   });
   const report = (error: unknown) => emitDiagnosticEvent("chatgpt_tela_codex", "delegation_retention_failed", diagnosticFailureFields(error));
+  const finishEnrollment = async (k: string, record: State, thread: any, rpc: CodexAppServerRpc, nameWebChat: boolean) => {
+    const active = { ...record };
+    delete active.pendingFirstTurnId;
+    delete active.reviewAfter;
+    delete active.issue;
+    if (typeof thread.name === "string") active.title = thread.name.slice(0, 200);
+    save(k, active);
+    event("delegation_retention_enrolled", active);
+    if (nameWebChat && !active.title?.trimStart().startsWith("[Tela Agent]")) {
+      const summary = active.title?.trim()
+        || (typeof thread.preview === "string" ? thread.preview.trim().split(/\r?\n/, 1)[0] : undefined)
+        || "Web task";
+      const name = `[Tela Agent] ${summary}`.slice(0, 200);
+      try {
+        await rpc.request("thread/name/set", { threadId: active.threadId, name });
+        save(k, { ...active, title: name });
+        return { ...active, title: name };
+      } catch (error) {
+        emitDiagnosticEvent("chatgpt_tela_codex", "delegation_title_update_failed", {
+          slot: active.slot, thread_fingerprint: hash(active.threadId), ...diagnosticFailureFields(error),
+        });
+      }
+    }
+    return active;
+  };
+  const discardObservation = (k: string, record: State, reason: string) => {
+    unlinkSync(path(k));
+    records.delete(k);
+    event("delegation_retention_observation_discarded", record, reason);
+  };
+  const confirmObservation = async (k: string, record: State, profile: DelegatedRetentionProfile) => {
+    const rpc = await profile.connect(record.threadId, false, true);
+    try {
+      const data: any = await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false });
+      if (!data?.thread) throw Error("Official delegation history is unavailable");
+      try { assertManagedThread(data.thread, record.threadId, record.parentThreadId); }
+      catch { discardObservation(k, record, "ownership_changed"); return; }
+      const first = await readFirstResultTurn(rpc, record.threadId);
+      if (first?.id === record.pendingFirstTurnId) return await finishEnrollment(k, record, data.thread, rpc, true);
+      if (first || record.dueAt <= now()) discardObservation(k, record, first ? "not_first_turn" : "first_turn_unavailable");
+    } finally { await rpc.close(); }
+  };
   const api = {
     enroll(slot: number, parentThreadId: string | undefined, threadId: string, firstWebTurnId?: string) {
       return serial(async () => {
@@ -137,48 +180,35 @@ export function createDelegatedRetention(input: {
           // it or its archive state, and need not start another history reader.
           if (existing) {
             if (existing.parentThreadId !== parentThreadId) throw Error("Delegation lineage changed");
-            return existing;
+            return existing.pendingFirstTurnId === undefined ? existing : { enrolled: false, reason: "first_turn_pending" };
           }
         }
-        const nameWebChat = standalone || firstWebTurnId !== undefined;
+        const nameWebChat = standalone || firstWebTurnId !== undefined || existing?.pendingFirstTurnId !== undefined;
         const rpc = await profile.connect(threadId, false, nameWebChat);
         try {
           const data: any = await rpc.request("thread/read", { threadId, includeTurns: false });
           assertManagedThread(data?.thread, threadId, parentThreadId);
-          if (existing && settledAt(existing) == null) return existing;
+          if (existing && settledAt(existing) == null && existing.pendingFirstTurnId === undefined) return existing;
           if (standalone && (typeof data.thread.model !== "string"
             || !/^chatgpt-tela-web\/family\/[a-f0-9]{20}$/.test(data.thread.model))) {
             throw Error("The selected standalone chat does not have a Web model");
           }
-          if (firstWebTurnId !== undefined) {
-            const first: any = await rpc.request("thread/turns/list", {
-              threadId, limit: 1, sortDirection: "asc", itemsView: "notLoaded",
-            });
-            if (!first?.data?.[0]?.id) throw Error("Official first turn is unavailable");
-            // A later model switch or an old restored chat is not creation consent.
-            if (first?.data?.[0]?.id !== firstWebTurnId) return { enrolled: false, reason: "not_first_turn" };
-          }
           const enrolledAt = now();
-          const record: State = { version: 1, scope, slot, ...(standalone ? {} : { parentThreadId }), threadId, enrolledAt, dueAt: enrolledAt + 7 * DAY,
-            ...(typeof data.thread.name === "string" ? { title: data.thread.name.slice(0, 200) } : {}) };
-          save(k, record);
-          event("delegation_retention_enrolled", record);
-          if (nameWebChat && !record.title?.trimStart().startsWith("[Tela Agent]")) {
-            const summary = record.title?.trim()
-              || (typeof data.thread.preview === "string" ? data.thread.preview.trim().split(/\r?\n/, 1)[0] : undefined)
-              || "Web task";
-            const name = `[Tela Agent] ${summary}`.slice(0, 200);
-            try {
-              await rpc.request("thread/name/set", { threadId, name });
-              save(k, { ...record, title: name });
-              return { ...record, title: name };
-            } catch (error) {
-              emitDiagnosticEvent("chatgpt_tela_codex", "delegation_title_update_failed", {
-                slot, thread_fingerprint: hash(threadId), ...diagnosticFailureFields(error),
-              });
+          const record: State = existing?.pendingFirstTurnId !== undefined ? existing : {
+            version: 1, scope, slot, ...(standalone ? {} : { parentThreadId }), threadId, enrolledAt, dueAt: enrolledAt + 7 * DAY,
+          };
+          if (firstWebTurnId !== undefined) {
+            const first = await readFirstResultTurn(rpc, threadId).catch(error => { report(error); });
+            if (!first) {
+              const pending = { ...record, pendingFirstTurnId: firstWebTurnId };
+              save(k, pending);
+              event("delegation_retention_observed", pending, "first_turn_pending");
+              return { enrolled: false, reason: "first_turn_pending" };
             }
+            // A later model switch or an old restored chat is not creation consent.
+            if (first.id !== firstWebTurnId) return { enrolled: false, reason: "not_first_turn" };
           }
-          return record;
+          return await finishEnrollment(k, record, data.thread, rpc, nameWebChat);
         } finally { await rpc.close(); }
       });
     },
@@ -188,7 +218,7 @@ export function createDelegatedRetention(input: {
         signal?.throwIfAborted();
         const profile = input.profile(slot), scope = hash(profile.scope);
         const record = records.get(key(scope, id(threadId)));
-        if (!record || record.slot !== slot
+        if (!record || record.pendingFirstTurnId !== undefined || record.slot !== slot
           || (parentThreadId === null ? record.releasedAt != null : record.parentThreadId !== parentThreadId)) {
           throw Error("Register the selected Web delegation first");
         }
@@ -216,7 +246,7 @@ export function createDelegatedRetention(input: {
       return serial(async () => {
         const profile = input.profile(slot), scope = hash(profile.scope), k = key(scope, requested.threadId);
         const record = records.get(k);
-        if (resolveRegistered && (!record || record.slot !== slot || record.releasedAt != null)) {
+        if (record?.pendingFirstTurnId !== undefined || resolveRegistered && (!record || record.slot !== slot || record.releasedAt != null)) {
           throw Error("Register the selected Web delegation first");
         }
         const parent = resolveRegistered ? record?.parentThreadId : undefined;
@@ -245,26 +275,34 @@ export function createDelegatedRetention(input: {
       });
     },
     listForParent(slot: number, parentThreadId: string) {
-      id(parentThreadId);
-      const scope = hash(input.profile(slot).scope);
-      const tracked = [...records.values()]
-        .filter(record => record.slot === slot && record.scope === scope
-          && record.parentThreadId === parentThreadId && record.releasedAt == null)
-        .sort((a, b) => b.enrolledAt - a.enrolledAt)
-        .map(record => ({
-          threadId: record.threadId, title: record.title, enrolledAt: record.enrolledAt,
-          dueAt: record.dueAt, archivedAt: record.archivedAt,
-          ...(record.acknowledgement ? { lastReceipt: {
-            turnId: record.acknowledgement.result.turnId,
-            outcome: record.acknowledgement.result.outcome,
-            acknowledgedAt: record.acknowledgement.acknowledgedAt,
-          } } : {}),
-        }));
-      return { slot, tracked };
+      return serial(async () => {
+        id(parentThreadId);
+        const profile = input.profile(slot), scope = hash(profile.scope);
+        const belongsToParent = (record: State) => record.slot === slot && record.scope === scope
+          && record.parentThreadId === parentThreadId && record.releasedAt == null;
+        for (const [k, record] of records) {
+          if (belongsToParent(record) && record.pendingFirstTurnId !== undefined) {
+            await confirmObservation(k, record, profile).catch(report);
+          }
+        }
+        const tracked = [...records.values()]
+          .filter(record => belongsToParent(record) && record.pendingFirstTurnId === undefined)
+          .sort((a, b) => b.enrolledAt - a.enrolledAt)
+          .map(record => ({
+            threadId: record.threadId, title: record.title, enrolledAt: record.enrolledAt,
+            dueAt: record.dueAt, archivedAt: record.archivedAt,
+            ...(record.acknowledgement ? { lastReceipt: {
+              turnId: record.acknowledgement.result.turnId,
+              outcome: record.acknowledgement.result.outcome,
+              acknowledgedAt: record.acknowledgement.acknowledgedAt,
+            } } : {}),
+          }));
+        return { slot, tracked };
+      });
     },
     status(includeTracked = false) {
       const observedAt = now();
-      const open = [...records].filter(([, record]) => settledAt(record) == null);
+      const open = [...records].filter(([, record]) => settledAt(record) == null && record.pendingFirstTurnId === undefined);
       const overdue = open.filter(([, r]) => r.dueAt <= observedAt).map(([trackingId, r]) => ({
         trackingId, enrolledAt: r.enrolledAt, slot: r.slot, threadId: r.threadId, title: r.title, dueAt: r.dueAt,
         reason: r.archivePending ? "archive_unconfirmed" : r.issue ?? "overdue",
@@ -285,7 +323,7 @@ export function createDelegatedRetention(input: {
     stopTracking(trackingId: string, enrolledAt: number) {
       return serial(async () => {
         const record = records.get(trackingId), observedAt = now();
-        if (!record || record.enrolledAt !== enrolledAt || settledAt(record) != null || record.dueAt > observedAt) {
+        if (!record || record.pendingFirstTurnId !== undefined || record.enrolledAt !== enrolledAt || settledAt(record) != null || record.dueAt > observedAt) {
           throw Error("The selected cleanup entry is no longer pending");
         }
         // This releases the local entry even if its original profile is unavailable.
@@ -301,15 +339,25 @@ export function createDelegatedRetention(input: {
     reconcile(slot?: number, scheduled = false) {
       return serial(async () => {
         const outcomes: { threadId: string; status: string }[] = [];
-        for (const [k, record] of records) {
+        for (const [k, stored] of records) {
+          let record = stored;
           if (slot != null && record.slot !== slot || settledAt(record) != null) continue;
           if (record.archivePending) { outcomes.push({ threadId: record.threadId, status: "archive_unconfirmed" }); continue; }
-          if (record.dueAt > now() || scheduled && (record.reviewAfter ?? 0) > now()) continue;
+          const due = record.dueAt <= now();
+          if (!due && (scheduled || record.pendingFirstTurnId === undefined)
+            || scheduled && (record.reviewAfter ?? 0) > now()) continue;
           let rpc: CodexAppServerRpc | undefined, reason = "profile_unavailable";
           try {
             const profile = input.profile(record.slot);
             reason = "ownership_changed";
             if (hash(profile.scope) !== record.scope) throw Error("Configured profile ownership changed");
+            if (record.pendingFirstTurnId !== undefined) {
+              reason = "first_turn_unavailable";
+              const confirmed = await confirmObservation(k, record, profile);
+              if (!confirmed) continue;
+              record = confirmed;
+              if (!due) continue;
+            }
             reason = "owner_unavailable";
             rpc = await profile.connect(record.threadId, true);
             // The installed engine acquires its writer here. Another owner must
@@ -361,7 +409,13 @@ export function createDelegatedRetention(input: {
             // a twelve-hour maintenance review; real lifecycle events can wake
             // it earlier. Never interrupt the official owner or retry a mutation
             // whose execution is uncertain.
-            if (records.get(k)?.archivePending) {
+            if (record.pendingFirstTurnId !== undefined) {
+              if (records.get(k)?.pendingFirstTurnId !== undefined) {
+                if (now() - record.enrolledAt >= METADATA_RETENTION) discardObservation(k, record, reason);
+                else if (due && (record.reviewAfter ?? 0) <= now()) save(k, { ...record, reviewAfter: now() + HALF_DAY });
+              }
+              if (record.reviewAfter === undefined) report(error);
+            } else if (records.get(k)?.archivePending) {
               report(error);
               outcomes.push({ threadId: record.threadId, status: "archive_unconfirmed" });
             } else {

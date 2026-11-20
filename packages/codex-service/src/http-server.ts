@@ -136,7 +136,7 @@ export async function startCodexServiceHttpServer(input: {
           if (!validSlot) return error(400, "Invalid delegation profile");
           if (body.action === "list-tracked") {
             if (typeof body.parentThreadId !== "string") return error(400, "Invalid delegation coordinator");
-            return Response.json(manager.listForParent(body.slot, body.parentThreadId), { headers: { "cache-control": "no-store" } });
+            return Response.json(await manager.listForParent(body.slot, body.parentThreadId), { headers: { "cache-control": "no-store" } });
           }
           const useRegistration = body.registered === true && body.standalone === undefined && body.parentThreadId === undefined
             && (body.action === "read-result" || body.action === "acknowledge");
