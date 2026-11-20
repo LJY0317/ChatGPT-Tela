@@ -182,18 +182,20 @@ export function createDelegatedRetention(input: {
         } finally { await rpc.close(); }
       });
     },
-    readResult(slot: number, parentThreadId: string | undefined, threadId: string, signal?: AbortSignal) {
+    // A null owner resolves the already-verified lineage from the exact registration.
+    readResult(slot: number, parentThreadId: string | undefined | null, threadId: string, signal?: AbortSignal) {
       return serial(async () => {
         signal?.throwIfAborted();
         const profile = input.profile(slot), scope = hash(profile.scope);
         const record = records.get(key(scope, id(threadId)));
-        if (!record || record.slot !== slot || record.parentThreadId !== parentThreadId) {
+        if (!record || record.slot !== slot
+          || (parentThreadId === null ? record.releasedAt != null : record.parentThreadId !== parentThreadId)) {
           throw Error("Register the selected Web delegation first");
         }
         const rpc = await profile.connect(threadId, false);
         try {
           const data: any = await rpc.request("thread/read", { threadId, includeTurns: false }, signal);
-          assertManagedThread(data?.thread, threadId, parentThreadId);
+          assertManagedThread(data?.thread, threadId, record.parentThreadId);
           const turn = await readLatestResultTurn(rpc, threadId, signal);
           if (turn === undefined) return { threadId, outcome: "pending" as const };
           const turnId = id(turn.id);
@@ -209,10 +211,15 @@ export function createDelegatedRetention(input: {
         } finally { await rpc.close(); }
       });
     },
-    acknowledge(slot: number, result: ResultReference) {
+    acknowledge(slot: number, requested: ResultReference, resolveRegistered = false) {
       return serial(async () => {
-        const profile = input.profile(slot), scope = hash(profile.scope), k = key(scope, result.threadId);
+        const profile = input.profile(slot), scope = hash(profile.scope), k = key(scope, requested.threadId);
         const record = records.get(k);
+        if (resolveRegistered && (!record || record.slot !== slot || record.releasedAt != null)) {
+          throw Error("Register the selected Web delegation first");
+        }
+        const parent = resolveRegistered ? record?.parentThreadId : undefined;
+        const result = parent === undefined ? requested : { ...requested, parentThreadId: parent };
         if (result.parentThreadId === undefined && (!record || record.parentThreadId !== undefined)) {
           throw Error("Register the selected standalone Web chat first");
         }

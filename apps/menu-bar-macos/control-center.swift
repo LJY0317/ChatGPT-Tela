@@ -2032,12 +2032,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       defer { managingWebTask = false; renderCurrentPage() }
       do {
         guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "ChatGPTTelaControlCenter", code: 2) }
-        let target: [String: Any] = ["standalone": true, "threadId": threadId, "slot": slot]
         if readAnswer {
-          try await showWebTaskAnswer(descriptor, target: target, threadId: threadId)
+          try await showWebTaskAnswer(descriptor, slot: slot, threadId: threadId)
         } else {
           _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
-            body: target.merging(["action": "enroll"]) { _, current in current })
+            body: ["action": "enroll", "standalone": true, "threadId": threadId, "slot": slot])
           webTaskMessage = "Web task tracked."
         }
       } catch {
@@ -2049,8 +2048,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func showWebTaskAnswer(_ descriptor: ControlCenterServiceDescriptor,
-                                 target: [String: Any], threadId: String) async throws {
+                                 slot: Int, threadId: String) async throws {
     let path = "v1/codex/delegations"
+    let target: [String: Any] = ["registered": true, "threadId": threadId, "slot": slot]
     let data = try await request(descriptor, path: path, method: "POST",
       body: target.merging(["action": "read-result"]) { _, current in current })
     let result = try JSONDecoder().decode(TelaWebTaskResult.self, from: data)

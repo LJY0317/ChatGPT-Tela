@@ -133,15 +133,17 @@ export async function startCodexServiceHttpServer(input: {
             return Response.json(await manager.stopTracking(body.trackingId, body.enrolledAt));
           }
           if (!validSlot) return error(400, "Invalid delegation profile");
-          const validOwner = body.standalone === true ? body.parentThreadId === undefined
-            : body.standalone === undefined && typeof body.parentThreadId === "string";
+          const useRegistration = body.registered === true && body.standalone === undefined && body.parentThreadId === undefined
+            && (body.action === "read-result" || body.action === "acknowledge");
+          const validOwner = useRegistration || (body.registered === undefined && (body.standalone === true
+            ? body.parentThreadId === undefined : body.standalone === undefined && typeof body.parentThreadId === "string"));
           if (!validOwner || typeof body.threadId !== "string") return error(400, "Invalid delegation identity");
           if (body.action === "observe-web-child" && typeof body.turnId === "string" && typeof body.parentThreadId === "string") {
             return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId, body.turnId));
           }
           if (body.action === "enroll") return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId));
           if (body.action === "read-result") {
-            return Response.json(await manager.readResult(body.slot, body.parentThreadId, body.threadId, request.signal),
+            return Response.json(await manager.readResult(body.slot, useRegistration ? null : body.parentThreadId, body.threadId, request.signal),
               { headers: { "cache-control": "no-store" } });
           }
           if (body.action === "acknowledge" && typeof body.turnId === "string"
@@ -150,7 +152,7 @@ export async function startCodexServiceHttpServer(input: {
               ...(body.parentThreadId === undefined ? {} : { parentThreadId: body.parentThreadId }),
               threadId: body.threadId, turnId: body.turnId,
               ...(body.outcome === "answer" ? { outcome: "answer", itemId: body.itemId } : { outcome: body.outcome }),
-            }));
+            }, useRegistration));
           }
           return error(400, "Invalid delegation action");
         }

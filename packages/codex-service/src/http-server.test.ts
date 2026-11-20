@@ -551,13 +551,13 @@ test("private service forwards exact selected preview and explicit reveal withou
   } finally {await client.close(); await server.close();}
 });
 
-test("owned management client connects observed Web creation, acknowledgement and due archive without a Native turn", async () => {
+test("tracked Web child supports result collection and due archive without a Native turn", async () => {
   const directory = mkdtempSync(join(tmpdir(), "tela-retention-http-"));
   let now = 1_000_000_000;
   const methods: string[] = [];
   const manager = createDelegatedRetention({ directory: join(directory, "records"), acknowledgementDirectory: join(directory, "ack"),
     automatic: false, now: () => now,
-    profile(slot) { expect(slot).toBe(2); return { scope: "installed-profile-two", async connect() { return {
+    profile(slot) { return { scope: `installed-profile-${slot}`, async connect() { expect(slot).toBe(2); return {
       async close() {}, async request(method: string, params?: any): Promise<any> {
         methods.push(method);
         const thread = { id: "child", status: { type: "idle" }, source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } };
@@ -575,9 +575,10 @@ test("owned management client connects observed Web creation, acknowledgement an
     installId: "fixture", pid: process.pid, endpoint: server.endpoint.href, bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
   try {
     await client.manageDelegation({ action: "observe-web-child", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn" });
-    const snapshot = await fetch(new URL("v1/codex/delegations", server.endpoint), {
-      headers: { authorization: `Bearer ${server.bearerToken}` },
-    });
+    const url = new URL("v1/codex/delegations", server.endpoint);
+    const headers = { authorization: `Bearer ${server.bearerToken}` };
+    const post = (body: Record<string, unknown>) => fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+    const snapshot = await fetch(url, { headers });
     expect(await snapshot.json()).toEqual({ overdue: [], automaticDeleteEnabled: false });
     const blockedRead = await fetch(new URL("v1/codex/delegations", server.endpoint));
     expect(blockedRead.status).toBe(401);
@@ -590,15 +591,22 @@ test("owned management client connects observed Web creation, acknowledgement an
       method: "POST", body: JSON.stringify({ action: "read-result", slot: 2, parentThreadId: "parent", threadId: "child" }),
     });
     expect(unauthorizedAnswer.status).toBe(401);
-    expect(await client.manageDelegation({ action: "acknowledge", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer" }))
-      .toMatchObject({ enrolled: true, automaticArchiveEnabled: true, automaticDeleteEnabled: false });
+    const target = { registered: true, slot: 2, threadId: "child" };
+    const beforeWrongProfile = methods.length;
+    expect((await post({ ...target, action: "read-result", slot: 1 })).ok).toBe(false);
+    expect((await post({ ...target, action: "read-result", parentThreadId: "parent" })).status).toBe(400);
+    expect(methods).toHaveLength(beforeWrongProfile);
+    const viewed = await post({ ...target, action: "read-result" });
+    expect(await viewed.json()).toEqual({ threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer", text: "fixture response" });
+    expect(readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8")).toBe(enrolled);
+    const receipt = await post({ ...target, action: "acknowledge", turnId: "turn", outcome: "answer", itemId: "answer" });
+    expect(await receipt.json()).toMatchObject({ enrolled: true, automaticArchiveEnabled: true, automaticDeleteEnabled: false,
+      acknowledgement: { result: { parentThreadId: "parent" } } });
     now += 12 * 3_600_000;
     expect(await client.manageDelegation({ action: "reconcile" })).toEqual({ outcomes: [{ threadId: "child", status: "archived" }], automaticDeleteEnabled: false });
     expect(methods).not.toContain("turn/start"); expect(methods).not.toContain("thread/delete");
     await client.manageDelegation({ action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" });
     now += 7 * 24 * 3_600_000;
-    const url = new URL("v1/codex/delegations", server.endpoint);
-    const headers = { authorization: `Bearer ${server.bearerToken}` };
     const pending = (await (await fetch(url, { headers })).json()).overdue[0]!;
     const body = JSON.stringify({ action: "stop-tracking", trackingId: pending.trackingId, enrolledAt: pending.enrolledAt });
     const beforeRelease = methods.length;
