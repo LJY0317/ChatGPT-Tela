@@ -35,6 +35,7 @@ export interface BrowserTurnRunInput {
   /** Provider-operation tool result wait; independent of any Native turn authority. */
   readonly isToolExecutionPending?: () => boolean;
   readonly onSubmitted?: (surface: BrowserSurfaceLease, handle: WebTurnHandle) => void;
+  readonly beforeSend?: WebTurnRequest["beforeSend"];
   /** Non-submit surface preparation that must finish immediately before provider submission. */
   readonly prepareForSubmit?: (
     surface: BrowserSurfaceLease,
@@ -212,6 +213,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
       nativeTurnId: turnId,
       webEpochId: input.webEpochId,
       physicalContext: input.physicalContext,
+      ...(input.beforeSend ? { beforeSend: input.beforeSend } : {}),
       ...(attachmentReference ? { contextAttachment: attachmentReference } : {}),
       ...(input.media ? { media: input.media } : {}),
       ...(input.chatTools ? { chatTools: input.chatTools } : {}),

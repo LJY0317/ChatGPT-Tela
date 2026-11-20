@@ -3,7 +3,7 @@ import { contextHistorySelection } from "@chatgpt-tela/mcp";
 import { createHash } from "node:crypto";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { NativeHistoryBootstrapRequired, encodeNativeToolInvocation, extractNativeToolResults, parseNativeTurnClaim, parseNativeTurnReplayIdentity } from "@chatgpt-tela/codex";
-import { CONTEXT_HISTORY_TOOL, NativeToolInventory, NativeWebHandoffUnproven, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticContext, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, startTurnDiagnosticSummary, withDiagnosticContext, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
+import { CONTEXT_HISTORY_TOOL, NativeToolInventory, NativeWebHandoffUnproven, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticContext, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, startTurnDiagnosticSummary, webSubmissionFailureReason, withDiagnosticContext, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
 import type { TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import { selectChatGptWebModel, type WebConversationProvider } from "@chatgpt-tela/chatgpt";
 import type { ResponsesGateway } from "@chatgpt-tela/responses";
@@ -17,10 +17,11 @@ import {
   nativeRequestContentSource, type SuppliedRequestWebTurnPlanner,
 } from "./native-request-planner";
 import type { DevelopmentWebTurnPlan } from "./runtime";
-import type { SuppliedCompletedResult } from "./native-visible-prefix-journal";
+import type { SuppliedCompletedResult, SuppliedResultIdentity } from "./native-visible-prefix-journal";
 
 export interface SuppliedResultStore {
-  readSuppliedResult(identity: Omit<SuppliedCompletedResult, "answer">): Promise<SuppliedCompletedResult | undefined>;
+  readSuppliedResult(identity: SuppliedResultIdentity): Promise<SuppliedCompletedResult | undefined>;
+  recordSuppliedSend(identity: SuppliedResultIdentity, previousRequestFingerprint?: string): Promise<void>;
   preserveSuppliedResult(result: SuppliedCompletedResult, previousRequestFingerprint?: string): Promise<boolean>;
 }
 export type SuppliedResultScope = {
@@ -36,6 +37,7 @@ interface Operation {
   historyReleasedBytes?: number;
   readonly turnId: string;
   fingerprint: string;
+  readonly initialFingerprint: string;
   readonly previousRequestFingerprint?: string;
   readonly capability: string;
   readonly listeners: Set<(summary: string) => void | boolean>;
@@ -46,6 +48,7 @@ interface Operation {
   offer: (outcome: NativeGatewayOutcome) => void;
   armContinuation?: (callId: string) => Promise<void>;
   failed?: true;
+  unresolvedRecordedSend?: true;
   preserved?: boolean;
   finishedAt?: number;
   delivered: boolean;
@@ -194,6 +197,7 @@ export function createSuppliedRequestGateway(input: {
       }
       if (operation?.turnId === identity.turnId) {
         if (operation.fingerprint !== hash) {
+          if (operation.unresolvedRecordedSend) return await operation.outcome;
           const outstanding = operation.round.pending;
           if (!operation.delivered || !outstanding)
             throw new Error("Web request changed within the same response operation");
@@ -231,7 +235,7 @@ export function createSuppliedRequestGateway(input: {
             try {
               operation.preserved = await completedResults!.store.preserveSuppliedResult({
                 ...resultIdentity, answer: final.answer,
-              }, operation.previousRequestFingerprint);
+              }, operation.initialFingerprint);
             } catch (error) {
               emitDiagnosticEvent("chatgpt_tela_work", "provider_result_preservation_failed", {
                 scope_fingerprint: diagnosticFingerprint(identity.threadId), ...diagnosticFailureFields(error),
@@ -256,7 +260,8 @@ export function createSuppliedRequestGateway(input: {
           for (const listener of listeners) { try { if (listener(summary) === false) listeners.delete(listener); } catch { listeners.delete(listener); } }
         };
         const owned: Operation = {
-          cancellation: new AbortController(), threadId: identity.threadId, turnId: identity.turnId, fingerprint: hash, capability, listeners, delivered: false,
+          cancellation: new AbortController(), threadId: identity.threadId, turnId: identity.turnId,
+          fingerprint: hash, initialFingerprint: hash, capability, listeners, delivered: false,
           ...(previousRequestFingerprint ? { previousRequestFingerprint } : {}),
           round: new ExactToolRound(), advertisedGoals, offer,
           outcome: Promise.resolve().then(async () => {
@@ -309,6 +314,13 @@ export function createSuppliedRequestGateway(input: {
                 nativeTurnId: identity.turnId, webEpochId: plan.webEpochId,
                 physicalContext: plan.physicalContext, chatTools, signal: bound.signal, onProgress: publish,
                 isToolExecutionPending: () => owned.round.pending !== undefined,
+                ...(resultIdentity && completedResults ? { beforeSend: async () => {
+                  if (typeof input.completedResults === "function"
+                    && input.completedResults()?.accountFingerprint !== resultIdentity.accountFingerprint) {
+                    throw Error("App-owned Web result storage account binding changed");
+                  }
+                  await completedResults.store.recordSuppliedSend(resultIdentity, owned.previousRequestFingerprint);
+                } } : {}),
                 onSubmitted: (surface, handle) => {
                   owned.armContinuation = async callId => {
                     const proof = await input.provider.armToolContinuation(surface, handle, callId, bound.signal);
@@ -345,7 +357,7 @@ export function createSuppliedRequestGateway(input: {
                   // turn. Preserve the final exact body, not its first frame.
                   owned.preserved = await completedResults!.store.preserveSuppliedResult({
                     ...resultIdentity, requestFingerprint: owned.fingerprint, answer,
-                  }, owned.previousRequestFingerprint);
+                  }, owned.initialFingerprint);
                 } catch (error) {
                   emitDiagnosticEvent("chatgpt_tela_work", "provider_result_preservation_failed", {
                     scope_fingerprint: diagnosticFingerprint(identity.threadId), ...diagnosticFailureFields(error),
@@ -357,6 +369,7 @@ export function createSuppliedRequestGateway(input: {
                 responseSource: "supplied", finishDiagnostics: () => diagnostics?.finish() } } as const;
             } catch (error) {
               owned.failed = true;
+              if (webSubmissionFailureReason(error) === "recorded_send_without_result") owned.unresolvedRecordedSend = true;
               const failureContext = { ...correlation, ...(plan ? { operation_fingerprint: diagnosticFingerprint([identity.threadId, identity.turnId, plan.webEpochId].join("\n")) } : {}) };
               withDiagnosticContext(failureContext, () => emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_failed", {
                 native_authority: false,

@@ -139,6 +139,7 @@ function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure
   const provider: WebConversationProvider = {
     async observeCapabilities() { throw Error("No redundant preflight"); },
     async submitTurn(_surface, turn) {
+      await turn.beforeSend?.();
       submissions.push(turn);
       options.onSubmit?.();
       return { state: "proven", evidence: ["fixture"], value: { nativeTaskId: turn.nativeTaskId,
@@ -266,6 +267,34 @@ test("durably preserved final releases shutdown and replays after gateway restar
   } finally { await first.gateway.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a recorded Web send without a final cannot submit again after restart", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-supplied-uncertain-"));
+  const storage = () => ({ profileSlot: 2, accountFingerprint: "b".repeat(64),
+    store: new FileNativeVisiblePrefixStageJournal({ directory: join(root, "ledger"), initializationPath: join(root, "receipt") }) });
+  const first = fixture({ completedResults: storage(), failure: Error("synthetic observation lost") });
+  try {
+    await expect(first.gateway.handle(request())).rejects.toThrow("synthetic observation lost");
+    expect(first.submissions).toHaveLength(1);
+    await first.gateway.close();
+    const restarted = fixture({ completedResults: storage() });
+    try {
+      for (const body of [request(), request("turn-1", [{ role: "user", content: "Changed request" }])]) {
+        const response = await handleNativeResponsesHttp(new Request("http://127.0.0.1/responses", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...body, stream: false }),
+        }), restarted.gateway);
+        expect(await response.json()).toMatchObject({ error: {
+          code: "tela_web_submission_unproven", reason: "recorded_send_without_result", retryable: false,
+        } });
+      }
+      expect(restarted.acquisitions).toBe(0);
+      expect(restarted.submissions).toHaveLength(0);
+      expect(await restarted.gateway.handle(request("turn-2"))).toMatchObject({ type: "final", answer: "B inspected." });
+      expect(restarted.submissions).toHaveLength(1);
+    } finally { await restarted.gateway.close(); }
+  } finally { await first.gateway.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("unproven Goal result handoff settles the Web operation and rejects an exact replay", async () => {
   let handoffs = 0;
   let toolResult: Promise<unknown> | undefined;
@@ -335,6 +364,7 @@ test("two synthetic tool continuations persist their final request identity acro
     async observeCapabilities() { throw Error("no preflight"); },
     async observeTurn() { throw Error("no preflight"); },
     async submitTurn(_surface, turn) {
+      await turn.beforeSend?.();
       submissions++; capability = turn.chatTools!.nativeGoalControl!;
       return { state: "proven", evidence: ["fixture"], value: {
         nativeTaskId: turn.nativeTaskId, nativeTurnId: turn.nativeTurnId, webEpochId: turn.webEpochId,
@@ -387,7 +417,8 @@ test("two synthetic tool continuations persist their final request identity acro
 
 test("failed final preservation leaves undelivered completion blocking shutdown", async () => {
   const f = fixture({ completedResults: { profileSlot: 2, accountFingerprint: "b".repeat(64),
-    store: { async readSuppliedResult() { return undefined; }, async preserveSuppliedResult() { return false; } } } });
+    store: { async readSuppliedResult() { return undefined; }, async recordSuppliedSend() {},
+      async preserveSuppliedResult() { return false; } } } });
   try {
     expect(await f.gateway.handle(request())).toMatchObject({ type: "final", answer: "A inspected." });
     expect(f.gateway.shutdownReadiness()).toBe("blocked");
@@ -402,6 +433,7 @@ test("exact host rejoin preserves a completed final after a transient storage fa
   const f = fixture({ completedResults: { profileSlot: 2, accountFingerprint: "b".repeat(64),
     store: {
       async readSuppliedResult() { return undefined; },
+      async recordSuppliedSend() {},
       async preserveSuppliedResult(result) {
         writes++;
         if (writes === 1) throw Error("synthetic storage unavailable");
@@ -431,6 +463,7 @@ test("account changes during Web execution do not persist a final, while HTTP st
     profileSlot: 2, accountFingerprint: account,
     store: {
       async readSuppliedResult() { return undefined; },
+      async recordSuppliedSend() {},
       async preserveSuppliedResult() { preserved++; return true; },
     },
   }) });

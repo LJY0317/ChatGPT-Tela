@@ -2,6 +2,7 @@
 export const WEB_SUBMISSION_PROOF_REASONS = [
   "author_root_missing", "ambiguous_author_root", "author_payload_empty",
   "author_payload_budget", "author_payload_unavailable", "new_author_unavailable",
+  "recorded_send_without_result",
 ] as const;
 export type WebSubmissionProofReason = typeof WEB_SUBMISSION_PROOF_REASONS[number];
 
@@ -19,7 +20,7 @@ export class WebSubmissionUnproven extends Error {
   readonly code = "tela_web_submission_unproven";
   readonly retryable = false;
   constructor(readonly reason: WebSubmissionProofReason) {
-    super("Web submission outcome is uncertain: local acceptance proof timed out; do not resend this operation");
+    super("Web submission outcome is uncertain; do not resend this operation");
     this.name = "WebSubmissionUnproven";
   }
 }

@@ -970,6 +970,26 @@ describe("ChatGPT semantic provider", () => {
     }
   });
 
+  test("a failed durable send record clears the prepared composer without activating send", async () => {
+    const driver = new FixtureDriver(fixture("ready-new-chat"));
+    const surface = await leaseFor(driver);
+    const provider = new ChatGptSemanticProvider();
+    try {
+      await expect(provider.submitTurn(surface.lease, {
+        ...request(),
+        async beforeSend() {
+          expect(driver.current.composers[0]?.textLength).toBeGreaterThan(0);
+          expect(driver.activated).toEqual([]);
+          throw new Error("Could not record Web submission");
+        },
+      })).rejects.toThrow("Could not record Web submission");
+      expect(driver.current.composers[0]?.textLength).toBe(0);
+      expect(driver.activated).toEqual([]);
+    } finally {
+      await surface.host.close();
+    }
+  });
+
   test("Work send requires a fresh Temporary Chat and rechecks the surface before activation", async () => {
     const saved = new FixtureDriver(fixture("ready-new-chat"));
     const savedSurface = await leaseFor(saved);

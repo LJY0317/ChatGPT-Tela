@@ -21,7 +21,9 @@ export function webContinuityRecovery(error: unknown) {
     retryable: false as const,
     recovery: { kind: "reconcile_web_submission" as const, requires_user_action: true as const,
       requires_new_native_turn: true as const, original_history_preserved: true as const },
-    message: "The Web message may have been accepted, but local verification failed. Do not resend it. Reconcile the existing submission before continuing with a new authorized Native turn. Prepared context and original history are preserved.",
+    message: submissionReason === "recorded_send_without_result"
+      ? "This Web request may already have been sent. No verified answer is available. Check the original Web conversation before sending it again."
+      : "The Web message may have been accepted, but local verification failed. Do not resend it. Reconcile the existing submission before continuing with a new authorized Native turn. Prepared context and original history are preserved.",
   };
   const reason = webRetainedContextFailureReason(error);
   if (!reason) return undefined;

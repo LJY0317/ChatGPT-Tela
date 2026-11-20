@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { emitDiagnosticEvent } from "@chatgpt-tela/core";
+import { emitDiagnosticEvent, WebSubmissionUnproven } from "@chatgpt-tela/core";
 import { mkdir, lstat, open, readdir, unlink } from "node:fs/promises";
 import { basename, dirname, resolve, relative, isAbsolute, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -31,33 +31,37 @@ interface PublishedEntry extends PublishedNativeWorkingCheckpoint {
   readonly contentHash: string;
   readonly updatedAt: number;
 }
-export interface SuppliedCompletedResult {
+export interface SuppliedResultIdentity {
   readonly profileSlot: number;
   readonly accountFingerprint: string;
   readonly threadId: string;
   readonly turnId: string;
   readonly requestFingerprint: string;
+}
+export interface SuppliedCompletedResult extends SuppliedResultIdentity {
   readonly answer: string;
 }
-interface StoredSuppliedResult extends Omit<SuppliedCompletedResult, "answer"> {
+interface StoredSuppliedResult extends SuppliedResultIdentity {
   readonly answer?: string;
   readonly answerHash: string;
   readonly updatedAt: number;
 }
 interface State { version: 1; entries: Entry[]; checkpoints?: PublishedEntry[]; suppliedResults?: StoredSuppliedResult[] }
 function sha(value: string): string { return createHash("sha256").update(value).digest("hex"); }
-function validSupplied(value: SuppliedCompletedResult): boolean {
+// Final answers must be nonempty. Older readers already treat a bodyless record
+// as a receipt that forbids replay, so rollback remains fail-closed.
+const SUPPLIED_SEND_WITHOUT_FINAL = sha("");
+function validSuppliedIdentity(value: SuppliedResultIdentity): boolean {
   return Number.isSafeInteger(value.profileSlot) && value.profileSlot >= 1 && value.profileSlot <= 99
     && /^[a-f0-9]{64}$/.test(value.accountFingerprint)
     && typeof value.threadId === "string" && value.threadId.length > 0 && value.threadId.length <= 256
     && typeof value.turnId === "string" && value.turnId.length > 0 && value.turnId.length <= 256
-    && /^[a-f0-9]{64}$/.test(value.requestFingerprint)
-    && typeof value.answer === "string" && !!value.answer.trim();
+    && /^[a-f0-9]{64}$/.test(value.requestFingerprint);
 }
 function validStoredSupplied(value: StoredSuppliedResult): boolean {
-  return validSupplied({ ...value, answer: value.answer ?? "preserved completion" })
-    && (value.answer === undefined || sha(value.answer) === value.answerHash)
-    && /^[a-f0-9]{64}$/.test(value.answerHash);
+  return validSuppliedIdentity(value) && /^[a-f0-9]{64}$/.test(value.answerHash)
+    && (value.answer === undefined
+      || typeof value.answer === "string" && !!value.answer.trim() && sha(value.answer) === value.answerHash);
 }
 function suppliedKey(value: Pick<SuppliedCompletedResult, "profileSlot" | "accountFingerprint" | "threadId" | "turnId">): string {
   return JSON.stringify([value.profileSlot, value.accountFingerprint, value.threadId, value.turnId]);
@@ -306,8 +310,8 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     void run.finally(() => { if (queues.get(this.directory) === run) queues.delete(this.directory); }).catch(() => {});
     return run;
   }
-  async readSuppliedResult(identity: Omit<SuppliedCompletedResult, "answer">): Promise<SuppliedCompletedResult | undefined> {
-    if (!validSupplied({ ...identity, answer: "placeholder" })) throw Error("Invalid supplied result identity");
+  async readSuppliedResult(identity: SuppliedResultIdentity): Promise<SuppliedCompletedResult | undefined> {
+    if (!validSuppliedIdentity(identity)) throw Error("Invalid supplied result identity");
     return this.#transaction(async state => {
       const stored = state.suppliedResults?.find(item => suppliedKey(item) === suppliedKey(identity));
       if (stored && Date.now() - stored.updatedAt > RETENTION_MS) {
@@ -317,10 +321,26 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
         return undefined;
       }
       if (!stored) return undefined;
+      if (stored.answerHash === SUPPLIED_SEND_WITHOUT_FINAL) throw new WebSubmissionUnproven("recorded_send_without_result");
       if (stored.requestFingerprint !== identity.requestFingerprint) throw Error("Web request changed within the same response operation");
       if (stored.answer === undefined) throw Error("Completed Web response is no longer retained; resubmission denied");
       const { answerHash: _hash, updatedAt: _time, ...result } = stored;
       return Object.freeze(result) as SuppliedCompletedResult;
+    });
+  }
+  async recordSuppliedSend(identity: SuppliedResultIdentity, previousRequestFingerprint?: string): Promise<void> {
+    if (!validSuppliedIdentity(identity)) throw Error("Invalid supplied result identity");
+    await this.#transaction(async state => {
+      const key = suppliedKey(identity);
+      const existing = state.suppliedResults?.find(item => suppliedKey(item) === key);
+      if (existing?.answerHash === SUPPLIED_SEND_WITHOUT_FINAL) throw new WebSubmissionUnproven("recorded_send_without_result");
+      if (existing && (existing.requestFingerprint === identity.requestFingerprint
+        || existing.requestFingerprint !== previousRequestFingerprint)) {
+        throw Error("Web request changed within the same response operation");
+      }
+      state.suppliedResults = [...(state.suppliedResults ?? []).filter(item => suppliedKey(item) !== key),
+        { ...identity, answerHash: SUPPLIED_SEND_WITHOUT_FINAL, updatedAt: Date.now() }];
+      await this.#write(state);
     });
   }
   /** Called on owned profile readiness; no periodic worker or extra storage. */
@@ -332,14 +352,14 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     });
   }
   async preserveSuppliedResult(result: SuppliedCompletedResult, previousRequestFingerprint?: string): Promise<boolean> {
-    if (!validSupplied(result)) return false;
+    if (!validSuppliedIdentity(result) || typeof result.answer !== "string" || !result.answer.trim()) return false;
     return this.#transaction(async state => {
       const key = suppliedKey(result);
       const existing = state.suppliedResults?.find(item => suppliedKey(item) === key);
       // Advance the single turn receipt only from the final the caller actually
       // delivered. Old request frames remain rejected after restart; no new ledger.
       if (existing && (existing.requestFingerprint === result.requestFingerprint
-        ? existing.answerHash !== sha(result.answer)
+        ? existing.answerHash !== SUPPLIED_SEND_WITHOUT_FINAL && existing.answerHash !== sha(result.answer)
         : existing.requestFingerprint !== previousRequestFingerprint)) {
         throw Error("Conflicting supplied response completion");
       }

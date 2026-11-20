@@ -1637,6 +1637,11 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         context_header_attached: false,
         remote_tool_visibility_observed: false,
       });
+      if (request.beforeSend) {
+        await request.beforeSend();
+        signal?.throwIfAborted();
+        assertCausalInputUnchanged?.();
+      }
       sendActivationAttempted = true;
       emitDiagnosticEvent("chatgpt_tela_work", "web_send_activation_started", { phase: "turn", composer_wire_bytes:formatted.composerBytes,
         context_wire_bytes:formatted.contextBytes,protocol_wire_bytes:formatted.protocolBytes });

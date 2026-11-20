@@ -75,6 +75,8 @@ export interface WebPhysicalContext {
 }
 
 export interface WebTurnRequest {
+  /** Persist the original operation immediately before activating Send. */
+  readonly beforeSend?: () => Promise<void>;
   readonly nativeTaskId: string;
   readonly nativeTurnId: string;
   readonly webEpochId: string;
