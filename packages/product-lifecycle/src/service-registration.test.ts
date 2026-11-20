@@ -22,11 +22,19 @@ class LinuxFixtureRunner implements ServiceRegistrationCommandRunner {
   enabled = true;
   readonly calls: Array<readonly [string, readonly string[]]> = [];
   reloadFails = false;
+  removedDefinition?: { path: string; active: string; dropIns?: string };
+  reachable = true;
 
   async run(command: string, arguments_: readonly string[]): Promise<ServiceRegistrationCommandResult> {
     this.calls.push([command, [...arguments_]]);
     if (command !== "systemctl") throw new Error(`unexpected command ${command}`);
     if (arguments_.includes("show")) {
+      if (!this.reachable) return { exitCode: 1, stdout: "", stderr: "user manager is unreachable" };
+      if (arguments_.includes("--all")) {
+        const cached = this.removedDefinition;
+        return { exitCode: cached ? 0 : 1, stderr: "", stdout:
+          `LoadState=${cached ? "loaded" : "not-found"}\nActiveState=${cached?.active ?? "inactive"}\nFragmentPath=${cached?.path ?? ""}\nDropInPaths=${cached?.dropIns ?? ""}\n` };
+      }
       return { exitCode: this.loaded ? 0 : 1, stdout: this.loaded ? "loaded\n" : "not-found\n", stderr: "" };
     }
     if (arguments_.includes("is-enabled")) {
@@ -38,9 +46,9 @@ class LinuxFixtureRunner implements ServiceRegistrationCommandRunner {
       return { exitCode: 0, stdout: "", stderr: "" };
     }
     if (arguments_.includes("daemon-reload")) {
-      return this.reloadFails
-        ? { exitCode: 1, stdout: "", stderr: "reload fixture failure" }
-        : { exitCode: 0, stdout: "", stderr: "" };
+      if (this.reloadFails) return { exitCode: 1, stdout: "", stderr: "reload fixture failure" };
+      delete this.removedDefinition;
+      return { exitCode: 0, stdout: "", stderr: "" };
     }
     throw new Error(`unexpected systemctl args ${arguments_.join(" ")}`);
   }
@@ -382,6 +390,56 @@ describe("service registration ownership", () => {
       expect(runner.calls.some(([, args]) => args.includes("daemon-reload"))).toBe(true);
       expect(() => readFileSync(definitionPath)).toThrow();
       expect(() => readFileSync(markerPath)).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("Linux removal resumes after deleting the unit file without repeating a stop", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-service-linux-remove-resume-"));
+    const manifestPath = join(root, "ownership-v1.json");
+    const definitionPath = join(root, "chatgpt-tela-chat.service");
+    const markerPath = join(root, "marker.json");
+    const runner = new LinuxFixtureRunner();
+    const manifest = createOwnershipManifest("0.0.0");
+    writeOwnershipManifest(manifestPath, manifest);
+    writeFileSync(definitionPath, "[Service]\nExecStart=/fixture/tela chat\n");
+    try {
+      const resource = await recordServiceRegistrationOwnership({
+        manifestPath, installId: manifest.installId, productVersion: manifest.productVersion,
+        resourceId: "chat-service", owner: "chat", registrationId: "chatgpt-tela-chat.service",
+        platform: "linux", markerPath, definitionPath, runner,
+      });
+      const installed = readOwnershipManifest(manifestPath)!;
+      const manager = new ServiceRegistrationManager({ platform: "linux", runner });
+      runner.reloadFails = true;
+      await expect(manager.release(resource, installed)).rejects.toThrow("daemon-reload failed");
+      expect(existsSync(definitionPath)).toBe(false);
+      expect(existsSync(markerPath)).toBe(true);
+      runner.reloadFails = false;
+
+      for (const cached of [
+        { path: definitionPath, active: "active" },
+        { path: join(root, "foreign.service"), active: "inactive" },
+        { path: definitionPath, active: "inactive", dropIns: "/fixture/override.conf" },
+      ]) {
+        runner.removedDefinition = cached;
+        expect(await manager.observe(resource, installed, "remove")).toBe("unknown");
+        expect((await manager.release(resource, installed)).removed).toBe(false);
+      }
+      runner.reachable = false;
+      expect((await manager.release(resource, installed)).removed).toBe(false);
+      expect(existsSync(markerPath)).toBe(true);
+
+      runner.reachable = true;
+      runner.removedDefinition = { path: definitionPath, active: "inactive" };
+      runner.loaded = true;
+      expect(await manager.observe(resource, installed)).toBe("ownership-drift");
+      expect(await manager.observe(resource, installed, "remove")).toBe("owned");
+      expect((await manager.release(resource, installed)).removed).toBe(true);
+      expect(existsSync(markerPath)).toBe(false);
+      expect(runner.calls.filter(([, args]) => args.includes("disable"))).toHaveLength(1);
+      expect(runner.calls.filter(([, args]) => args.includes("daemon-reload"))).toHaveLength(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -226,9 +226,31 @@ async function serviceLoaded(
   }
   if (identity.platform === "linux") {
     const result = await runner.run("systemctl", ["--user", "show", "--property=LoadState", "--value", resource.registrationId]);
-    return result.exitCode === 0 && result.stdout.trim() !== "not-found" && result.stdout.trim() !== "";
+    const state = result.stdout.trim();
+    if (state === "not-found") return false;
+    if (result.exitCode !== 0 || !state) throw Error("systemd user service inspection failed");
+    return true;
   }
   return (await windowsFingerprint(runner, resource.registrationId)).exists;
+}
+
+/** A prior removal may have deleted the file before clearing systemd's cached unit. */
+async function linuxRemovedDefinitionState(
+  resource: ServiceRegistrationResource,
+  runner: ServiceRegistrationCommandRunner,
+): Promise<"missing" | "cached" | "unproven"> {
+  const response = await runner.run("systemctl", ["--user", "show", "--all",
+    "--property=LoadState,ActiveState,FragmentPath,DropInPaths", resource.registrationId]);
+  const fields = new Map(response.stdout.split(/\r?\n/).flatMap(line => {
+    const separator = line.indexOf("=");
+    return separator < 0 ? [] : [[line.slice(0, separator), line.slice(separator + 1)] as const];
+  }));
+  const active = fields.get("ActiveState"), source = fields.get("FragmentPath");
+  const load = fields.get("LoadState");
+  if ((active !== "inactive" && active !== "failed") || fields.get("DropInPaths") !== "") return "unproven";
+  if (load === "not-found" && source === "") return "missing";
+  if (response.exitCode === 0 && load === "loaded" && source === resource.identity!.definitionPath) return "cached";
+  return "unproven";
 }
 
 async function linuxServiceEnabled(
@@ -532,7 +554,9 @@ export class ServiceRegistrationManager {
     this.#platform = input.platform ?? process.platform;
   }
 
-  async observe(resource: ServiceRegistrationResource, manifest: OwnershipManifest): Promise<OwnershipObservation> {
+  async observe(resource: ServiceRegistrationResource, manifest: OwnershipManifest,
+    operation: "control" | "remove" = "control",
+  ): Promise<OwnershipObservation> {
     const identity = resource.identity;
     if (!identity) return "unknown";
     if (identity.platform !== this.#platform) return "unknown";
@@ -542,10 +566,12 @@ export class ServiceRegistrationManager {
     let currentFingerprint: string | undefined;
     let loaded: boolean;
     try {
-      [currentFingerprint, loaded] = await Promise.all([
-        currentDefinitionFingerprint(resource, this.#runner),
-        serviceLoaded(resource, this.#runner),
-      ]);
+      currentFingerprint = await currentDefinitionFingerprint(resource, this.#runner);
+      if (operation === "remove" && ownedMarker && identity.platform === "linux" && currentFingerprint === undefined) {
+        const state = await linuxRemovedDefinitionState(resource, this.#runner);
+        return state === "unproven" ? "unknown" : "owned";
+      }
+      loaded = await serviceLoaded(resource, this.#runner);
     } catch {
       return "unknown";
     }
@@ -555,11 +581,28 @@ export class ServiceRegistrationManager {
   }
 
   async release(resource: ServiceRegistrationResource, manifest: OwnershipManifest): Promise<{ readonly removed: boolean; readonly detail: string }> {
-    if (await this.observe(resource, manifest) !== "owned") {
+    if (await this.observe(resource, manifest, "remove") !== "owned") {
       return Object.freeze({ removed: false, detail: "service registration ownership could not be re-proven" });
     }
     const identity = resource.identity!;
     const currentFingerprint = await currentDefinitionFingerprint(resource, this.#runner);
+    if (identity.platform === "linux" && currentFingerprint === undefined) {
+      const state = await linuxRemovedDefinitionState(resource, this.#runner);
+      if (state === "unproven") {
+        return Object.freeze({ removed: false, detail: "systemd removal could not be confirmed" });
+      }
+      if (state === "cached") {
+        const reload = await this.#runner.run("systemctl", ["--user", "daemon-reload"]);
+        if (reload.exitCode !== 0 || await linuxRemovedDefinitionState(resource, this.#runner) !== "missing") {
+          throw Error("systemd still reports a removed service definition");
+        }
+      }
+      if (fileFingerprint(identity.definitionPath!) !== undefined) {
+        return Object.freeze({ removed: false, detail: "service definition reappeared during removal" });
+      }
+      rmSync(identity.markerPath, { force: true });
+      return Object.freeze({ removed: true, detail: "exact owned service registration removed" });
+    }
     const loaded = await serviceLoaded(resource, this.#runner);
     if (currentFingerprint !== undefined && currentFingerprint !== identity.definitionFingerprint) {
       return Object.freeze({ removed: false, detail: "service registration definition changed before removal" });
@@ -615,7 +658,7 @@ export class ServiceRegistrationOwnershipObserver implements UninstallObserver {
   readonly #manager: ServiceRegistrationManager;
   constructor(manager: ServiceRegistrationManager) { this.#manager = manager; }
   observe(resource: OwnedResource, manifest: OwnershipManifest): Promise<OwnershipObservation> | OwnershipObservation {
-    return resource.kind === "service-registration" ? this.#manager.observe(resource, manifest) : "unknown";
+    return resource.kind === "service-registration" ? this.#manager.observe(resource, manifest, "remove") : "unknown";
   }
 }
 
