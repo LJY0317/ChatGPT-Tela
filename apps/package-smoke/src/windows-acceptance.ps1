@@ -73,6 +73,11 @@ $sentinel = (New-TemporaryFile).FullName
 try {
     Set-Content -LiteralPath $sentinel -Value 'outside Tela' -NoNewline
     Install-TelaPackage
+    $helper = Join-Path $localRoot 'bin\helpers\tela-workspace-files.exe'
+    $helperVersion = & $helper --protocol-version
+    if ($LASTEXITCODE -ne 0 -or ($helperVersion -join "`n") -cne '2') {
+        throw 'The installed workspace file helper did not start with protocol 2.'
+    }
     '{"version":1,"publicMcpAbi":"stable","exposure":{"kind":"existing-https","publicUrl":"https://example.test/mcp","localPort":18743,"authentication":"none","allowUnauthenticatedPublicEndpoint":true}}' |
         & $installed configure --stdin --if-missing
     if ($LASTEXITCODE -ne 0) { throw 'Tela setup failed.' }
