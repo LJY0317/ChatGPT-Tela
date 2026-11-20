@@ -7,10 +7,6 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
 
 ## Current product and release checks
 
-- **Consumer tool ownership.** Turn the bounded local host-policy setup into an explicit,
-  install-owned consumer integration where supported. Resolve exact installed plugin IDs,
-  manifest server names and account-app sources; preserve ordinary Chat and independent
-  Web-worker connections. Do not disable unrelated apps or infer the active model from prose.
 - **Web failure and control paths.** Verify quota/model transitions, stream failure,
   uncertain submission, exact cancellation and original Goal completion on disposable tasks
   using the current route. Preserve accepted effects and original requests; do not resend
@@ -35,6 +31,10 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
 
 ## External contracts and explicit limits
 
+- **Consumer tool ownership.** Automatic Native tool filtering needs supported
+  installed-source ownership and a policy that preserves ordinary Chat and independent
+  Web workers. See [tool ownership](official-desktop-provider.md#tool-ownership).
+
 - **Native transport independence with same-chat switching.** Official Desktop ownership
   does not remove the current Native inference dependency on Tela's base URL. Preserve the
   user's same-chat Native/Web workflow; a different-provider chat is not an accepted substitute.
@@ -46,8 +46,8 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   host tools expose no Desktop-profile selector, and Plura's target lifecycle
   does not provide thread creation. Preserve this user capability as unfinished:
   connect supported profile-scoped create/continue/interrupt control with exact
-  ownership before advertising cross-profile dispatch. Do not restore the old
-  engine, job manager, private provider or history handoff as a substitute.
+  ownership before advertising cross-profile dispatch. See the [host contract and
+  acceptance criteria](web-delegation.md#cross-profile-dispatch).
 
 - **Per-profile Web delegation capacity.** The requested default is 3 concurrent
   child tasks per profile, user-adjustable but capped by the official app's maximum.

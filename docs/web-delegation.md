@@ -69,6 +69,25 @@ Web-model chat and wait by thread ID, which is a distinct workflow from native
 child completion. Direct child dispatch still needs a supported way for the
 host to deliver the entire readable assignment.
 
+### Cross-profile dispatch
+
+The 2026-11-17 review found no official way for Tela to target a different
+Desktop profile for conversation creation or live turn control. Plura's target
+contract v2 exposes profile identity and app lifecycle. The official Codex
+app-server can create and steer turns on a connected instance, but the tested
+Desktop instances did not expose a supported profile-bound endpoint. Tela's local
+stored-history reader runs separately from those live Desktop owners. It can
+collect a registered chat's saved answer through its profile without becoming
+that conversation's live controller.
+
+The missing contract is either an official thread tool with verified destination
+profile selection or an authenticated endpoint to the existing Desktop owner
+per profile. It must support creation, exact follow-up, interruption, status and
+final-result readback. Acceptance requires disposable tasks in both directions,
+with confirmed destination/turn IDs, wrong-profile rejection, and an outcome
+receipt that prevents duplicate submission after disconnect. Keep existing
+profile identity and transport code when that contract becomes available.
+
 ### Web answer delivery in standalone chats
 
 On profile 2, two official Desktop Web chats on build `2026111804` produced

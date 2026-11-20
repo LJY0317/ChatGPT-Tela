@@ -82,6 +82,22 @@ not reconstruct private profile paths. Registration does not authorize another
 computer: local routing and tool authority remain scoped to this installation.
 Native/Chat work-tool inventory policy is separate from provider identity.
 
+### Tool ownership
+
+The host-policy review on 2026-11-17 found host-wide controls for MCP servers and
+account apps. They can filter a known source for a given host configuration. The
+supported app inventory identified app IDs and enabled/callable state, but did not
+establish the origin and ownership of each installed tool source. The public
+plugin inventory operations that could help with mapping were marked under
+development. Native and Web sharing one provider identity does not by itself
+provide a model-specific policy boundary.
+
+Consumer installation needs both a supported mapping of installed plugin IDs,
+manifest servers and account-app sources to this installation, and a policy
+scope that preserves ordinary Chat and independent Web workers. It also needs
+readback of the effective inventory and the ability to restore owned settings.
+See [the bounded Desktop trial](web-delegation.md#verified-boundary-and-remaining-work).
+
 ## Restore, update and remove
 
 ```text
