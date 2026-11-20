@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { connectStoredHistoryRpc, readStoredThreadTitles } from "@chatgpt-tela/codex";
 import { readProductConfig } from "@chatgpt-tela/product-config";
 import { createSuppliedHistorySource } from "./supplied-history";
-import { CHATGPT_TEMPORARY_CHAT_URL, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
+import { CHATGPT_TEMPORARY_CHAT_URL, chatGptWebModelId, type ChatGptWebModelFamily } from "@chatgpt-tela/chatgpt";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   resolveDefaultDesktopInstallation,
@@ -180,22 +180,13 @@ export async function startAppOwnedProductResponsesRuntime(input: {
     const binding = readChatGptTelaAccountBinding(config.browserProfile);
     return binding?.accountFingerprint === completedResults.accountFingerprint;
   };
-  let runtime: ElectronDevelopmentRuntime | undefined;
-  let startupFamilies: readonly import("@chatgpt-tela/chatgpt").ChatGptWebModelFamily[] | undefined;
+  let webModelFamilies: readonly ChatGptWebModelFamily[] = [];
   const router = createDefaultProfileCompositeProviderRouter({
     runtimeHeaderName: TELA_DEFAULT_DESKTOP_RUNTIME_HEADER,
-    webAccountCurrent,
+    webModelFamilies: () => webAccountCurrent() ? webModelFamilies : [],
     ...(input.nativeFetch ? { fetchUpstream: input.nativeFetch } : {}),
-    discoverWebModelFamilies: signal => {
-      if (startupFamilies) {
-        const observed = startupFamilies;
-        startupFamilies = undefined;
-        return Promise.resolve(observed);
-      }
-      return runtime?.discoverChatGptWebModelFamilies(signal) ?? Promise.resolve([]);
-    },
   });
-  runtime = await (input.electronStarter ?? startElectronDevelopmentRuntime)({
+  const runtime = await (input.electronStarter ?? startElectronDevelopmentRuntime)({
     profileSlot: config.slot,
     ...(suppliedHistory ? { suppliedHistory } : {}),
     routeId: config.routeId,
@@ -246,10 +237,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
         profileSlot: config.slot, accountFingerprint: binding.accountFingerprint,
         store: resultStore,
       };
-      // Use this same readiness proof as the initial /models projection. A subsequent
-      // router refresh may mask a transient browser error by retaining older rows.
-      const families = webDiscovery.families;
-      startupFamilies = families;
+      webModelFamilies = webDiscovery.families;
       // Existing owned readiness also retires old account results: a replaced
       // binding may never be used again, so its expired bodies and receipts
       // must not depend on a future host replay.
@@ -258,7 +246,6 @@ export async function startAppOwnedProductResponsesRuntime(input: {
           ...diagnosticFailureFields(error),
         });
       });
-      await router.refreshWebModelFamilies(input.signal);
     };
     await reconnect();
     input.signal?.throwIfAborted();
@@ -331,7 +318,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
       responses: owned.responses,
       internalMcp: ownedMcp,
       get webState() { return webState; },
-      get webModelIds() { return webState === "ready" ? router.cachedWebModelFamilies.map(family => chatGptWebModelId(family.key)) : []; },
+      get webModelIds() { return webState === "ready" ? webModelFamilies.map(family => chatGptWebModelId(family.key)) : []; },
       get accountManagementActive() { return accountActive(); },
       get accountRevision() { return accountRevision; },
       openWebAccountBrowser: openAccount,

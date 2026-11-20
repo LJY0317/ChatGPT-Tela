@@ -72,7 +72,6 @@ export interface ElectronDevelopmentRuntime extends DevelopmentRuntime {
     options?: { readonly allowUnknownSelectedConnector?: boolean },
   ): Promise<boolean>;
   /** Read the authenticated ChatGPT account's current selectable Web model families and efforts. */
-  discoverChatGptWebModelFamilies(signal?: AbortSignal): Promise<readonly ChatGptWebModelFamily[]>;
   /** Non-submit exact model/effort selection + restoration canary on one disposable surface. */
   probeChatGptWebModelSelection(signal?: AbortSignal): Promise<ChatGptWebModelSelectionCanary>;
   /** Inert live canary for memory-backed attachment acceptance + exact receipt verification. */
@@ -383,18 +382,6 @@ export async function startElectronDevelopmentRuntime(
     ) => (
       profileControl.recoverChatGptConnectorProbeArtifact(signal, options)
     ),
-    async discoverChatGptWebModelFamilies(signal?: AbortSignal) {
-      const epochId = `profile-model-catalog-${randomUUID()}`;
-      const surface = await browserHost.acquire({
-        taskId: `profile-model-catalog:${input.profileId}`,
-        epochId,
-      });
-      try {
-        return await modelFamilyDiscovery(surface, signal);
-      } finally {
-        await browserHost.release(surface.leaseId);
-      }
-    },
     async probeChatGptWebModelSelection(signal?: AbortSignal) {
       const epochId = `profile-model-canary-${randomUUID()}`;
       const surface = await browserHost.acquire({

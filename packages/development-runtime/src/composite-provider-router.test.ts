@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chatGptWebFamilyKey, chatGptWebModelId } from "@chatgpt-tela/chatgpt";
+import { chatGptWebFamilyKey, chatGptWebModelId, type ChatGptWebModelFamily } from "@chatgpt-tela/chatgpt";
 import { createDefaultProfileCompositeProviderRouter } from "./composite-provider-router";
 
 const header = "OpenAI-Organization";
@@ -33,10 +33,9 @@ describe("default-profile composite provider router", () => {
   test("model-local compaction is advertised only for Web models on the opted-in engine route", async () => {
     for (const localCompaction of [false, true]) {
       const router = createDefaultProfileCompositeProviderRouter({ runtimeHeaderName: header, localCompaction,
-        discoverWebModelFamilies: async () => [{ key: chatGptWebFamilyKey("Web Family"), label: "Web Family", availableEfforts: ["medium"] }],
+        webModelFamilies: () => [{ key: chatGptWebFamilyKey("Web Family"), label: "Web Family", availableEfforts: ["medium"] }],
         fetchUpstream: async () => Response.json(nativeCatalog()),
       });
-      await router.refreshWebModelFamilies();
       const catalog = await (await router.route(request("/v1/models")))?.json();
       expect(catalog.models[0].compaction_mode).toBeUndefined();
       expect(catalog.models[1].compaction_mode).toBe(localCompaction ? "local" : undefined);
@@ -46,7 +45,6 @@ describe("default-profile composite provider router", () => {
     const upstream: string[] = [];
     const router = createDefaultProfileCompositeProviderRouter({
       runtimeHeaderName: header,
-      discoverWebModelFamilies: async () => [],
       backendBaseUrl: "https://native.invalid/backend-api/codex",
       async fetchUpstream(req) {
         upstream.push(req.url);
@@ -84,7 +82,6 @@ describe("default-profile composite provider router", () => {
     const key = chatGptWebFamilyKey("Web Family");
     const router = createDefaultProfileCompositeProviderRouter({
       runtimeHeaderName: header,
-      discoverWebModelFamilies: async () => [{ key, label: "Web Family", availableEfforts: ["medium"] }],
       async fetchUpstream(req) {
         expect(req.headers.get("authorization")).toBe("Bearer native-auth");
         expect(req.headers.has(header)).toBe(false);
@@ -93,7 +90,6 @@ describe("default-profile composite provider router", () => {
         return Response.json({ provider: "native", model: body.model });
       },
     });
-    await router.refreshWebModelFamilies();
     const dispatch = async (model: string) => {
       const incoming = request("/v1/responses", { model, input: [] });
       const native = await router.route(incoming);
@@ -115,77 +111,36 @@ describe("default-profile composite provider router", () => {
     await expect(router.route(unauthenticated)).rejects.toThrow("first-party request authorization");
   });
 
-  test("new Native models arrive through the existing route while only browser discovery is cached", async () => {
-    let discoveries = 0;
-    let clock = 100, nativeRevision = 0;
+  test("Native catalog changes are visible while Web choices come from the admitted connection", async () => {
+    let nativeRevision = 0;
     const key = chatGptWebFamilyKey("Web Family");
+    let webModelFamilies: readonly ChatGptWebModelFamily[] = [];
     const router = createDefaultProfileCompositeProviderRouter({
       runtimeHeaderName: header,
-      catalogTtlMs: 1_000,
-      now: () => clock,
-      async discoverWebModelFamilies() {
-        discoveries += 1;
-        return [{ key, label: "Web Family", availableEfforts: ["medium"] }];
-      },
+      webModelFamilies: () => webModelFamilies,
       async fetchUpstream() {
         const catalog = nativeCatalog();
         if (nativeRevision) catalog.models.push({ ...catalog.models[0]!, slug: "new-server-model" });
         return Response.json(catalog);
       },
     });
-    const first = await router.route(request("/v1/models"));
-    await router.refreshWebModelFamilies();
+    const slugs = async () => (await (await router.route(request("/v1/models")))?.json()).models.map((model: { slug: string }) => model.slug);
+    expect(await slugs()).toEqual(["native-model"]);
+    webModelFamilies = [{ key, label: "Web Family", availableEfforts: ["medium"] }];
     nativeRevision = 1;
-    const second = await router.route(request("/v1/models"));
-    expect(discoveries).toBe(1);
-    expect(((await first?.json()) as any).models.map((model: any) => model.slug)).toEqual([
-      "native-model",
-    ]);
-    const current = ((await second?.json()) as any).models.map((m: any) => m.slug);
-    expect(current).toEqual(["native-model", "new-server-model", chatGptWebModelId(key)]);
-    clock += 1_001;
-    await router.route(request("/v1/models"));
-    expect(discoveries).toBe(2);
-  });
-
-  test("browser catalog failure degrades to native-only instead of hiding Native models", async () => {
-    const router = createDefaultProfileCompositeProviderRouter({
-      runtimeHeaderName: header,
-      discoverWebModelFamilies: async () => { throw new Error("picker changed"); },
-      fetchUpstream: async () => Response.json(nativeCatalog()),
-    });
-    const response = await router.route(request("/v1/models"));
-    expect(((await response?.json()) as any).models.map((model: any) => model.slug)).toEqual(["native-model"]);
-  });
-
-  test("Native catalog completes while Web discovery is held and refresh is coalesced", async () => {
-    let release!: () => void;
-    const held = new Promise<void>(resolve => { release = resolve; });
-    let discoveries = 0;
-    const family = { key: chatGptWebFamilyKey("Held Web"), label: "Held Web", availableEfforts: ["medium"] as const };
-    const router = createDefaultProfileCompositeProviderRouter({ runtimeHeaderName: header,
-      discoverWebModelFamilies: async () => { discoveries++; await held; return [family]; },
-      fetchUpstream: async () => Response.json(nativeCatalog()),
-    });
-    try {
-      const responses = await Promise.all([router.route(request("/v1/models")), router.route(request("/v1/models"))]);
-      for (const response of responses) expect((await response?.json()).models).toEqual(nativeCatalog().models);
-      expect(discoveries).toBe(1);
-    } finally { release(); }
-    await router.refreshWebModelFamilies();
-    expect((await (await router.route(request("/v1/models")))?.json()).models).toHaveLength(2);
+    expect(await slugs()).toEqual(["native-model", "new-server-model", chatGptWebModelId(key)]);
+    webModelFamilies = [];
+    expect(await slugs()).toEqual(["native-model", "new-server-model"]);
   });
 
   test("combined ETag changes only with delivered body, including Web-only changes", async () => {
-    let families: any[] = [];
+    let families: readonly ChatGptWebModelFamily[] = [];
     const router = createDefaultProfileCompositeProviderRouter({ runtimeHeaderName: header,
-      discoverWebModelFamilies: async () => families,
+      webModelFamilies: () => families,
       fetchUpstream: async () => Response.json(nativeCatalog(), { headers: { etag: '"native-only"' } }),
     });
-    await router.refreshWebModelFamilies();
     const before = await router.route(request("/v1/models"));
     families = [{ key: chatGptWebFamilyKey("New Web"), label: "New Web", availableEfforts: ["medium"] }];
-    await router.refreshWebModelFamilies();
     const after = await router.route(request("/v1/models"));
     const unchanged = await router.route(request("/v1/models"));
     expect(before?.headers.get("etag")).not.toBe(after?.headers.get("etag"));
@@ -195,10 +150,9 @@ describe("default-profile composite provider router", () => {
   test("invalid Web projection preserves Native response and metadata", async () => {
     const family = { key: chatGptWebFamilyKey("Duplicate"), label: "Duplicate", availableEfforts: ["medium"] as const };
     const router = createDefaultProfileCompositeProviderRouter({ runtimeHeaderName: header,
-      discoverWebModelFamilies: async () => [family, family],
+      webModelFamilies: () => [family, family],
       fetchUpstream: async () => Response.json(nativeCatalog(), { headers: { "x-fixture-metadata": "preserved" } }),
     });
-    await router.refreshWebModelFamilies();
     const response = await router.route(request("/v1/models"));
     expect(response?.status).toBe(200);
     expect(response?.headers.get("x-fixture-metadata")).toBe("preserved");

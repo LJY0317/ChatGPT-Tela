@@ -11,8 +11,6 @@ import {
 } from "./native-passthrough";
 import { augmentNativeCodexModelCatalog } from "./web-model-catalog";
 
-const DEFAULT_CATALOG_TTL_MS = 30_000;
-
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -67,79 +65,23 @@ function jsonResponse(value: unknown, upstream: Response): Response {
 
 export interface DefaultProfileCompositeProviderRouter {
   route(request: Request): Promise<Response | undefined>;
-  refreshWebModelFamilies(signal?: AbortSignal): Promise<readonly ChatGptWebModelFamily[]>;
-  readonly cachedWebModelFamilies: readonly ChatGptWebModelFamily[];
 }
 
 /**
  * Single-provider router used by the built-in default Desktop profile.
  *
  * Native model ids keep using OpenAI's first-party Codex backend. Only Tela's explicit synthetic
- * Web namespace enters the browser exact-turn gateway. Model discovery is on-demand/single-flight;
- * a transient browser discovery failure removes Web rows but never rewrites or suppresses Native
- * catalog entries.
+ * Web namespace enters the browser exact-turn gateway. Catalog reads project the Web families
+ * already verified by the current connection.
  */
 export function createDefaultProfileCompositeProviderRouter(input: {
   readonly runtimeHeaderName: string;
-  readonly discoverWebModelFamilies: (signal?: AbortSignal) => Promise<readonly ChatGptWebModelFamily[]>;
-  /** Reuse the profile's validated account scope when publishing model choices. */
-  readonly webAccountCurrent?: () => boolean;
+  readonly webModelFamilies?: () => readonly ChatGptWebModelFamily[];
   readonly fetchUpstream?: NativeCodexFetch;
   readonly backendBaseUrl?: string;
-  readonly catalogTtlMs?: number;
-  readonly now?: () => number;
   /** Granted only when this profile launches the verified owned engine. */
   readonly localCompaction?: boolean;
 }): DefaultProfileCompositeProviderRouter {
-  const ttlMs = input.catalogTtlMs ?? DEFAULT_CATALOG_TTL_MS;
-  if (!Number.isSafeInteger(ttlMs) || ttlMs < 0) throw new Error("Web model catalog TTL must be a non-negative safe integer");
-  let cached: readonly ChatGptWebModelFamily[] = Object.freeze([]);
-  let cachedAt = 0;
-  let inFlight: Promise<readonly ChatGptWebModelFamily[]> | undefined;
-  const now = input.now ?? Date.now;
-
-  const refresh = (signal?: AbortSignal): Promise<readonly ChatGptWebModelFamily[]> => {
-    if (inFlight) return inFlight;
-    const operation = (async () => {
-      try {
-        const observed = Object.freeze([...(await input.discoverWebModelFamilies(signal))]);
-        cached = observed;
-        cachedAt = now();
-        emitDiagnosticEvent("chatgpt_tela_work", "web_model_catalog_ready", { family_count: cached.length });
-        return cached;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "unknown";
-        const failureCode = message.includes("timed out waiting for control") ? "picker_control_timeout"
-          : message.includes("timed out waiting for menu-open") ? "picker_menu_timeout"
-            : message.includes("timed out waiting for advanced-families") ? "picker_advanced_timeout"
-              : message.includes("effort slider") ? "picker_effort_slider"
-                : message.includes("family") ? "picker_family"
-                  : "picker_other";
-        emitDiagnosticEvent("chatgpt_tela_work", "web_model_catalog_unavailable", {
-          had_cached_catalog: cached.length > 0,
-          failure_code: failureCode,
-        });
-        // A missing Web catalog disables Web choices for this refresh but must never take the
-        // first-party Native catalog down with it. Keep a previously proven short-lived catalog;
-        // with no prior proof, expose no Web rows.
-        return cached;
-      }
-    })();
-    inFlight = operation;
-    void operation.finally(() => {
-      if (inFlight === operation) inFlight = undefined;
-    }).catch(() => {});
-    return operation;
-  };
-
-  const currentFamilies = (signal?: AbortSignal): readonly ChatGptWebModelFamily[] => {
-    const observed = cached;
-    // Native discovery must not wait for the optional browser surface. A coalesced,
-    // request-triggered refresh publishes Web rows for a subsequent catalog request.
-    if (!(cachedAt > 0 && now() - cachedAt <= ttlMs)) void refresh(signal);
-    return observed;
-  };
-
   const native = (request: Request, endpoint: NativeCodexEndpoint): Promise<Response> => (
     forwardNativeCodexRequest({
       request,
@@ -151,8 +93,6 @@ export function createDefaultProfileCompositeProviderRouter(input: {
   );
 
   return Object.freeze({
-    get cachedWebModelFamilies() { return cached; },
-    refreshWebModelFamilies: refresh,
     async route(request: Request) {
       const endpoint = endpointFor(new URL(request.url).pathname);
       if (!endpoint) return undefined;
@@ -182,7 +122,7 @@ export function createDefaultProfileCompositeProviderRouter(input: {
       let catalog: unknown;
       try { catalog = await upstream.json(); }
       catch { throw new Error("Native Codex model catalog response was not valid JSON"); }
-      const families = input.webAccountCurrent?.() === false ? [] : currentFamilies(request.signal);
+      const families = input.webModelFamilies?.() ?? [];
       const nativeCount = record(catalog)?.models;
       let augmented: unknown;
       try {

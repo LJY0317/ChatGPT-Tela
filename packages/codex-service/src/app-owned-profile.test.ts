@@ -277,7 +277,6 @@ const starter=async options=>{
       input.onFamilies?.([family]);input.onConnectorStarting?.();input.onConnectorProven?.();
       return{families:[family]};
     },
-    async discoverChatGptWebModelFamilies(){return[family];},
     async stop(){await responses.stop();await gateway.close();}
   };
 };
@@ -537,9 +536,6 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
         input.onFamilies?.([{ key: family, label: "Official assembly", availableEfforts: ["medium"] }]);
         input.onConnectorStarting?.(); input.onConnectorProven?.();
         return { families: [{ key: family, label: "Official assembly", availableEfforts: ["medium"] }] };
-      },
-      async discoverChatGptWebModelFamilies() {
-        return [{ key: family, label: "Official assembly", availableEfforts: ["medium"] }];
       },
       async stop() { await responses.stop(); await gateway.close(); },
     };

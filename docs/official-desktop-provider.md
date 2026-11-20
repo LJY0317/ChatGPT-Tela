@@ -66,8 +66,9 @@ overwritten. A foreign or edited model catalog is preserved and reported; that
 result does not claim Web choices were added. Select the built-in `openai` provider
 first if using another provider. Normally restart Desktop to load configuration;
 hot reload is not assumed. A running app that already loaded the retired static catalog may need one normal restart.
-Subsequent model availability follows the official engine’s server/cache refresh, account
-entitlements and client compatibility; Tela has no Native model-name allowlist. API-key
+Native model availability follows the official engine's server/cache refresh, account
+entitlements and client compatibility. Tela verifies the Web catalog when Web models connect
+or reconnect, and catalog reads use those choices for that connection. API-key
 auth may use a different discovery path and is not proof of ChatGPT-login picker behavior.
 
 For an additional profile, explicitly select its existing config file:

@@ -77,9 +77,6 @@ const starter = async options => {
       input.onConnectorStarting?.(); input.onConnectorProven?.();
       return { families: [{ key: "b".repeat(20), label: "Managed Web", availableEfforts: ["medium"] }] };
     },
-    async discoverChatGptWebModelFamilies() {
-      return [{ key: "b".repeat(20), label: "Managed Web", availableEfforts: ["medium"] }];
-    },
     async stop() { await responses.stop(); },
   };
 };

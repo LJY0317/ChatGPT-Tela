@@ -298,7 +298,6 @@ test("app-owned Responses reuses a fixed capability URL while closing only Tela 
           input.onConnectorProven?.();
           return { families: [] };
         },
-        async discoverChatGptWebModelFamilies() { return []; },
         async stop() {
           if (failNextStop) { failNextStop = false; throw Error("synthetic runtime cleanup interrupted"); }
           closes++; await responses.stop();
@@ -421,7 +420,6 @@ test("two managed app-owned profiles keep independent capability routes and Desk
           input.onFamilies?.([family]); input.onConnectorStarting?.(); input.onConnectorProven?.();
           return { families: [family] };
         },
-        async discoverChatGptWebModelFamilies() { return [family]; },
         async stop() { await responses.stop(); },
       } as unknown as ElectronDevelopmentRuntime;
     }) as typeof import("./electron").startElectronDevelopmentRuntime;
@@ -548,7 +546,6 @@ test("app-owned production shutdown resumes a failed browser close through the H
         input.onFamilies?.([]); input.onConnectorStarting?.(); input.onConnectorProven?.();
         return { families: [] };
       },
-      async discoverChatGptWebModelFamilies() { return []; },
     } as unknown as import("./electron").ElectronDevelopmentRuntime;
   }) as typeof import("./electron").startElectronDevelopmentRuntime;
   let owned: Awaited<ReturnType<typeof startAppOwnedProductResponsesRuntime>> | undefined;
@@ -681,7 +678,6 @@ test("app-owned first readiness binds durable results after login and isolates a
         input.onFamilies?.([]); input.onConnectorStarting?.(); input.onConnectorProven?.();
         return { families: [] };
       },
-      async discoverChatGptWebModelFamilies() { return []; },
       async stop() { await responses.stop(); await current.close(); },
     } as unknown as ElectronDevelopmentRuntime;
   }) as typeof import("./electron").startElectronDevelopmentRuntime;
@@ -765,7 +761,6 @@ test("app-owned startup assembles its authenticated internal MCP with the suppli
           input.onProfile?.({ account: { accountFingerprint: "a".repeat(64), accountStructure: "personal", containerFingerprint: "fixture" } });
           input.onFamilies?.([family]); input.onConnectorStarting?.(); input.onConnectorProven?.(); return { families: [family] };
         },
-        async discoverChatGptWebModelFamilies() { return [family]; },
         async stop() { await responses.stop(); await gateway.close(); },
       } as unknown as ElectronDevelopmentRuntime;
     }) as typeof import("./electron").startElectronDevelopmentRuntime;
@@ -831,7 +826,6 @@ test("profile startup retires its old fixed catalog even when Web account discov
         shutdownReadiness: () => "ready" as const,
         prepareShutdown: async () => {},
         async prepareChatGptWebSession() { throw new Error("synthetic Web discovery failure"); },
-        async discoverChatGptWebModelFamilies() { throw new Error("should not retry discovery"); },
         async stop() { await responses?.stop(); responses = undefined; },
       } as unknown as import("./electron").ElectronDevelopmentRuntime;
     }) as typeof import("./electron").startElectronDevelopmentRuntime;
@@ -858,6 +852,7 @@ test("app-owned production account controls verify Web, guard work and revalidat
   let account = "a".repeat(64), busy = false, opens = 0, reveals = 0, closes = 0, failClose = false;
   let hide: (() => void) | undefined;
   const family = { key: chatGptWebFamilyKey("Account fixture"), label: "Account fixture", availableEfforts: ["medium"] as const };
+  const replacementFamily = { ...family, key: chatGptWebFamilyKey("Next account"), label: "Next account" };
   const browserHost = new ControlledBrowserHost(async () => ({ async navigate() {}, async reveal() {}, async hide() {}, async close() {} }));
   const starter = (async (options: Parameters<typeof import("./electron").startElectronDevelopmentRuntime>[0]) => {
     const actual = await startDevelopmentRuntime({ browserHost, mcp: options.mcp,
@@ -867,10 +862,10 @@ test("app-owned production account controls verify Web, guard work and revalidat
       ...(options.completedResults ? { completedResults: options.completedResults } : {}) });
     return { ...actual, shutdownReadiness: () => busy ? "blocked" : actual.shutdownReadiness!(),
       async prepareChatGptWebSession(input: any) {
+        const families = [account.startsWith("a") ? family : replacementFamily];
         input.onProfile?.({ account: { accountFingerprint: account, accountStructure: "personal", containerFingerprint: "b".repeat(64) } });
-        input.onFamilies?.([family]); input.onConnectorStarting?.(); input.onConnectorProven?.(); return { families: [family] };
+        input.onFamilies?.(families); input.onConnectorStarting?.(); input.onConnectorProven?.(); return { families };
       },
-      async discoverChatGptWebModelFamilies() { return [family]; },
       async probeChatGptAccount() { return { accountFingerprint: account, accountStructure: "personal", containerFingerprint: "b".repeat(64) }; },
       async probeChatGptAccountDisplay() { return { state: "signed-in", email: "person@example.test" }; },
       async openProfileSetupSurface() {
@@ -886,10 +881,19 @@ test("app-owned production account controls verify Web, guard work and revalidat
   const signal = new AbortController();
   try {
     owned = await startAppOwnedProductResponsesRuntime({ config, ingress, electronStarter: starter,
-      nativeFetch: async () => Response.json({ models: [] }) });
+      nativeFetch: async () => Response.json({ models: [{
+        slug: "native-model", visibility: "list", supported_reasoning_levels: [{ effort: "medium", description: "Medium" }],
+      }] }) });
     preview = await startAppOwnedProfileBridge(config, owned, signal.signal);
     const call = (path: string, method = "GET") => fetch(new URL("v1/" + path, preview!.endpoint),
       { method, headers: { authorization: `Bearer ${config.uiToken}` } });
+    const models = async () => {
+      const response = await fetch(new URL("models", owned!.responses.baseUrl), {
+        headers: { authorization: "Bearer synthetic-native-auth" },
+      });
+      return (await response.json()).models.map((model: { slug: string }) => model.slug);
+    };
+    expect(await models()).toEqual(["native-model", chatGptWebModelId(family.key)]);
     const display = await (await call("account-display")).json();
     expect(display).toMatchObject({ native: { state: "unavailable" }, web: { state: "signed-in" }, comparison: "unavailable" });
     expect(await (await call("account-check")).json()).toMatchObject({ nativeSignIn: "unavailable", webBinding: "matching", webSignIn: "signed-in" });
@@ -898,6 +902,7 @@ test("app-owned production account controls verify Web, guard work and revalidat
     const opened = await Promise.all([call("account-browser", "POST"), call("account-browser", "POST")]);
     expect(opened.map(response => response.status)).toEqual([204, 204]); expect(opens).toBe(1);
     expect(reveals).toBeGreaterThan(0); expect(owned.accountManagementActive).toBe(true);
+    expect(await models()).toEqual(["native-model"]);
     expect(await (await call("web-state")).json()).toMatchObject({ accountManagementActive: true });
     const blocked = await fetch(new URL("responses", owned.responses.baseUrl), { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: chatGptWebModelId(family.key), input: [] }) });
@@ -908,6 +913,7 @@ test("app-owned production account controls verify Web, guard work and revalidat
     expect((await call("account-browser-close", "POST")).status).toBe(204);
     expect(closes).toBe(2); expect(owned.accountManagementActive).toBe(false);
     expect(readChatGptTelaAccountBinding(config.browserProfile)?.accountFingerprint).toBe(account);
+    expect(await models()).toEqual(["native-model", chatGptWebModelId(replacementFamily.key)]);
     expect(await (await call("web-state")).json()).toMatchObject({ webState: "ready", accountManagementActive: false });
     expect(owned.shutdownReadiness()).toBe("ready");
     await owned.openWebAccountBrowser(); hide?.(); await owned.closeWebAccountBrowser();
