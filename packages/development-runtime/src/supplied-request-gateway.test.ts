@@ -118,6 +118,7 @@ function request(turn = "turn-1", input: unknown[] = firstInput) {
 }
 
 function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure?: Error; planner?: ReturnType<typeof createNativeRequestDevelopmentWebTurnPlanner>;
+  providerBehavior?: Partial<Pick<WebConversationProvider, "armToolContinuation" | "waitForTurnEvent">>;
   onWebChild?: Parameters<typeof createSuppliedRequestGateway>[0]["onWebChild"];
   suppliedHistory?: Parameters<typeof createSuppliedRequestGateway>[0]["suppliedHistory"];
   completedResults?: Parameters<typeof createSuppliedRequestGateway>[0]["completedResults"] } = {}) {
@@ -156,6 +157,7 @@ function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure
       return { state: "proven", evidence: ["fixture"], value: { kind: "completed", providerTurnId: handle.providerTurnId,
         answer: handle.nativeTurnId === "turn-1" ? "A inspected." : "B inspected." } };
     },
+    ...options.providerBehavior,
   };
   const gateway = createSuppliedRequestGateway({ browserHost: host, provider, profileSlot: 2,
     ...(options.onWebChild ? { onWebChild: options.onWebChild } : {}),
@@ -262,6 +264,59 @@ test("durably preserved final releases shutdown and replays after gateway restar
       expect(restarted.submissions).toHaveLength(0);
     } finally { await restarted.gateway.close(); }
   } finally { await first.gateway.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("unproven Goal result handoff settles the Web operation and rejects an exact replay", async () => {
+  let handoffs = 0;
+  let toolResult: Promise<unknown> | undefined;
+  let capability = "";
+  const f = fixture({
+    onSubmit() { capability = f.submissions[0]!.chatTools!.nativeGoalControl!; },
+    providerBehavior: {
+      async armToolContinuation() {
+        handoffs++;
+        return { state: "ambiguous", candidates: [], evidence: ["surface changed before the handoff"] };
+      },
+      async waitForTurnEvent(_surface, _handle, signal) {
+        const pending = f.gateway.toolBridge.invoke(capability, {
+          callId: "goal-result", wireName: "get_goal", mode: "structured", arguments: {},
+        });
+        toolResult = pending.then(result => result, error => error);
+        return new Promise((_resolve, reject) => {
+          const abort = () => reject(new DOMException("browser observation cancelled", "AbortError"));
+          signal?.addEventListener("abort", abort, { once: true });
+          if (signal?.aborted) abort();
+        });
+      },
+    },
+  });
+  const first = { ...request(), tools: [{ type: "function", name: "get_goal", parameters: { type: "object" } }] };
+  try {
+    const toolCall = await f.gateway.handle(first);
+    if (toolCall.type !== "tool-call") throw Error("Expected the Goal tool call");
+    f.gateway.commit(toolCall);
+    const next = { ...first, input: [...first.input, toolCall.item,
+      { type: "function_call_output", call_id: "goal-result", output: "{}" }] };
+    const send = () => handleNativeResponsesHttp(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(next),
+    }), f.gateway);
+    const failed = await send();
+    expect(failed.status).toBe(400);
+    const failure = await failed.json();
+    expect(failure).toMatchObject({ error: {
+      code: "tela_native_handoff_reconciliation_required", retryable: false,
+      recovery: { kind: "reconcile_tool_handoff", prior_execution_settled: "unknown" },
+    } });
+    expect(await toolResult).toMatchObject({ code: "native_web_handoff_unproven", proofState: "ambiguous" });
+    expect(f.gateway.shutdownReadiness()).toBe("ready");
+    expect(f.gateway.ownsCapability(capability)).toBe(false);
+    const replay = await send();
+    expect(replay.status).toBe(400);
+    expect(await replay.json()).toEqual(failure);
+    expect(handoffs).toBe(1);
+    expect(f.submissions).toHaveLength(1);
+    expect(f.released).toEqual([]);
+  } finally { await f.gateway.close(); }
 });
 
 test("two synthetic tool continuations persist their final request identity across gateway restart", async () => {

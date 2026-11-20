@@ -106,7 +106,14 @@ async function waitForBrowserTurnSignal(
 ): Promise<BrowserTurnSignal> {
   state.signal.throwIfAborted();
   if (!input.channel) {
-    return { kind: "provider", event: requireProven(await input.provider.waitForTurnEvent(surface, handle, state.signal)) };
+    try {
+      const observed = await input.provider.waitForTurnEvent(surface, handle, state.signal);
+      state.signal.throwIfAborted();
+      return { kind: "provider", event: requireProven(observed) };
+    } catch (error) {
+      input.signal?.throwIfAborted();
+      throw error;
+    }
   }
   const channelAbort = new AbortController();
   const revision = input.channel.stateRevision;

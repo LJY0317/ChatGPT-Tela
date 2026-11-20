@@ -3,7 +3,7 @@ import { contextHistorySelection } from "@chatgpt-tela/mcp";
 import { createHash } from "node:crypto";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { NativeHistoryBootstrapRequired, encodeNativeToolInvocation, extractNativeToolResults, parseNativeTurnClaim, parseNativeTurnReplayIdentity } from "@chatgpt-tela/codex";
-import { CONTEXT_HISTORY_TOOL, NativeToolInventory, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticContext, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, startTurnDiagnosticSummary, withDiagnosticContext, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
+import { CONTEXT_HISTORY_TOOL, NativeToolInventory, NativeWebHandoffUnproven, isNativeGoalTool, capturePrivateDiagnosticValue, diagnosticContext, diagnosticFailureFields, diagnosticFingerprint, emitDiagnosticEvent, startTurnDiagnosticSummary, withDiagnosticContext, type NativeToolCatalogEntry } from "@chatgpt-tela/core";
 import type { TurnBridgeBackend } from "@chatgpt-tela/mcp";
 import { selectChatGptWebModel, type WebConversationProvider } from "@chatgpt-tela/chatgpt";
 import type { ResponsesGateway } from "@chatgpt-tela/responses";
@@ -207,10 +207,21 @@ export function createSuppliedRequestGateway(input: {
           operation.fingerprint = hash;
           operation.delivered = false;
           operation.outcome = Promise.race([operation.webRun!, nextTool]);
+          // The browser can fail while continuation proof is being acquired.
+          void operation.outcome.catch(() => {});
           operation.round.deliver(results[0]!);
-          if (!operation.armContinuation) throw Error("Web tool continuation was not submitted");
-          await operation.armContinuation(outstanding.invocation.callId);
-          operation.round.release(outstanding.invocation.callId);
+          try {
+            if (!operation.armContinuation) throw new NativeWebHandoffUnproven("ambiguous");
+            await operation.armContinuation(outstanding.invocation.callId);
+            operation.round.release(outstanding.invocation.callId);
+          } catch (error) {
+            // Retire this same accepted operation through its existing failure path.
+            // The host tool has already run; never release or replay its result here.
+            if (operation.finishedAt === undefined) {
+              operation.cancellation.abort(error instanceof NativeWebHandoffUnproven
+                ? error : new NativeWebHandoffUnproven("ambiguous"));
+            }
+          }
         } else if (operation.finishedAt !== undefined && !operation.failed && !operation.preserved
           && !operation.delivered && resultIdentity) {
           // Exact reconnection can preserve an already completed result after
@@ -301,9 +312,10 @@ export function createSuppliedRequestGateway(input: {
                 onSubmitted: (surface, handle) => {
                   owned.armContinuation = async callId => {
                     const proof = await input.provider.armToolContinuation(surface, handle, callId, bound.signal);
-                    if (proof.state !== "proven" || proof.value.callId !== callId
-                      || proof.value.providerTurnId !== handle.providerTurnId)
-                      throw Error("Web provider armed the wrong tool continuation boundary");
+                    if (proof.state !== "proven") throw new NativeWebHandoffUnproven(proof.state);
+                    if (proof.value.callId !== callId || proof.value.providerTurnId !== handle.providerTurnId) {
+                      throw new NativeWebHandoffUnproven("ambiguous");
+                    }
                   };
                 },
                 ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
