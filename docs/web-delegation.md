@@ -80,12 +80,22 @@ configuration exposed the nested collaboration tool for a fresh Desktop task.
 The first child turn, Web final delivery, automatic registration, and receipt
 were verified before leaving the profile configuration at its original setting.
 With the profile restored to its original settings, a fresh Desktop task in
-the same profile did not expose nested Code Mode spawn. The bundled App Server's
-`config/read` loaded the same option from a trusted project's
-`.codex/config.toml` without a profile-wide override. The project-scoped check
-covered configuration loading; the live Desktop run used the temporary profile
-setting. The option remains version-specific and undocumented in the public
-configuration reference.
+the same profile did not expose nested Code Mode spawn. A subsequent profile-2
+Desktop test used only this feature configuration in a trusted disposable
+project's `.codex/config.toml`:
+
+```toml
+[features.multi_agent_v2]
+enabled = true
+non_code_mode_only = false
+```
+
+The local Desktop task used nested Code Mode spawn once. The Web child
+received plaintext, was registered automatically, and returned its final
+answer to the parent. Acknowledgement applied the twelve-hour archive deadline.
+The experiment's project setting and trust entry were removed. This is a
+version-specific experiment with the bundled engine; the option is undocumented
+in the public configuration reference.
 [Engine implementation](https://github.com/openai/codex/blob/rust-v0.171.0-alpha.13/codex-rs/core/src/tools/handlers/multi_agents_v2.rs#L54-L66)
 · [Direct input restriction](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/request_processors/thread_input.rs).
 
