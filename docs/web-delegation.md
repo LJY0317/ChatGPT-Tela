@@ -284,6 +284,7 @@ or error bodies. A wait wakeup is not a collection receipt.
   Active and archived list reads alone are insufficient: a child can be restored
   between them and disappear from both reads even while the parent's writer is held.
 - A writer conflict or unavailable lifecycle preserves the original retention deadline.
+  Restart also preserves the saved deadline, including a collection close to day seven.
   The same next-due timer schedules another maintenance review 12 hours later, without
   a second scheduler, rapid retries or catalog scanning. Only due registered records
   are examined; pending, uncertain archive mutations are never replayed automatically.

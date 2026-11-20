@@ -166,6 +166,27 @@ test("acknowledged failures remain seven-day fallback and repeated checks cannot
   } finally { await f.close(); }
 });
 
+test("restart preserves the twelve-hour deadline for a late confirmed collection", async () => {
+  const f = fixture();
+  let restarted: ReturnType<typeof createDelegatedRetention> | undefined;
+  try {
+    await f.manager.enroll(1, "parent", "child");
+    f.advance(7 * 24 - 1);
+    await f.manager.acknowledge(1, answer);
+    const deadline = f.receipt().dueAt;
+    await f.manager.close();
+    f.advance(2);
+    restarted = createDelegatedRetention(f.options);
+    const before = f.calls.length;
+    expect(restarted.status().overdue).toEqual([]);
+    expect((await restarted.reconcile()).outcomes).toEqual([]);
+    expect(f.calls).toHaveLength(before);
+    f.advance(10);
+    expect((await restarted.reconcile()).outcomes).toMatchObject([{ status: "archived" }]);
+    expect(f.receipt().dueAt).toBe(deadline);
+  } finally { await restarted?.close(); await f.close(); }
+});
+
 test("writer conflicts defer without interruption; release wakeup or restart can reconcile", async () => {
   for (const restart of [false, true]) {
     const f = fixture();

@@ -100,11 +100,7 @@ export function createDelegatedRetention(input: {
       if (record.parentThreadId !== undefined) id(record.parentThreadId);
       if (record.pendingFirstTurnId !== undefined) id(record.pendingFirstTurnId);
       if (settledExpired(record, now())) unlinkSync(path(k));
-      else {
-        // Old completion-based deadlines must not postpone the fixed fallback.
-        record.dueAt = Math.min(record.dueAt, record.enrolledAt + 7 * DAY);
-        records.set(k, record);
-      }
+      else records.set(k, record);
     } catch {
       unreadable.add(k);
       unreadableBytes += size;
