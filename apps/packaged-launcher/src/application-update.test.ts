@@ -91,6 +91,19 @@ test("update phases retain failure evidence and reject changed payloads before s
   } finally { unobserve?.(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test("an older or equivalent update build never quiesces the installed app", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-older-build-"));
+  try {
+    const f = await fixture(root);
+    const input = { ...f.input, readBuild: () => "10.2" };
+    for (const targetBuild of ["9.20", "10.2.0"]) {
+      await expect(runApplicationUpdate("prepare", { ...input, targetBuild })).rejects.toThrow("newer numeric build");
+    }
+    expect(f.runner.calls).toEqual([]);
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("Sparkle replacement restores only prior running services and promotes external metadata", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-settlement-"));
   try {

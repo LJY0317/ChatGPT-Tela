@@ -226,7 +226,7 @@ mutation owner and authenticated shutdown/readiness contracts:
   creates no transition journal, polls nothing and never interrupts work. Cancelling
   Sparkle detaches only this observer. Readiness remains advisory: termination admission
   still runs if observation fails or new work arrives afterwards.
-- `prepare --target-build N` checks active work before stopping participants,
+- `prepare --target-build N` requires a newer numeric build and checks active work before stopping participants,
   records the previously running services, and unloads their exact launchd jobs.
   An AppKit termination veto prevents Sparkle from proceeding when preparation
   fails. A partial refusal restores acknowledged peers without repeating shutdown.

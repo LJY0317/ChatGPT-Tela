@@ -20,6 +20,19 @@ import { prepareProductConfiguration } from "./bootstrap";
 const stopOrder: readonly TelaServiceId[] = ["gateway", "codex", "chat"];
 const startOrder: readonly TelaServiceId[] = ["chat", "codex", "gateway"];
 
+function isNewerBuild(target: string, source: string): boolean {
+  const numericBuild = /^\d+(\.\d+){0,2}$/;
+  if (!numericBuild.test(target) || !numericBuild.test(source)) return false;
+  const targetParts = target.split(".").map(BigInt);
+  const sourceParts = source.split(".").map(BigInt);
+  for (let index = 0; index < 3; index++) {
+    const targetPart = targetParts[index] ?? 0n;
+    const sourcePart = sourceParts[index] ?? 0n;
+    if (targetPart !== sourcePart) return targetPart > sourcePart;
+  }
+  return false;
+}
+
 /** Sparkle replaces the app. This command only settles existing Tela service ownership. */
 export async function runApplicationUpdate(action: "wait" | "prepare" | "finish" | "cancel", input: {
   payloadRoot: string; targetBuild?: string; workAction?: UpdateWorkAction; options?: PackagedLifecycleOptions;
@@ -183,7 +196,7 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
       return { prepared: true, targetBuild: previous.targetBuild };
     }
     assertNoActivePackagedTransition(paths, "application update");
-    if (!input.targetBuild || !/^\d+(\.\d+){0,2}$/.test(input.targetBuild) || input.targetBuild === build) throw Error("a different numeric target build is required");
+    if (!input.targetBuild || !isNewerBuild(input.targetBuild, build)) throw Error("a newer numeric build is required for the update");
     const running: TelaServiceId[] = [];
     for (const service of stopOrder) if (await step("service_inspect", () => controller.inspect(service), service) === "running") running.push(service);
     const workAction = input.workAction;
