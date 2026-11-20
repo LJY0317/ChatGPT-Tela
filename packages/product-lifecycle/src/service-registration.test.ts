@@ -57,6 +57,8 @@ class LinuxFixtureRunner implements ServiceRegistrationCommandRunner {
 class WindowsFixtureRunner implements ServiceRegistrationCommandRunner {
   exists = true;
   running = true;
+  currentUser = true;
+  hasTrigger = false;
   readonly calls: Array<readonly [string, readonly string[]]> = [];
   executable = "C:\\Program Files\\ChatGPT Tela\\tela.exe";
   arguments = "service codex";
@@ -85,7 +87,8 @@ class WindowsFixtureRunner implements ServiceRegistrationCommandRunner {
           exitCode: 0,
           stdout: JSON.stringify({ name: "ChatGPTTelaCodex", taskPath: "\\", executable: this.executable,
             arguments: this.arguments, workingDirectory: this.workingDirectory,
-            logonType: "Interactive", runLevel: "Limited", enabled: true }),
+            logonType: "Interactive", runLevel: "Limited", enabled: true,
+            currentUser: this.currentUser, hasTrigger: this.hasTrigger }),
           stderr: "",
         };
       }
@@ -344,7 +347,11 @@ describe("service registration ownership", () => {
       expect(runner.executable).toBe(definition.executable);
       expect(runner.arguments).toBe(definition.arguments);
       expect(await installer.observeReady(resource, readOwnershipManifest(manifestPath)!)).toBe("owned");
-      expect(runner.calls.some(([, args]) => Buffer.from(args[3] ?? "", "base64").toString("utf16le").includes("Register-ScheduledTask"))).toBe(true);
+      const registration = runner.calls.map(([, args]) => Buffer.from(args[3] ?? "", "base64").toString("utf16le"))
+        .find(script => script.includes("Register-ScheduledTask"));
+      expect(registration).toContain("-ExecutionTimeLimit ([TimeSpan]::Zero)");
+      expect(registration).toContain("-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries");
+      expect(registration).toContain("-Settings $settings");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -591,11 +598,20 @@ describe("service registration ownership", () => {
         markerPath,
         runner,
       });
-      runner.executable = "C:\\Other\\foreign.exe";
+      const installed = readOwnershipManifest(manifestPath)!;
       runner.calls.length = 0;
       const manager = new ServiceRegistrationManager({ platform: "win32", runner });
-      expect(await manager.observe(resource, readOwnershipManifest(manifestPath)!)).toBe("ownership-drift");
-      expect((await manager.release(resource, readOwnershipManifest(manifestPath)!)).removed).toBe(false);
+      runner.currentUser = false;
+      expect(await manager.observe(resource, installed)).toBe("ownership-drift");
+      expect((await manager.release(resource, installed)).removed).toBe(false);
+      runner.currentUser = true;
+      runner.hasTrigger = true;
+      expect(await manager.observe(resource, installed)).toBe("ownership-drift");
+      expect((await manager.release(resource, installed)).removed).toBe(false);
+      runner.hasTrigger = false;
+      runner.executable = "C:\\Other\\foreign.exe";
+      expect(await manager.observe(resource, installed)).toBe("ownership-drift");
+      expect((await manager.release(resource, installed)).removed).toBe(false);
       expect(runner.calls.some(([, args]) => Buffer.from(args[3] ?? "", "base64").toString("utf16le").includes("Stop-ScheduledTask"))).toBe(false);
       expect(runner.calls.some(([, args]) => Buffer.from(args[3] ?? "", "base64").toString("utf16le").includes("Unregister-ScheduledTask"))).toBe(false);
     } finally {

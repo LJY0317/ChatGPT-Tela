@@ -197,7 +197,13 @@ async function windowsFingerprint(
     "$t=Get-ScheduledTask -TaskName $telaArguments[0] -TaskPath '\\' -ErrorAction SilentlyContinue;",
     "if ($null -eq $t) { exit 3 };",
     "$a=@($t.Actions); if($a.Count -ne 1){ exit 4 };",
-    "[pscustomobject]@{name=$t.TaskName;taskPath=$t.TaskPath;executable=$a[0].Execute;arguments=[string]$a[0].Arguments;workingDirectory=$a[0].WorkingDirectory;logonType=$t.Principal.LogonType.ToString();runLevel=$t.Principal.RunLevel.ToString();enabled=[bool]$t.Settings.Enabled} | ConvertTo-Json -Compress",
+    "$currentSid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;",
+    "$taskUser=[string]$t.Principal.UserId;",
+    "if ($taskUser -notmatch '^S-[0-9]+(-[0-9]+)+$') {",
+    "  $account=[System.Security.Principal.NTAccount]::new($taskUser);",
+    "  $taskUser=$account.Translate([System.Security.Principal.SecurityIdentifier]).Value;",
+    "};",
+    "[pscustomobject]@{name=$t.TaskName;taskPath=$t.TaskPath;executable=$a[0].Execute;arguments=[string]$a[0].Arguments;workingDirectory=$a[0].WorkingDirectory;logonType=$t.Principal.LogonType.ToString();runLevel=$t.Principal.RunLevel.ToString();enabled=[bool]$t.Settings.Enabled;currentUser=($taskUser -eq $currentSid);hasTrigger=[bool]$t.Triggers} | ConvertTo-Json -Compress",
   ].join(" ");
   const result = await runner.run("powershell.exe", windowsPowerShellArguments(script, [registrationId]));
   if (result.exitCode === 3) return Object.freeze({ exists: false });
@@ -205,6 +211,11 @@ async function windowsFingerprint(
   let value: unknown;
   try { value = JSON.parse(result.stdout) as unknown; }
   catch (error) { throw new Error("Windows scheduled-task inspection returned invalid JSON", { cause: error }); }
+  const evidence = value as { currentUser?: unknown; hasTrigger?: unknown } | null;
+  if (typeof evidence?.currentUser !== "boolean" || typeof evidence.hasTrigger !== "boolean") {
+    throw Error("Windows scheduled-task account or trigger evidence is unavailable");
+  }
+  if (!evidence.currentUser || evidence.hasTrigger) return Object.freeze({ exists: true });
   return Object.freeze({ exists: true, fingerprint: fingerprint(canonicalWindowsEvidence(value, registrationId)) });
 }
 
@@ -465,7 +476,8 @@ export class ServiceRegistrationInstaller {
           "if($null -ne (Get-ScheduledTask -TaskName $name -TaskPath '\\' -ErrorAction SilentlyContinue)){ exit 6 };",
           "$action=New-ScheduledTaskAction -Execute $exe -Argument $arguments -WorkingDirectory $working;",
           "$principal=New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited;",
-          "Register-ScheduledTask -TaskName $name -TaskPath '\\' -Action $action -Principal $principal -ErrorAction Stop | Out-Null",
+          "$settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries;",
+          "Register-ScheduledTask -TaskName $name -TaskPath '\\' -Action $action -Principal $principal -Settings $settings -ErrorAction Stop | Out-Null",
         ].join(" ");
         const created = await this.#runner.run("powershell.exe", windowsPowerShellArguments(script, [
           input.resource.registrationId, definition.executable, definition.arguments, definition.workingDirectory]));

@@ -240,8 +240,10 @@ payload fingerprint and three platform-native service definitions without creati
 Apply first reserves ownership intents for only the planned `create` steps, copies the exact validated binary
 payload into the marker-owned binary root, writes a payload receipt last, and registers Gateway/Chat/Codex as
 dormant OS registrations. Linux units are enabled but not started, macOS LaunchAgents are bootstrapped
-with `RunAtLoad=false`, and Windows registers enabled current-user interactive Scheduled Tasks with no trigger
-(manual start only). Interrupted binary copies or
+with `RunAtLoad=false`, and Windows registers enabled current-user interactive Scheduled Tasks
+for manual start. New tasks have no execution time limit and can run on battery power.
+Ownership checks also verify the current account and absence of automatic triggers.
+Interrupted binary copies or
 service registration can resume only while the same manifest/marker/definition identity is still provable.
 Foreign files, orphaned markers, changed payload bytes, and changed definitions remain non-destructive.
 
