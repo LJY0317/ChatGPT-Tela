@@ -1832,14 +1832,17 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     if action != "start" && confirmedDesktopPid == nil {
       let alert = NSAlert()
       alert.alertStyle = .warning
-      alert.messageText = action == "restart" ? "Reopen \(profile.targetDisplayName) with Tela?" : "Turn off Web models in \(profile.targetDisplayName)?"
+      alert.messageText = action == "restart"
+        ? String(format: telaText("Reopen %@?"), profile.targetDisplayName)
+        : String(format: telaText("Turn off Web models in %@?"), profile.targetDisplayName)
       alert.informativeText = action == "restart"
-        ? "Finish any work before reopening ChatGPT."
+        ? telaText("Finish any work before continuing.")
         : profile.targetSessionState == "independent"
-          ? "Finish any Web work before disconnecting. ChatGPT will stay open."
-          : "ChatGPT will close. Finish any work before continuing."
-      alert.addButton(withTitle: action == "restart" ? "Reopen with Tela"
-        : profile.targetSessionState == "independent" ? "Turn Off Web Models" : "Turn Off and Close")
+          ? telaText("Finish any Web work before disconnecting. ChatGPT will stay open.")
+          : telaText("ChatGPT will close. Finish any work before continuing.")
+      let confirmTitle = action == "restart" ? "Reopen with Tela"
+        : profile.targetSessionState == "independent" ? "Turn Off Web Models" : "Turn Off and Close"
+      alert.addButton(withTitle: telaText(confirmTitle))
       alert.addButton(withTitle: telaText("Cancel"))
       let decision = action == "restart" ? "web_reopen" : "web_disconnect"
       let decisionId = UUID().uuidString
