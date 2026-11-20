@@ -1,6 +1,16 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import type { App } from "electron";
+
+// Each persistent profile keeps a working HTTP cache without inheriting
+// Chromium's much larger free-disk-based default on roomy drives.
+const PROFILE_HTTP_CACHE_BYTES = 256 * 1024 * 1024;
+
+export function configureProductBrowserStorage(app: Pick<App, "setPath" | "commandLine">, userDataDir: string): void {
+  app.setPath("userData", userDataDir);
+  app.commandLine.appendSwitch("disk-cache-size", String(PROFILE_HTTP_CACHE_BYTES));
+}
 
 export interface ChatGptTelaBrowserProfile {
   readonly slot: number;

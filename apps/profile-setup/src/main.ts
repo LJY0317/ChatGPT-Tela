@@ -1,5 +1,5 @@
 import {
-  bindChatGptTelaAccount, loadElectronProfileSetupConfig,
+  bindChatGptTelaAccount, configureProductBrowserStorage, loadElectronProfileSetupConfig,
   resolveChatGptTelaBrowserProfile, startElectronProfileSetupRuntime,
 } from "@chatgpt-tela/development-runtime";
 import { app, BrowserWindow, dialog, Menu } from "electron";
@@ -7,7 +7,7 @@ import { createSetupCompletion } from "./completion";
 
 async function main(): Promise<void> {
   const config = loadElectronProfileSetupConfig();
-  app.setPath("userData", config.browserUserDataDir);
+  configureProductBrowserStorage(app, config.browserUserDataDir);
   const profile = resolveChatGptTelaBrowserProfile({ slot: config.slot, profileRoot: config.profileRoot });
   const runtime = await startElectronProfileSetupRuntime(config);
   try {

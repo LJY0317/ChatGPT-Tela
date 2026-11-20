@@ -3,6 +3,7 @@ import { readServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
 import { diagnosticFingerprint, withDiagnosticContext } from "@chatgpt-tela/core";
 import {
+  configureProductBrowserStorage,
   loadProductProfileRuntimeConfig,
   startAppOwnedProductResponsesRuntime,
 } from "@chatgpt-tela/development-runtime";
@@ -32,7 +33,7 @@ async function mainAppOwned(
   config: ReturnType<typeof loadProductProfileRuntimeConfig>,
   ingress: { readonly port: number; readonly capability: string },
 ): Promise<void> {
-  app.setPath("userData", config.browserProfile.userDataDir);
+  configureProductBrowserStorage(app, config.browserProfile.userDataDir);
   if (process.platform === "darwin") app.dock?.hide();
   const lifecycle = await createProfileSupervisorLifecycle();
   const keepAliveWithoutWindows = () => {};
