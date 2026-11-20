@@ -79,14 +79,20 @@ repeated the full path without a CLI submission. A temporary profile
 configuration exposed the nested collaboration tool for a fresh Desktop task.
 The first child turn, Web final delivery, automatic registration, and receipt
 were verified before leaving the profile configuration at its original setting.
-Default Desktop tool exposure and a supported consumer setting remain unverified.
+With the profile restored to its original settings, a fresh Desktop task in
+the same profile did not expose nested Code Mode spawn. The bundled App Server's
+`config/read` loaded the same option from a trusted project's
+`.codex/config.toml` without a profile-wide override. The project-scoped check
+covered configuration loading; the live Desktop run used the temporary profile
+setting. The option remains version-specific and undocumented in the public
+configuration reference.
 [Engine implementation](https://github.com/openai/codex/blob/rust-v0.171.0-alpha.13/codex-rs/core/src/tools/handlers/multi_agents_v2.rs#L54-L66)
 · [Direct input restriction](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/request_processors/thread_input.rs).
 
-When nested Code Mode collaboration is unavailable, the official desktop
-thread tools can create an independent Web task with the full assignment and
-return its result by thread ID. This route was also verified with a live Web
-answer and explicit retention registration.
+For the default Desktop setup, use the official desktop thread tools to create
+an independent Web task with the full assignment and retrieve its result by
+thread ID. This route was verified with a live Web answer and explicit retention
+registration.
 
 ### Cross-profile dispatch
 
