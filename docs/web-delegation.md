@@ -158,8 +158,9 @@ Automatic deletion remains disabled.
 
 When a new child executes its first official turn through a Web route, the installed
 profile runtime notifies the existing owned service once per new provider operation.
-The service verifies the exact configured profile, canonical parent/child lineage and
-first turn before enrollment. Ordinary chats and later Native-to-Web switches do not
+Notification starts before Web context preparation so an eligible child can still be
+managed if that preparation fails. The service verifies the exact configured profile,
+canonical parent/child lineage and first turn before enrollment. Ordinary chats and later Native-to-Web switches do not
 enroll. Replayed responses do not dispatch another notification; observations never
 reactivate retained archive records. A registration failure emits correlated diagnostics
 without blocking the answer or shutdown readiness. No catalog scan, hook installation,

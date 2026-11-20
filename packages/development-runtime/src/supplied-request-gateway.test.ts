@@ -461,22 +461,22 @@ test("completed Web answer survives observer disconnect until an identical late 
   } finally { release(); await f.gateway.close(); }
 });
 
-test("opaque input cannot acquire Native history or a browser through supplied identifiers", async () => {
+test("a child with rejected Web context still notifies retention once without opening a browser", async () => {
   let nativeReads = 0;
   const planner = createNativeRequestDevelopmentWebTurnPlanner({
     async compactionHistory() { nativeReads++; throw Error("Native source must stay unreachable"); },
     async preparationBudgetFor() { nativeReads++; throw Error("Native compaction budget must stay unreachable"); },
   });
-  const f = fixture({ planner });
+  const children: unknown[] = [];
+  const f = fixture({ planner, onWebChild: async child => { children.push(child); } });
+  const child = request("turn-1", [{ type: "compaction", encrypted_content: "opaque" }, ...firstInput]);
+  Object.assign(child.client_metadata["x-codex-turn-metadata"], { parent_thread_id: "parent" });
   try {
-    await expect(f.gateway.handle(request("turn-1", [
-      { type: "compaction", encrypted_content: "opaque" }, ...firstInput,
-    ]))).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
+    await expect(f.gateway.handle(child)).rejects.toBeInstanceOf(NativeHistoryBootstrapRequired);
     const response = await handleNativeResponsesHttp(new Request("http://localhost/v1/responses", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request("turn-1", [
-        { type: "compaction", encrypted_content: "opaque" }, ...firstInput,
-      ])),
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(child),
     }), f.gateway);
+    expect(children).toEqual([{ parentThreadId: "parent", threadId: "thread-1", turnId: "turn-1" }]);
     expect(response.status).toBe(400);
     const failure = await response.json() as any;
     expect(failure.error.code).toBe("tela_native_history_checkpoint_required");

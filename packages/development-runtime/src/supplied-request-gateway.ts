@@ -271,6 +271,15 @@ export function createSuppliedRequestGateway(input: {
                   return { type: "final", answer: saved.answer, delivery: { capability } } as const;
                 }
               }
+              if (claim.parentThreadId && input.onWebChild) {
+                const child = { threadId: identity.threadId, turnId: identity.turnId, parentThreadId: claim.parentThreadId };
+                // Observe the official child even if Web context preparation fails.
+                // The retention service verifies lineage and the first saved turn.
+                void Promise.resolve().then(() => input.onWebChild!(child)).catch(error => {
+                  withDiagnosticContext(correlation, () => emitDiagnosticEvent("chatgpt_tela_work",
+                    "delegation_retention_enrollment_failed", diagnosticFailureFields(error)));
+                });
+              }
               plan = await planner.planSuppliedRequest(identity, body, { signal, onProgress: publish,
                 onPlannerStage: stage => { plannerStage = stage; },
               });
@@ -280,15 +289,6 @@ export function createSuppliedRequestGateway(input: {
                 ...(owned.advertisedGoals.length ? { nativeGoalControl: capability } : {}) };
               assertWebMessageFitsComposer({ ...plan, chatTools });
               if (plan.physicalContext.mode !== "retained-delta") await epochs.retire(identity.threadId);
-              if (claim.parentThreadId && input.onWebChild) {
-                const child = { threadId: identity.threadId, turnId: identity.turnId, parentThreadId: claim.parentThreadId };
-                // Dispatch once. Retention is independent of response latency and
-                // success; the existing service owns its durable enrollment write.
-                void Promise.resolve().then(() => input.onWebChild!(child)).catch(error => {
-                  withDiagnosticContext(correlation, () => emitDiagnosticEvent("chatgpt_tela_work",
-                    "delegation_retention_enrollment_failed", diagnosticFailureFields(error)));
-                });
-              }
               const page = await epochs.acquire(plan.nativeTaskId, plan.webEpochId);
               acquired = true;
               const bound = bindWebEpochDocument(plan, page, signal);
