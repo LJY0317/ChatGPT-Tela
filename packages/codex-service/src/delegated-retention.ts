@@ -14,6 +14,10 @@ type State = {
   archivedAt?: number; releasedAt?: number; archivePending?: true; reviewAfter?: number; issue?: string; title?: string;
 };
 const settledAt = (record: State) => record.archivedAt ?? record.releasedAt;
+function settledExpired(record: State, observedAt: number): boolean {
+  const settled = settledAt(record);
+  return settled != null && observedAt - settled > METADATA_RETENTION;
+}
 export interface DelegatedRetentionProfile {
   /** Install identity + exact configured profile/home; never a model-supplied label. */
   scope: string;
@@ -88,17 +92,23 @@ export function createDelegatedRetention(input: {
       || key(record.scope, id(record.threadId)) + ".json" !== file) throw Error("Invalid delegation state");
     if (record.parentThreadId !== undefined) id(record.parentThreadId);
     if (record.pendingFirstTurnId !== undefined) id(record.pendingFirstTurnId);
-    const settled = settledAt(record);
-    if (settled != null && now() - settled > METADATA_RETENTION) unlinkSync(join(input.directory, file));
+    if (settledExpired(record, now())) unlinkSync(join(input.directory, file));
     else {
       // Old completion-based deadlines must not postpone the fixed fallback.
       record.dueAt = Math.min(record.dueAt, record.enrolledAt + 7 * DAY);
       records.set(file.slice(0, -5), record);
     }
   }
+  const removeRecord = (k: string) => { unlinkSync(path(k)); records.delete(k); };
   const save = (k: string, record: State) => {
     const body = JSON.stringify(record) + "\n";
-    const size = [...records].reduce((sum, [other, value]) => sum + (other === k ? 0 : Buffer.byteLength(JSON.stringify(value) + "\n")), Buffer.byteLength(body));
+    const observedAt = now();
+    let size = Buffer.byteLength(body);
+    for (const [other, value] of records) {
+      if (other === k) continue;
+      if (settledExpired(value, observedAt)) removeRecord(other);
+      else size += Buffer.byteLength(JSON.stringify(value) + "\n");
+    }
     if (size > MAX_BYTES) throw Error("Delegation metadata storage is full; existing records were preserved");
     const temporary = path(k) + "." + randomUUID() + ".tmp";
     try { writeFileSync(temporary, body, { flag: "wx", mode: 0o600 }); renameSync(temporary, path(k)); }
@@ -149,8 +159,7 @@ export function createDelegatedRetention(input: {
     return active;
   };
   const discardObservation = (k: string, record: State, reason: string) => {
-    unlinkSync(path(k));
-    records.delete(k);
+    removeRecord(k);
     event("delegation_retention_observation_discarded", record, reason);
   };
   const confirmObservation = async (k: string, record: State, profile: DelegatedRetentionProfile) => {
@@ -340,8 +349,10 @@ export function createDelegatedRetention(input: {
       return serial(async () => {
         const outcomes: { threadId: string; status: string }[] = [];
         for (const [k, stored] of records) {
+          if (slot != null && stored.slot !== slot) continue;
+          if (settledExpired(stored, now())) removeRecord(k);
+          if (settledAt(stored) != null) continue;
           let record = stored;
-          if (slot != null && record.slot !== slot || settledAt(record) != null) continue;
           if (record.archivePending) { outcomes.push({ threadId: record.threadId, status: "archive_unconfirmed" }); continue; }
           const due = record.dueAt <= now();
           if (!due && (scheduled || record.pendingFirstTurnId === undefined)

@@ -273,6 +273,24 @@ test("archived records are not archived again after manual restore or restart an
   } finally { await f.close(); }
 });
 
+test("reconciliation prunes expired settled metadata without restarting the service", async () => {
+  const f = fixture();
+  try {
+    await f.manager.enroll(1, "parent", "child");
+    await f.manager.enroll(2, "parent", "child");
+    f.advance(7 * 24);
+    expect((await f.manager.reconcile(1)).outcomes[0]?.status).toBe("archived");
+    expect(readdirSync(f.options.directory)).toHaveLength(2);
+    f.advance(61 * 24);
+    const calls = f.calls.length;
+    expect((await f.manager.reconcile(1)).outcomes).toEqual([]);
+    expect(f.calls).toHaveLength(calls);
+    expect(readdirSync(f.options.directory)).toHaveLength(1);
+    expect(f.receipt()).toMatchObject({ slot: 2, threadId: "child" });
+    expect(f.manager.status().overdue).toMatchObject([{ slot: 2 }]);
+  } finally { await f.close(); }
+});
+
 test("one automatic next-due wakeup executes a persisted eligible archive", async () => {
   const f = fixture();
   let automatic: ReturnType<typeof createDelegatedRetention> | undefined;

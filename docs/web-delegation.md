@@ -323,7 +323,8 @@ or error bodies. A wait wakeup is not a collection receipt.
   or permanently inaccessible official app can perform an archive. Exact per-thread stopping
   through the app-owned engine and an affected-chat approval flow remain incomplete; do not
   substitute whole-profile interruption or claim they are implemented.
-- Archived or released tracking metadata expires after 60 days on startup; registration/acknowledgement
+- Archived or released tracking metadata expires after 60 days on startup, reconciliation
+  or the next metadata write. Registration and acknowledgement
   metadata uses total-byte limits without file-count limits. Existing unresolved
   records are preserved when new registration would exceed the storage budget.
   Acknowledgement receipts retain their existing 60-day/4-MiB age/byte policy.
