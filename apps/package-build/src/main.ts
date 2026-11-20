@@ -1,5 +1,5 @@
 import { assembleMacApplication } from "../../../packages/product-lifecycle/src/mac-application";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   closeSync,
   copyFileSync,
@@ -70,19 +70,33 @@ function electronExecutableRelativePath(platform: PackagePlatform): string {
   return platform === "win32" ? "electron.exe" : "electron";
 }
 
-function verifyWorkspaceHelper(path: string, platform: PackagePlatform): void {
-  const descriptor = openSync(path, "r");
-  const header = Buffer.alloc(4);
-  try {
-    if (readSync(descriptor, header, 0, 4, 0) !== 4) throw Error("workspace helper is not a platform binary");
-  } finally {
-    closeSync(descriptor);
+function verifyWorkspaceHelper(path: string, platform: PackagePlatform, arch: PackageArch): void {
+  if (platform === "darwin") {
+    // macOS assembly already requires a matching macOS host. lipo handles universal helpers.
+    const result = spawnSync("/usr/bin/lipo", ["-verify_arch", arch === "x64" ? "x86_64" : arch, resolve(path)]);
+    if (result.error) throw result.error;
+    if (result.status === 0) return;
+  } else {
+    const descriptor = openSync(path, "r");
+    const header = Buffer.alloc(64);
+    try {
+      if (readSync(descriptor, header, 0, header.length, 0) === header.length) {
+        if (platform === "linux") {
+          const elf64LittleEndian = header.subarray(0, 6).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1]));
+          const machine = header.readUInt16LE(18); // ELF e_machine
+          if (elf64LittleEndian && machine === (arch === "arm64" ? 183 : 62)) return;
+        } else if (header.toString("ascii", 0, 2) === "MZ") {
+          const peOffset = header.readUInt32LE(0x3c);
+          const pe = Buffer.alloc(6);
+          if (readSync(descriptor, pe, 0, pe.length, peOffset) === pe.length && pe.readUInt32LE(0) === 0x00004550
+            && pe.readUInt16LE(4) === (arch === "arm64" ? 0xaa64 : 0x8664)) return;
+        }
+      }
+    } finally {
+      closeSync(descriptor);
+    }
   }
-  const signature = header.toString("hex");
-  const matches = platform === "win32" ? signature.startsWith("4d5a")
-    : platform === "linux" ? signature === "7f454c46"
-    : ["cffaedfe", "feedfacf", "cafebabe", "bebafeca"].includes(signature);
-  if (!matches) throw Error(`workspace helper binary does not match ${platform} package target`);
+  throw Error(`Workspace files helper must be built for ${platform}/${arch}`);
 }
 
 async function electronDistribution(platform: PackagePlatform, arch: PackageArch, temporary: string): Promise<string> {
@@ -158,7 +172,7 @@ async function main(): Promise<void> {
   const appOptions = macApp ? { buildVersion: requiredOption("--build-number"), feedURL: requiredOption("--update-feed-url"), publicKey: requiredOption("--update-public-key") } : undefined;
   const macCodesignIdentity = macApp ? option("--mac-codesign-identity") ?? "-" : undefined;
   const workspaceFilesSourcePath = option("--workspace-files");
-  if (workspaceFilesSourcePath && platform !== process.platform) verifyWorkspaceHelper(workspaceFilesSourcePath, platform);
+  if (workspaceFilesSourcePath) verifyWorkspaceHelper(workspaceFilesSourcePath, platform, arch);
   const temporary = mkdtempSync(join(tmpdir(), "chatgpt-tela-package-build-"));
   try {
     const electronBundle = await electronDistribution(platform, arch, temporary);
