@@ -419,7 +419,7 @@ at install.
 Maintainers can run the **Windows and Linux packages** workflow to build x64 ZIP
 (Windows) and tar.gz (Linux) archives with the native workspace helper and SHA-256
 checksums. Before uploading, each job extracts the archive and tests installation,
-the local Chat service, repair, keep-data reinstall, and full removal using the
+all three services, repair, keep-data reinstall, and full removal using the
 platform's service manager in a clean user profile. Download the tested archive
 from that run.
 

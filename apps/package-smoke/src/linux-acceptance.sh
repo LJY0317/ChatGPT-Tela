@@ -26,6 +26,16 @@ install_package() {
   done
 }
 
+check_services() {
+  local action="$1" result_state="$2" unit_state="$3"
+  "$installed" services "$action" | jq -e --arg state "$result_state" '
+    .success and ([.services[].service] | sort == ["chat", "codex", "gateway"])
+    and all(.services[]; .state == $state)'
+  for service in gateway chat codex; do
+    [[ "$(systemctl --user show --property=ActiveState --value "chatgpt-tela-$service.service")" == "$unit_state" ]]
+  done
+}
+
 assert_removed() {
   [[ ! -e "$installed" && "$(cat "$sentinel")" == 'foreign data' ]]
   for service in gateway chat codex; do
@@ -40,16 +50,15 @@ install_package
 {"version":1,"publicMcpAbi":"stable","exposure":{"kind":"existing-https","publicUrl":"https://example.test/mcp","localPort":18743,"authentication":"none","allowUnauthenticatedPublicEndpoint":true}}
 JSON
 config_sha="$(sha256sum "$config")"
-"$installed" services start chat | jq -e '.success == true'
-systemctl --user is-active --quiet chatgpt-tela-chat.service
-"$installed" services stop chat | jq -e '.success == true'
-[[ "$(systemctl --user show --property=ActiveState --value chatgpt-tela-chat.service)" == inactive ]]
+check_services start running active
+check_services stop stopped inactive
 
 # Simulate a missing owned launcher, then repair from the extracted package.
 rm "$installed"
 "$source_launcher" repair --apply | jq -e '.payload == "repaired"'
 cmp "$source_launcher" "$installed"
 
+check_services start running active
 "$source_launcher" uninstall --apply | jq -e '.applied == true and .failedCount == 0'
 assert_removed
 [[ "$(sha256sum "$config")" == "$config_sha" ]]

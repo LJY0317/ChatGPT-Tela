@@ -54,6 +54,21 @@ function Assert-TelaRemoved {
     }
 }
 
+function Test-TelaServiceTransition([string] $Action, [string] $ResultState, [string] $TaskState) {
+    $result = Invoke-Tela $installed @('services', $Action)
+    $serviceNames = ($result.services.service | Sort-Object) -join ','
+    $unexpected = $result.services | Where-Object { $_.state -ne $ResultState }
+    if (-not $result.success -or $serviceNames -ne 'chat,codex,gateway' -or $unexpected) {
+        throw "Tela service transition failed: $Action"
+    }
+    foreach ($name in $taskNames) {
+        $task = Get-TelaTask $name
+        if (-not $task -or $task.State.ToString() -ne $TaskState) {
+            throw "Scheduled task did not reach ${TaskState}: $name"
+        }
+    }
+}
+
 $sentinel = (New-TemporaryFile).FullName
 try {
     Set-Content -LiteralPath $sentinel -Value 'outside Tela' -NoNewline
@@ -63,14 +78,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Tela setup failed.' }
     $configHash = (Get-FileHash -LiteralPath $config).Hash
 
-    $start = Invoke-Tela $installed @('services', 'start', 'chat')
-    if (-not $start.success -or (Get-TelaTask 'ChatGPTTelaChat').State.ToString() -ne 'Running') {
-        throw 'The packaged Chat service did not start.'
-    }
-    $stop = Invoke-Tela $installed @('services', 'stop', 'chat')
-    if (-not $stop.success -or (Get-TelaTask 'ChatGPTTelaChat').State.ToString() -ne 'Ready') {
-        throw 'The packaged Chat service did not stop.'
-    }
+    Test-TelaServiceTransition start running Running
+    Test-TelaServiceTransition stop stopped Ready
 
     Remove-Item -LiteralPath $installed
     $repair = Invoke-Tela $source @('repair', '--apply')
@@ -79,6 +88,7 @@ try {
         throw 'Package repair did not restore the missing launcher.'
     }
 
+    Test-TelaServiceTransition start running Running
     $remove = Invoke-Tela $source @('uninstall', '--apply')
     if (-not $remove.applied -or $remove.failedCount -ne 0) { throw 'Keep-data removal failed.' }
     Assert-TelaRemoved
