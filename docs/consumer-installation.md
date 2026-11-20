@@ -34,8 +34,8 @@ ChatGPT plugin disconnection or deletion is a separate host operation. When the 
 ## Packaged CLI
 
 Extract the ZIP on Windows or the tar.gz archive on Linux and open the
-`ChatGPT-Tela` folder. Run the launcher from there. Use `./chatgpt-tela` on
-Linux or `.\chatgpt-tela.exe` in Windows PowerShell. For a source build, see the
+`ChatGPT-Tela` folder. Run the extracted launcher as `./chatgpt-tela` on
+Linux or `.\chatgpt-tela.exe` in PowerShell. For a source build, see the
 [package builder](../README.md#windows-and-linux-packages). The launcher uses its own package
 directory by default. Pass `--payload` to select another matching package.
 
@@ -51,6 +51,16 @@ chatgpt-tela repair --dry-run --payload <matching-package-directory>
 chatgpt-tela repair --apply --payload <matching-package-directory>
 chatgpt-tela uninstall --dry-run
 chatgpt-tela uninstall --dry-run --remove-data
+```
+
+To install, configure, and start Chat in Windows PowerShell, run:
+
+```powershell
+.\chatgpt-tela.exe install --apply
+$tela = Join-Path $env:LOCALAPPDATA 'ChatGPT Tela\bin\chatgpt-tela.exe'
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Get-Content -LiteralPath .\product-config.json -Raw -Encoding UTF8 | & $tela configure --stdin --if-missing
+& $tela services start chat
 ```
 
 Install first. `bootstrap-status`, `configure`, and service control require the installed package and its ownership receipt. `configure --if-missing` preserves an existing configuration. The `services start chat` command controls the local Chat service only.
