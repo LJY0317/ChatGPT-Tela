@@ -336,16 +336,21 @@ consumer Desktop acceptance. An isolated product-source run also left a Native
 container untouched, archived a selected leaf, and left that leaf active after manual restore
 and reconciliation. Its clock was advanced in the fixture; no real profile was changed.
 
-Deletion needs an additional restore-aware serialized contract: the installed engine
-accepted `thread/delete` after `thread/unarchive`. A current 0.169.0-alpha.11.1 isolated
-trial again confirmed that the restored chat was in the active list and was still
-deleted by that call; the generated delete schema accepts only `threadId`, with no
-archived-state or archive-generation precondition. Writer exclusion alone therefore
-cannot enforce “delete only the still-archived generation.” Automatic 30-day deletion
-is not enabled. Do not approximate it with a separate read followed by unconditional
-delete. Full manual archive/restore observation before the first managed archive is
-also not established; an archive-and-restore occurring entirely between observations
-must not be claimed as detected. Consumer acceptance must resolve that boundary.
+Automatic 30-day deletion is disabled. The [official App Server delete contract](https://learn.chatgpt.com/docs/app-server#delete-a-thread)
+allows deleting both active and archived chats and cascades to spawned descendants.
+Both installed profiles' 0.171.0-alpha.13 schemas, including experimental methods,
+expose only `threadId` for deletion. An isolated 0.169.0-alpha.11.1 trial deleted a
+chat after restoring it to the active list. The official Desktop UI offers manual
+deletion from Archived chats.
+
+Enable automatic deletion only when the engine can atomically verify that the exact
+archive instance is unchanged, is at least 30 days old, and the operation has no
+out-of-scope descendants. A separate read, restore notification, or writer lock
+does not make the unconditional endpoint safe.
+
+Full manual archive/restore observation before the first managed archive is still
+unverified. An archive-and-restore occurring entirely between observations may
+go undetected.
 
 Existing profile data and user-created conversations have not been enrolled or changed.
 
