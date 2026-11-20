@@ -915,6 +915,9 @@ HTTP200 SSE failures. `native_backend_error_failed` (`phase:http`) and
 upstream request fingerprint, and bounded numeric `retry_after_ms` when the provider actually supplies
 it. No raw code, message, model name, account, prompt, or response content is logged. A UI retry
 countdown or total client attempt count cannot be inferred from this evidence.
+For the observed plain-text 503 reset responses, the HTTP classifier distinguishes upstream
+connection termination from remote connection failure. These labels describe what the upstream
+reported and do not establish the root cause of the reset.
 
 Failure observation is enabled when the existing diagnostic sink is configured, independently of
 private capture. It inspects only consumer-pulled bytes: no tee, eager drain, timer, network retry,

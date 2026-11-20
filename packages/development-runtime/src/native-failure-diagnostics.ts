@@ -107,9 +107,15 @@ export function nativeProviderErrorFields(value: unknown, shape: NativeRequestSh
   return fields;
 }
 
-export function nativeErrorFields(bytes: Uint8Array, shape: NativeRequestShape): Fields {
+export function nativeErrorFields(bytes: Uint8Array, shape: NativeRequestShape, status?: number): Fields {
+  const text = new TextDecoder().decode(bytes);
+  if (status === 503) {
+    const reset = /^upstream connect error or disconnect\/reset before headers\. reset reason: (connection termination|remote connection failure)(?:\s|,|$)/.exec(text)?.[1];
+    if (reset) return { parsed_error: false, reason_class: reset === "connection termination"
+      ? "upstream_connection_terminated" : "upstream_connection_failed" };
+  }
   let envelope: unknown;
-  try { envelope = JSON.parse(new TextDecoder().decode(bytes)); }
+  try { envelope = JSON.parse(text); }
   catch { return { reason_class: "unclassified", parsed_error: false }; }
   return nativeProviderErrorFields(object(envelope)?.error, shape);
 }
@@ -161,7 +167,7 @@ export function diagnoseNativeFailure(upstream: Response, shape: NativeRequestSh
           for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
           emit("native_backend_error_failed", truncated
             ? { reason_class: "unclassified", truncated: true }
-            : { ...nativeErrorFields(bytes, shape), truncated: false });
+            : { ...nativeErrorFields(bytes, shape, upstream.status), truncated: false });
           release(); reader.releaseLock(); controller.close();
         } else {
           if (!truncated && count + next.value.byteLength <= MAX_ERROR_BYTES) {

@@ -135,6 +135,30 @@ test("HTTP overload preserves status, headers, body and safe diagnostic classifi
   expect(events().at(-1)).toMatchObject({ phase: "http", reason_class: "server_overloaded", retry_after_ms: 110000 });
 });
 
+test("plain-text upstream 503 resets retain the response and log only a fixed reason", async () => {
+  const prefix = "upstream connect error or disconnect/reset before headers. reset reason: ";
+  for (const [status, message, expected] of [
+    [503, prefix + "connection termination", "upstream_connection_terminated"],
+    [503, prefix + "remote connection failure", "upstream_connection_failed"],
+    [503, "connection termination", "unclassified"],
+    [500, prefix + "connection termination", "unclassified"],
+  ] as const) {
+    const body = message + ", SYNTHETIC_PRIVATE";
+    const response = await forwardNativeCodexRequest({
+      request: new Request("http://localhost/v1/responses", { method: "POST",
+        headers: { authorization: "Bearer synthetic" }, body: "{}" }),
+      endpoint: "responses", runtimeHeaderName: "x-tela",
+      fetchUpstream: async () => new Response(body, { status }),
+    });
+    expect(response.status).toBe(status);
+    expect(await response.text()).toBe(body);
+    const event = events().at(-1);
+    expect(event).toMatchObject({ stage: "native_backend_error_failed",
+      status_code: status, reason_class: expected, parsed_error: false });
+    expect(JSON.stringify(event)).not.toContain("SYNTHETIC_PRIVATE");
+  }
+});
+
 test("requested model evidence is bounded and never exports the raw model", () => {
   const shape=nativeRequestShape({model:"private-model",input:[]});
   expect(shape.fields.model_fingerprint).toBe(diagnosticFingerprint("private-model"));
