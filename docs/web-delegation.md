@@ -74,9 +74,12 @@ child Web task in a scoped CLI trial with
 used the nested Code Mode tool. The child's saved first turn contained the
 plaintext assignment, the actual Web answer reached the parent, and Tela's
 existing registry automatically registered the child and acknowledged the exact
-final. The setting applied only to the trial process. Desktop's default tool
-availability and a supported consumer setting for enabling this route remain
-unverified.
+final. A separate profile-2 trial through the official Desktop task tools
+repeated the full path without a CLI submission. A temporary profile
+configuration exposed the nested collaboration tool for a fresh Desktop task.
+The first child turn, Web final delivery, automatic registration, and receipt
+were verified before leaving the profile configuration at its original setting.
+Default Desktop tool exposure and a supported consumer setting remain unverified.
 [Engine implementation](https://github.com/openai/codex/blob/rust-v0.171.0-alpha.13/codex-rs/core/src/tools/handlers/multi_agents_v2.rs#L54-L66)
 · [Direct input restriction](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/request_processors/thread_input.rs).
 
