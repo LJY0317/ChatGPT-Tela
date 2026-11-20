@@ -91,6 +91,19 @@ func openTelaDesktopProfile(_ profile: TelaDesktopProfile, activates: Bool, comp
   }
 }
 
+enum TelaUpdateBlocked: LocalizedError {
+  case nativeActivityUnobservable, workNotReady
+
+  var errorDescription: String? {
+    switch self {
+    case .nativeActivityUnobservable:
+      return telaText("Tela can’t check for running work while ChatGPT is open.")
+    case .workNotReady:
+      return telaText("Running work may be interrupted.")
+    }
+  }
+}
+
 /// Sparkle owns all update transport, verification, replacement and standard presentation.
 @MainActor
 final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
@@ -291,11 +304,11 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
         MainActor.assumeIsolated {
           var failure: Error?
           if case .failure(let error) = result { failure = error }
-          if let error = failure as NSError?, error.domain == "TelaUpdateBusy", !arguments.contains("--interrupt-work") {
+          if let blocked = failure as? TelaUpdateBlocked, !arguments.contains("--interrupt-work") {
             self.preparationWindow?.orderOut(nil)
             let alert = NSAlert()
             alert.messageText = telaText("Close ChatGPT and update?")
-            alert.informativeText = telaText("Finish any work before continuing.")
+            alert.informativeText = blocked.localizedDescription
             alert.addButton(withTitle: telaText("Close and Update"))
             alert.addButton(withTitle: telaText("Later"))
             if alert.runModal() == .alertFirstButtonReturn {
@@ -349,13 +362,9 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       } catch { return (1, Data()) }
     }.value
     let value = (try? JSONSerialization.jsonObject(with: outcome.1)) as? [String: Any]
-    if let service = value?["blockedService"] as? String,
-      let name = ["chat": "Tela Chat", "codex": "Work / Codex", "gateway": "Tela Gateway"][service] {
-      let detail = value?["blockedReason"] as? String == "native_activity_unobservable"
-        ? telaText("ChatGPT is open, but Tela cannot check whether its Native work is idle. This does not mean running work was detected.")
-        : String(format: telaText("%@ is not ready for this update. Finish any work before continuing; ChatGPT may need to close."), name)
-      throw NSError(domain: "TelaUpdateBusy", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: detail])
+    if let service = value?["blockedService"] as? String, ["chat", "codex", "gateway"].contains(service) {
+      throw value?["blockedReason"] as? String == "native_activity_unobservable"
+        ? TelaUpdateBlocked.nativeActivityUnobservable : TelaUpdateBlocked.workNotReady
     }
     guard outcome.0 == 0, let value,
       value["ready"] as? Bool == true || value["prepared"] as? Bool == true else {
