@@ -1,16 +1,21 @@
 import { assembleMacApplication } from "../../../packages/product-lifecycle/src/mac-application";
 import { execFileSync } from "node:child_process";
 import {
-  existsSync,
+  closeSync,
   copyFileSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
+  readSync,
+  realpathSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import {
   buildPackagedPayload,
   CURRENT_PACKAGED_LIFECYCLE,
@@ -19,6 +24,18 @@ import {
 } from "@chatgpt-tela/product-lifecycle";
 
 const repoRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
+type PackagePlatform = "darwin" | "win32" | "linux";
+type PackageArch = "arm64" | "x64";
+
+function target(): { platform: PackagePlatform; arch: PackageArch } {
+  const platform = option("--target-platform") ?? process.platform;
+  const arch = option("--target-arch") ?? process.arch;
+  if ((platform !== "darwin" && platform !== "win32" && platform !== "linux")
+    || (arch !== "arm64" && arch !== "x64")) {
+    throw Error(`unsupported package target: ${platform}/${arch}`);
+  }
+  return { platform, arch };
+}
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -42,19 +59,51 @@ function runBun(arguments_: readonly string[]): void {
   });
 }
 
-function compileExecutable(entrypoint: string, output: string): void {
-  runBun(["build", entrypoint, "--compile", `--outfile=${output}`]);
+function compileExecutable(entrypoint: string, output: string, platform: PackagePlatform, arch: PackageArch): void {
+  const targetArgs = platform === process.platform && arch === process.arch
+    ? [] : [`--target=bun-${platform === "win32" ? "windows" : platform}-${arch}`];
+  runBun(["build", entrypoint, "--compile", ...targetArgs, `--outfile=${output}`]);
 }
 
-function electronExecutableRelativePath(): string {
-  if (process.platform === "darwin") return "Electron.app/Contents/MacOS/Electron";
-  if (process.platform === "win32") return "electron.exe";
-  if (process.platform === "linux") return "electron";
-  throw new Error(`packaged payload build is unsupported on ${process.platform}`);
+function electronExecutableRelativePath(platform: PackagePlatform): string {
+  if (platform === "darwin") return "Electron.app/Contents/MacOS/Electron";
+  return platform === "win32" ? "electron.exe" : "electron";
 }
 
-function electronDistribution(): string {
+function verifyWorkspaceHelper(path: string, platform: PackagePlatform): void {
+  const descriptor = openSync(path, "r");
+  const header = Buffer.alloc(4);
+  try {
+    if (readSync(descriptor, header, 0, 4, 0) !== 4) throw Error("workspace helper is not a platform binary");
+  } finally {
+    closeSync(descriptor);
+  }
+  const signature = header.toString("hex");
+  const matches = platform === "win32" ? signature.startsWith("4d5a")
+    : platform === "linux" ? signature === "7f454c46"
+    : ["cffaedfe", "feedfacf", "cafebabe", "bebafeca"].includes(signature);
+  if (!matches) throw Error(`workspace helper binary does not match ${platform} package target`);
+}
+
+async function electronDistribution(platform: PackagePlatform, arch: PackageArch, temporary: string): Promise<string> {
   const root = resolve(repoRoot, "node_modules", "electron");
+  if (platform !== process.platform || arch !== process.arch) {
+    // Use Electron's pinned official downloader and extractor without modifying
+    // the local host's node_modules/electron/dist or its executable pointer.
+    const requireElectron = createRequire(realpathSync(join(root, "install.js")));
+    const { downloadArtifact } = requireElectron("@electron/get") as {
+      downloadArtifact: (options: { artifactName: "electron"; version: string; platform: PackagePlatform;
+        arch: PackageArch; checksums: Record<string, string> }) => Promise<string>;
+    };
+    const { extract } = requireElectron("@electron-internal/extract-zip") as { extract: (zip: string, options: { dir: string }) => Promise<void> };
+    const { version } = requireElectron("./package.json") as { version: string };
+    const zip = await downloadArtifact({ artifactName: "electron", version, platform, arch,
+      checksums: requireElectron("./checksums.json") });
+    const destination = join(temporary, "electron-distribution");
+    mkdirSync(destination);
+    await extract(zip, { dir: destination });
+    return destination;
+  }
   const distribution = join(root, "dist");
   if (!existsSync(distribution)) {
     // Bun may install the npm wrapper without running Electron's official
@@ -98,24 +147,28 @@ function macCodesign(outputPath: string, identity: string, manifest: PackagedPro
 }
 
 async function main(): Promise<void> {
+  const { platform, arch } = target();
   const outputPath = resolve(requiredOption("--output"));
   const productVersion = requiredOption("--version");
-  const macApp = process.platform === "darwin";
+  const macApp = platform === "darwin";
+  if (macApp && (process.platform !== "darwin" || arch !== process.arch)) {
+    throw Error("macOS app assembly/signing requires a matching macOS build host");
+  }
   if (macApp && !outputPath.endsWith(".app")) throw Error("macOS package builds require a .app output");
   const appOptions = macApp ? { buildVersion: requiredOption("--build-number"), feedURL: requiredOption("--update-feed-url"), publicKey: requiredOption("--update-public-key") } : undefined;
   const macCodesignIdentity = macApp ? option("--mac-codesign-identity") ?? "-" : undefined;
   const workspaceFilesSourcePath = option("--workspace-files");
-  const electronBundle = electronDistribution();
-
+  if (workspaceFilesSourcePath && platform !== process.platform) verifyWorkspaceHelper(workspaceFilesSourcePath, platform);
   const temporary = mkdtempSync(join(tmpdir(), "chatgpt-tela-package-build-"));
   try {
-    const executableExtension = process.platform === "win32" ? ".exe" : "";
+    const electronBundle = await electronDistribution(platform, arch, temporary);
+    const executableExtension = platform === "win32" ? ".exe" : "";
     const launcher = join(temporary, `chatgpt-tela${executableExtension}`);
     const profileRuntime = join(temporary, "profile-runtime.cjs");
     const profileSetup = join(temporary, "profile-setup.cjs");
-    const menuBar = process.platform === "darwin" ? join(temporary, "chatgpt-tela-menu-bar") : undefined;
+    const menuBar = macApp ? join(temporary, "chatgpt-tela-menu-bar") : undefined;
 
-    compileExecutable("apps/packaged-launcher/src/entrypoint.ts", launcher);
+    compileExecutable("apps/packaged-launcher/src/entrypoint.ts", launcher, platform, arch);
     runBun(["build", "apps/profile-runtime/src/main.ts", "--target=node", "--format=cjs", "--external", "electron",
       `--outfile=${profileRuntime}`]);
     runBun(["build", "apps/profile-setup/src/main.ts", "--target=node", "--format=cjs", "--external", "electron",
@@ -146,7 +199,7 @@ async function main(): Promise<void> {
       },
       profileRuntime: {
         electronBundleSourcePath: electronBundle,
-        electronExecutableRelativePath: electronExecutableRelativePath(),
+        electronExecutableRelativePath: electronExecutableRelativePath(platform),
         entrypointSourcePath: profileRuntime,
         setupEntrypointSourcePath: profileSetup,
       },

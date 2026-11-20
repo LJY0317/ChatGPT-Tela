@@ -24,8 +24,9 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   the disposable UI-exit test do not prove every signed-install recovery case. Reconcile
   existing transition receipts instead of repeating apply or reusing lost approval.
 - **Resources and platform support.** Measure installed disk/cache residue and idle
-  CPU/wakeups under representative use, plus restart continuity. Verify Windows/Linux
-  binaries and their supported install, update, removal and workspace-identity paths.
+  CPU/wakeups under representative use, plus restart continuity. The source can build
+  Windows and Linux payloads from another OS. Verify real service registration, updates,
+  removal and workspace identity on both target systems.
   Preserve active work, unresolved operations and recovery material when testing cleanup.
 - **Physical device isolation.** On two owned computers sharing an account, use separate
   sentinel files and one local service offline. Verify local tools never discover or fall
@@ -75,11 +76,11 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   run verified leaf archival and preservation after manual restore.
   Newly executing Web children now notify that same registry; canonical lineage and
   first-turn checks exclude ordinary chats and later model switches. Other Native
-  children and standalone Web chats require explicit enrollment. The source CLI reads
-  the registered chat's latest final and exact receipt IDs; acknowledgement remains a
-  separate action. Automatic standalone enrollment still needs an official creation
-  callback or a supported profile-scoped creation API. Retention is exactly 12h from verified latest-answer
-  collection, otherwise 7d from first enrollment; missing timestamps and new uncollected turns
+  children and standalone Web chats require explicit enrollment. Work's **Manage Web task…**
+  registers the exact chat, shows its latest saved answer and offers separate receipt confirmation.
+  Automatic standalone enrollment still needs an official creation callback or a supported
+  profile-scoped creation API. Retention is 12h from confirmed latest-answer collection,
+  otherwise 7d from first enrollment; missing timestamps and new uncollected turns
   do not extend the fallback. Blocked chats stay registered and Work exposes a review list.
   Exact app-owned task stop and approval for affected descendants remain incomplete.
   One service timer reviews deferred records again

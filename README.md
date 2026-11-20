@@ -369,13 +369,11 @@ platform-native service registrations from exact generated definitions. Apply re
 mutation and verification catches interrupted copies/registration; registrations are installed dormant rather
 than starting before product setup.
 
-The source tree now also builds a **signed multi-file runtime payload**. `bun run package:build` compiles one
-stable `chatgpt-tela` launcher plus separate Gateway/Chat/Codex executables, bundles the Electron profile
-runtime and its CJS entrypoint, writes the versioned package manifest, applies platform-native signing before
-the package fingerprint is frozen. OS
-service registrations point only at the stable launcher; the launcher re-proves the install manifest and
-payload receipt, reads the package manifest, and dispatches the exact service child. Codex receives the
-packaged Electron/profile-runtime paths from that manifest rather than a hardcoded install layout.
+`bun run package:build` compiles one `chatgpt-tela` launcher for Gateway, Chat and
+Codex, bundles the Electron profile runtime, and writes the versioned package manifest.
+macOS packages are signed during assembly. Service registration uses the same launcher
+on all three operating systems. The launcher verifies the installed package receipt and
+reads the manifest to start the requested service with its packaged runtime.
 
 Tela Chat has an optional **Save a file to your workspace** card. Open an approved workspace,
 then ask Tela to open its file import card (`open_file_import`). In hosts that expose ChatGPT's file
@@ -416,6 +414,21 @@ because Electron frameworks require those links for a valid bundle. Absolute, br
 links fail closed; the link path and target text are covered by the payload fingerprint and reproduced exactly
 at install.
 
+### Windows and Linux packages
+
+To build a Windows or Linux payload from another build host, add `--target-platform win32`
+or `--target-platform linux` and select `--target-arch x64` or `arm64`. For example:
+
+```sh
+bun run package:build --output ./build/tela-windows-x64 --version 0.0.0-preview --target-platform win32 --target-arch x64
+```
+
+Use a new or empty output directory. The builder uses the checkout's pinned Electron
+release and leaves the build host's Electron installation in place. If providing
+`--workspace-files`, build the helper for the same operating system and architecture
+and use an `.exe` suffix on Windows. For installation and removal, see the
+[packaged CLI guide](docs/consumer-installation.md#packaged-cli).
+
 On Windows, those registrations are current-user interactive Scheduled Tasks with no trigger, not
 `LocalSystem` services. That keeps Gateway/Chat/Codex in the same user profile and Desktop session as Tela's
 config, ChatGPT state, and built-in Desktop adapter while still providing explicit normal start/stop control.
@@ -452,7 +465,7 @@ fingerprints bind planning, apply and installed ownership to the exact package b
 ./chatgpt-tela repair --dry-run
 ./chatgpt-tela repair --apply
 
-# Run from the target package for an upgrade:
+# Windows/Linux only. Run from the target package for an upgrade:
 ./chatgpt-tela upgrade --dry-run
 ./chatgpt-tela upgrade --apply
 

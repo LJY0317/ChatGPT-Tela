@@ -241,8 +241,9 @@ export function buildPackagedPayload(input: PackagedPayloadBuildInput): BuiltPac
 
   let workspaceFiles: PackagedProductManifest["workspaceFiles"];
   if (input.workspaceFilesSourcePath) {
-    const executable = `helpers/tela-workspace-files${process.platform === "win32" ? ".exe" : ""}`;
-    copyFile(realRegularFile(input.workspaceFilesSourcePath, "file publisher source"), join(outputPath, ...executable.split("/")));
+    const source = realRegularFile(input.workspaceFilesSourcePath, "file publisher source");
+    const executable = `helpers/tela-workspace-files${extname(source).toLowerCase() === ".exe" ? ".exe" : ""}`;
+    copyFile(source, join(outputPath, ...executable.split("/")));
     workspaceFiles = { executable, protocolVersion: 2 };
   }
 

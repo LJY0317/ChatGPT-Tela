@@ -33,7 +33,10 @@ ChatGPT plugin disconnection or deletion is a separate host operation. When the 
 
 ## Packaged CLI
 
-Run the install commands from the package being installed. The package directory defaults to the directory containing the launcher; pass `--payload` when using another matching package directory.
+Run the launcher from the extracted package directory. Use `./chatgpt-tela` on
+Linux or `.\chatgpt-tela.exe` in Windows PowerShell. For a source build, see the
+[package builder](../README.md#windows-and-linux-packages). The launcher uses its own package
+directory by default. Pass `--payload` to select another matching package.
 
 On macOS, update from Tela's menu-bar **Check for Updates…** action (when shown), or **Settings → Updates → Check for Updates…**, then follow the Sparkle dialog to **Install and Relaunch** when offered. Tela coordinates active work and running services before relaunch; defer the update if work cannot safely finish, and do not force-quit active sessions. The cross-platform CLI help lists `upgrade`, but both `upgrade --dry-run` and `upgrade --apply` are unsupported on macOS.
 
@@ -72,7 +75,7 @@ The configuration file is the secret-free `product-v1.json` described in [produc
 
 ## Related operating contracts
 
-- [Web tasks](web-delegation.md) describes the current app-owned boundary and unavailable automatic conversation management.
+- [Web tasks](web-delegation.md) describes exact task registration, answer collection and automatic archival.
 - [Token efficiency](token-efficiency.md) defines instruction reuse, checkpoint/continuation budgets, and avoiding duplicate context transfer without truncating current authority or replaying uncertain work.
 - [Context continuity](context-continuity-contract.md) explains canonical Native history versus bounded Web working context and the recovery boundary for oversized history.
 - [Chat capability discovery](chat-capability-discovery.md) defines runtime capability discovery, execution effects, and why a successful command exit is not task-success evidence.

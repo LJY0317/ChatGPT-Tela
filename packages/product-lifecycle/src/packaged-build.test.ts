@@ -179,6 +179,27 @@ describe("packaged payload builder", () => {
     }
   });
 
+  test("Windows executable names follow staged sources even when assembled on another OS", () => {
+    const root = mkdtempSync(join(tmpdir(), "tela-packaged-windows-names-"));
+    try {
+      const input = fixture(root);
+      writeFileSync(join(input, "launcher.exe"), "windows launcher");
+      writeFileSync(join(input, "helper.exe"), "windows helper");
+      const built = buildPackagedPayload({ outputPath: join(root, "output"), productVersion: "1.0.0",
+        launcherSourcePath: join(input, "launcher.exe"),
+        services: Object.fromEntries((["gateway", "chat", "codex"] as const).map(service =>
+          [service, { executableSourcePath: join(input, "launcher.exe"), arguments: ["--tela-daemon", service] }])) as
+          Record<"gateway" | "chat" | "codex", { executableSourcePath: string; arguments: string[] }>,
+        profileRuntime: { electronBundleSourcePath: join(input, "electron"),
+          electronExecutableRelativePath: "bin/electron", entrypointSourcePath: join(input, "profile-runtime.cjs") },
+        workspaceFilesSourcePath: join(input, "helper.exe") });
+      expect(built.manifest.launcher?.executable).toBe("chatgpt-tela.exe");
+      expect(built.manifest.services.chat.executable).toBe("chatgpt-tela.exe");
+      expect(built.manifest.workspaceFiles?.executable).toBe("helpers/tela-workspace-files.exe");
+      expect(existsSync(join(root, "output", "helpers", "tela-workspace-files.exe"))).toBe(true);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("internal Electron symlinks are preserved while cyclic/escaping links are rejected", () => {
     if (process.platform === "win32") return;
     const root = mkdtempSync(join(tmpdir(), "tela-packaged-symlink-"));
