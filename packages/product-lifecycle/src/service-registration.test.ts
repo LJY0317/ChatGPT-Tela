@@ -57,7 +57,7 @@ class WindowsFixtureRunner implements ServiceRegistrationCommandRunner {
   async run(command: string, arguments_: readonly string[]): Promise<ServiceRegistrationCommandResult> {
     this.calls.push([command, [...arguments_]]);
     if (command === "powershell.exe") {
-      const script = arguments_[3] ?? "";
+      const script = Buffer.from(arguments_[3] ?? "", "base64").toString("utf16le");
       if (script.includes("Unregister-ScheduledTask")) {
         this.running = false;
         this.exists = false;
@@ -66,9 +66,9 @@ class WindowsFixtureRunner implements ServiceRegistrationCommandRunner {
       if (script.includes("Register-ScheduledTask")) {
         this.exists = true;
         this.running = false;
-        this.executable = arguments_[5] ?? this.executable;
-        this.arguments = arguments_[6] ?? this.arguments;
-        this.workingDirectory = arguments_[7] ?? this.workingDirectory;
+        const encoded = /FromBase64String\('([^']+)'\)/.exec(script)?.[1] ?? "";
+        const { values } = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+        [ , this.executable, this.arguments, this.workingDirectory ] = values;
         return { exitCode: 0, stdout: "", stderr: "" };
       }
       if (script.includes("Get-ScheduledTask")) {
@@ -336,7 +336,7 @@ describe("service registration ownership", () => {
       expect(runner.executable).toBe(definition.executable);
       expect(runner.arguments).toBe(definition.arguments);
       expect(await installer.observeReady(resource, readOwnershipManifest(manifestPath)!)).toBe("owned");
-      expect(runner.calls.some(([, args]) => (args[3] ?? "").includes("Register-ScheduledTask"))).toBe(true);
+      expect(runner.calls.some(([, args]) => Buffer.from(args[3] ?? "", "base64").toString("utf16le").includes("Register-ScheduledTask"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -508,7 +508,7 @@ describe("service registration ownership", () => {
       expect((await manager.release(resource, readOwnershipManifest(manifestPath)!)).removed).toBe(true);
       expect(runner.exists).toBe(false);
       expect(runner.running).toBe(false);
-      expect(runner.calls.some(([, args]) => (args[3] ?? "").includes("Unregister-ScheduledTask"))).toBe(true);
+      expect(runner.calls.some(([, args]) => Buffer.from(args[3] ?? "", "base64").toString("utf16le").includes("Unregister-ScheduledTask"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -538,8 +538,8 @@ describe("service registration ownership", () => {
       const manager = new ServiceRegistrationManager({ platform: "win32", runner });
       expect(await manager.observe(resource, readOwnershipManifest(manifestPath)!)).toBe("ownership-drift");
       expect((await manager.release(resource, readOwnershipManifest(manifestPath)!)).removed).toBe(false);
-      expect(runner.calls.some(([, args]) => (args[3] ?? "").includes("Stop-ScheduledTask"))).toBe(false);
-      expect(runner.calls.some(([, args]) => (args[3] ?? "").includes("Unregister-ScheduledTask"))).toBe(false);
+      expect(runner.calls.some(([, args]) => Buffer.from(args[3] ?? "", "base64").toString("utf16le").includes("Stop-ScheduledTask"))).toBe(false);
+      expect(runner.calls.some(([, args]) => Buffer.from(args[3] ?? "", "base64").toString("utf16le").includes("Unregister-ScheduledTask"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

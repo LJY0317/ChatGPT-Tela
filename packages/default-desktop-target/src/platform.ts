@@ -1,3 +1,4 @@
+import { windowsPowerShellArguments } from "@chatgpt-tela/core";
 import {
   closeSync,
   existsSync,
@@ -109,13 +110,12 @@ export async function defaultDesktopProcessIds(
   }
   if (installation.platform === "win32") {
     const script = [
-      "$p=$args[0];",
+      "$p=$telaArguments[0];",
       "Get-CimInstance Win32_Process |",
       "Where-Object { $_.ExecutablePath -and [String]::Equals($_.ExecutablePath,$p,[StringComparison]::OrdinalIgnoreCase) } |",
       "ForEach-Object { $_.ProcessId }",
     ].join(" ");
-    const result = await runner.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script,
-      installation.chatGptExecutable]);
+    const result = await runner.run("powershell.exe", windowsPowerShellArguments(script, [installation.chatGptExecutable]));
     const matches = result.stdout.split(/\r?\n/)
       .map(line => Number(line.trim()))
       .filter(pid => Number.isSafeInteger(pid) && pid > 0);
@@ -161,13 +161,12 @@ export async function requestDefaultDesktopNormalQuit(
   }
   if (installation.platform === "win32") {
     const script = [
-      "$pidValue=[int]$args[0]; $path=$args[1];",
+      "$pidValue=[int]$telaArguments[0]; $path=$telaArguments[1];",
       "$p=Get-Process -Id $pidValue -ErrorAction Stop;",
       "if (-not [String]::Equals($p.Path,$path,[StringComparison]::OrdinalIgnoreCase)) { exit 4 };",
       "if (-not $p.CloseMainWindow()) { exit 5 }",
     ].join(" ");
-    await runner.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script,
-      String(expectedPid), installation.chatGptExecutable]);
+    await runner.run("powershell.exe", windowsPowerShellArguments(script, [String(expectedPid), installation.chatGptExecutable]));
     return;
   }
   throw new Error(`normal default Desktop quit is unsupported on ${installation.platform}`);
@@ -307,7 +306,7 @@ function windowsPackageInstallLocation(runner: DefaultDesktopDiscoveryRunner): s
     "if ($p.Count -ne 1) { exit 4 };",
     "$p[0] | Select-Object Name,PackageFamilyName,InstallLocation,Status | ConvertTo-Json -Compress",
   ].join(" ");
-  const result = runner.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
+  const result = runner.run("powershell.exe", windowsPowerShellArguments(script));
   if (result.exitCode !== 0) {
     throw new Error("official ChatGPT Windows package could not be resolved uniquely; set CHATGPT_EXECUTABLE and CODEX_EXECUTABLE explicitly");
   }

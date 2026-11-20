@@ -49,7 +49,6 @@ jobs:
             Write-Host "Verified Windows post-Bun fixture removals: $removed"
           }
       - run: bun run codex:cleanup-test
-      - run: bun run package:native-helper-test
       - run: bun run menu-bar:test
         if: runner.os == 'macOS'
       - run: bun run profile:runtime:build

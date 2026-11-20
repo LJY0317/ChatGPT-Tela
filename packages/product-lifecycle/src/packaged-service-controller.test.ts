@@ -58,10 +58,11 @@ class WindowsRunner implements ServiceRegistrationCommandRunner {
   readonly state = new Map<string, "running" | "stopped">();
   readonly calls: string[] = [];
   async run(command: string, arguments_: readonly string[]): Promise<ServiceRegistrationCommandResult> {
-    this.calls.push(`${command} ${arguments_.join(" ")}`);
     if (command !== "powershell.exe") throw new Error("unexpected Windows fixture command");
-    const script = arguments_[3] ?? "";
-    const id = arguments_.at(-1)!;
+    const script = Buffer.from(arguments_[3] ?? "", "base64").toString("utf16le");
+    this.calls.push(`${command} ${script}`);
+    const encoded = /FromBase64String\('([^']+)'\)/.exec(script)?.[1] ?? "";
+    const { values: [id] } = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
     if (script.includes("Stop-ScheduledTask")) { this.state.set(id, "stopped"); return { exitCode: 0, stdout: "", stderr: "" }; }
     if (script.includes("Start-ScheduledTask")) { this.state.set(id, "running"); return { exitCode: 0, stdout: "", stderr: "" }; }
     return { exitCode: 0, stdout: this.state.get(id) === "running" ? "Running\n" : "Ready\n", stderr: "" };

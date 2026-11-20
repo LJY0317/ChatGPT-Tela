@@ -1,3 +1,4 @@
+import { windowsPowerShellArguments } from "@chatgpt-tela/core";
 import { assertLaunchdJobDefinition, launchdJobFailureEvidence } from "./launchd-inspection";
 import type { PackagedInstallBlueprint } from "./packaged-install";
 import {
@@ -111,8 +112,8 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
       return { state, detail: `last state: ${state}` };
     }
     if (this.#blueprint.platform === "win32") {
-      const script = "$t=Get-ScheduledTask -TaskName $args[0] -TaskPath '\\' -ErrorAction Stop; $t.State.ToString()";
-      const state = parseWindowsState(await this.#runner.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script, registrationId]));
+      const script = "$t=Get-ScheduledTask -TaskName $telaArguments[0] -TaskPath '\\' -ErrorAction Stop; $t.State.ToString()";
+      const state = parseWindowsState(await this.#runner.run("powershell.exe", windowsPowerShellArguments(script, [registrationId])));
       return { state, detail: `last state: ${state}` };
     }
     if (this.#userId === undefined) throw new Error("macOS packaged service control requires a user id");
@@ -207,8 +208,8 @@ export class PackagedPlatformServiceController implements PackagedUpgradeService
     if (this.#blueprint.platform === "linux") {
       result = await this.#runner.run("systemctl", ["--user", "start", registrationId]);
     } else if (this.#blueprint.platform === "win32") {
-      const script = "$t=Get-ScheduledTask -TaskName $args[0] -TaskPath '\\' -ErrorAction Stop; if($t.State.ToString() -ne 'Running'){Start-ScheduledTask -InputObject $t -ErrorAction Stop}";
-      result = await this.#runner.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script, registrationId]);
+      const script = "$t=Get-ScheduledTask -TaskName $telaArguments[0] -TaskPath '\\' -ErrorAction Stop; if($t.State.ToString() -ne 'Running'){Start-ScheduledTask -InputObject $t -ErrorAction Stop}";
+      result = await this.#runner.run("powershell.exe", windowsPowerShellArguments(script, [registrationId]));
     } else {
       if (this.#userId === undefined) throw new Error("macOS packaged service control requires a user id");
       result = await this.#runner.run("/bin/launchctl", ["kickstart", `gui/${this.#userId}/${registrationId}`]);

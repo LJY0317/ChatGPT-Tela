@@ -334,7 +334,7 @@ describe("built-in default Desktop installation resolver", () => {
     const runner: DefaultDesktopCommandRunner = {
       async run(command, arguments_) {
         calls.push({ command, arguments_ });
-        const script = arguments_[3] ?? "";
+        const script = Buffer.from(arguments_[3] ?? "", "base64").toString("utf16le");
         if (script.includes("Get-CimInstance")) return { stdout: "4242\r\n", stderr: "" };
         if (script.includes("CloseMainWindow")) return { stdout: "", stderr: "" };
         throw new Error("unexpected PowerShell fixture command");
@@ -344,9 +344,11 @@ describe("built-in default Desktop installation resolver", () => {
     await requestDefaultDesktopNormalQuit(installation, 4242, { runner });
     expect(calls).toHaveLength(3);
     expect(calls.every(call => call.command === "powershell.exe")).toBe(true);
-    expect(calls.at(-1)?.arguments_.join(" ")).toContain("CloseMainWindow");
-    expect(calls.at(-1)?.arguments_).toContain("4242");
-    expect(calls.at(-1)?.arguments_).toContain(installation.chatGptExecutable);
+    const script = Buffer.from(calls.at(-1)?.arguments_[3] ?? "", "base64").toString("utf16le");
+    expect(script).toContain("CloseMainWindow");
+    const encoded = /FromBase64String\('([^']+)'\)/.exec(script)?.[1] ?? "";
+    expect(JSON.parse(Buffer.from(encoded, "base64").toString("utf8")))
+      .toEqual({ values: ["4242", installation.chatGptExecutable] });
   });
 
   test("normal quit refuses a changed process identity on every platform", async () => {

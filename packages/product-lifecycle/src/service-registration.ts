@@ -1,3 +1,4 @@
+import { windowsPowerShellArguments } from "@chatgpt-tela/core";
 import { assertLaunchdJobDefinition, launchdJobField } from "./launchd-inspection";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -193,12 +194,12 @@ async function windowsFingerprint(
   registrationId: string,
 ): Promise<{ readonly exists: boolean; readonly fingerprint?: string }> {
   const script = [
-    "$t=Get-ScheduledTask -TaskName $args[0] -TaskPath '\\' -ErrorAction SilentlyContinue;",
+    "$t=Get-ScheduledTask -TaskName $telaArguments[0] -TaskPath '\\' -ErrorAction SilentlyContinue;",
     "if ($null -eq $t) { exit 3 };",
     "$a=@($t.Actions); if($a.Count -ne 1){ exit 4 };",
     "[pscustomobject]@{name=$t.TaskName;taskPath=$t.TaskPath;executable=$a[0].Execute;arguments=[string]$a[0].Arguments;workingDirectory=$a[0].WorkingDirectory;logonType=$t.Principal.LogonType.ToString();runLevel=$t.Principal.RunLevel.ToString();enabled=[bool]$t.Settings.Enabled} | ConvertTo-Json -Compress",
   ].join(" ");
-  const result = await runner.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script, registrationId]);
+  const result = await runner.run("powershell.exe", windowsPowerShellArguments(script, [registrationId]));
   if (result.exitCode === 3) return Object.freeze({ exists: false });
   if (result.exitCode !== 0) throw new Error(`Windows scheduled-task inspection failed: ${result.stderr.trim().slice(0, 240)}`);
   let value: unknown;
@@ -438,14 +439,14 @@ export class ServiceRegistrationInstaller {
       }
       if (!current.exists) {
         const script = [
-          "$name=$args[0]; $exe=$args[1]; $arguments=$args[2]; $working=$args[3];",
+          "$name=$telaArguments[0]; $exe=$telaArguments[1]; $arguments=$telaArguments[2]; $working=$telaArguments[3];",
           "if($null -ne (Get-ScheduledTask -TaskName $name -TaskPath '\\' -ErrorAction SilentlyContinue)){ exit 6 };",
           "$action=New-ScheduledTaskAction -Execute $exe -Argument $arguments -WorkingDirectory $working;",
           "$principal=New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited;",
           "Register-ScheduledTask -TaskName $name -TaskPath '\\' -Action $action -Principal $principal -ErrorAction Stop | Out-Null",
         ].join(" ");
-        const created = await this.#runner.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script,
-          input.resource.registrationId, definition.executable, definition.arguments, definition.workingDirectory]);
+        const created = await this.#runner.run("powershell.exe", windowsPowerShellArguments(script, [
+          input.resource.registrationId, definition.executable, definition.arguments, definition.workingDirectory]));
         if (created.exitCode !== 0) throw new Error(`Windows scheduled-task creation failed: ${created.stderr.trim().slice(0, 240)}`);
         mutated = true;
       }
@@ -581,11 +582,11 @@ export class ServiceRegistrationManager {
       }
       if (beforeDelete.exists) {
         const script = [
-          "$t=Get-ScheduledTask -TaskName $args[0] -TaskPath '\\' -ErrorAction Stop;",
+          "$t=Get-ScheduledTask -TaskName $telaArguments[0] -TaskPath '\\' -ErrorAction Stop;",
           "if($t.State.ToString() -eq 'Running'){ Stop-ScheduledTask -InputObject $t -ErrorAction Stop };",
           "Unregister-ScheduledTask -InputObject $t -Confirm:$false -ErrorAction Stop",
         ].join(" ");
-        const deleted = await this.#runner.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script, resource.registrationId]);
+        const deleted = await this.#runner.run("powershell.exe", windowsPowerShellArguments(script, [resource.registrationId]));
         if (deleted.exitCode !== 0) throw new Error(`Windows scheduled-task deletion failed: ${deleted.stderr.trim().slice(0, 240)}`);
       }
       if ((await windowsFingerprint(this.#runner, resource.registrationId)).exists) {
