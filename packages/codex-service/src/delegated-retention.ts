@@ -71,6 +71,7 @@ export function createDelegatedRetention(input: {
   if (!root.isDirectory() || root.isSymbolicLink()) throw Error("Invalid delegation state directory");
   const now = input.now ?? Date.now;
   let timer: ReturnType<typeof setTimeout> | undefined, closed = false, queue = Promise.resolve();
+  let automaticReviewAfter = 0;
   const records = new Map<string, State>();
   const key = (scope: string, threadId: string) => hash(JSON.stringify([scope, threadId]));
   const path = (k: string) => join(input.directory, k + ".json");
@@ -120,12 +121,17 @@ export function createDelegatedRetention(input: {
     if (closed || input.automatic === false) return;
     const due = Math.min(...[...records.values()].filter(r => settledAt(r) == null && !r.archivePending).map(r => Math.max(r.dueAt, r.reviewAfter ?? r.dueAt)));
     if (!Number.isFinite(due)) return;
-    timer = setTimeout(() => { void api.reconcile(undefined, true).catch(report); }, Math.min(Math.max(0, due - now()), 2_147_483_647));
+    const delay = Math.max(0, Math.max(due, automaticReviewAfter) - now());
+    timer = setTimeout(() => { void api.reconcile(undefined, true).catch(report); }, Math.min(delay, 2_147_483_647));
     timer.unref?.();
   };
-  const serial = <T>(work: () => Promise<T>): Promise<T> => {
+  const serial = <T>(work: () => Promise<T>, scheduled = false): Promise<T> => {
     const result = queue.then(() => { if (closed) throw Error("Delegation retention is closed"); return work(); });
-    queue = result.then(() => undefined, () => undefined);
+    queue = result.then(() => undefined, () => {
+      // An unexpected batch failure can prevent persisting the normal deferral.
+      // Keep the existing timer off the overdue deadline until the next review.
+      if (scheduled) automaticReviewAfter = now() + HALF_DAY;
+    });
     return result.finally(schedule);
   };
   const event = (stage: string, record: State, reason?: string) => emitDiagnosticEvent("chatgpt_tela_codex", stage, {
@@ -443,7 +449,7 @@ export function createDelegatedRetention(input: {
           } finally { await rpc?.close(); }
         }
         return { outcomes, automaticDeleteEnabled: false };
-      });
+      }, scheduled);
     },
     async close() { closed = true; if (timer) clearTimeout(timer); await queue; },
   };

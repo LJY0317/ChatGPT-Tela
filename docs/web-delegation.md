@@ -323,6 +323,8 @@ or error bodies. A wait wakeup is not a collection receipt.
   or permanently inaccessible official app can perform an archive. Exact per-thread stopping
   through the app-owned engine and an affected-chat approval flow remain incomplete; do not
   substitute whole-profile interruption or claim they are implemented.
+  If automatic reconciliation cannot save a deferral, the existing timer waits for the
+  next 12-hour review. **Check again** still checks immediately.
 - Archived or released tracking metadata expires after 60 days on startup, reconciliation
   or the next metadata write. Registration and acknowledgement
   metadata uses total-byte limits without file-count limits. Existing unresolved

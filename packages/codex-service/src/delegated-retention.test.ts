@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDelegatedRetention } from "./delegated-retention";
@@ -313,6 +313,37 @@ test("one automatic next-due wakeup executes a persisted eligible archive", asyn
     await automatic.close(); automatic = undefined;
     expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
     expect(f.receipt().archivedAt).toBeDefined();
+  } finally { await automatic?.close(); await f.close(); }
+});
+
+test("automatic retention backs off when even the deferral cannot be persisted", async () => {
+  const f = fixture();
+  let automatic: ReturnType<typeof createDelegatedRetention> | undefined;
+  try {
+    await f.manager.enroll(1, "parent", "child");
+    await f.manager.close();
+    f.advance(7 * 24);
+    let observe!: () => void;
+    const attempted = new Promise<void>(resolve => { observe = resolve; });
+    automatic = createDelegatedRetention({ ...f.options, automatic: true, profile(slot) {
+      const profile = f.options.profile(slot);
+      return { ...profile, async connect(threadId, lifecycle) {
+        observe();
+        return profile.connect(threadId, lifecycle);
+      } };
+    } });
+    const path = f.options.directory;
+    const preserved = path + "-preserved";
+    renameSync(path, preserved);
+    writeFileSync(path, "");
+    await Promise.race([attempted, Bun.sleep(1_000).then(() => { throw Error("Automatic review did not run"); })]);
+    await Bun.sleep(25);
+    expect(f.calls.filter(c => c.method === "thread/resume")).toHaveLength(1);
+    expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
+    unlinkSync(path);
+    renameSync(preserved, path);
+    expect((await automatic.reconcile()).outcomes).toMatchObject([{ status: "archived" }]);
+    expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
   } finally { await automatic?.close(); await f.close(); }
 });
 
