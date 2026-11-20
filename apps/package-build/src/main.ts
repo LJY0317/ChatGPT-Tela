@@ -1,4 +1,5 @@
 import { assembleMacApplication } from "../../../packages/product-lifecycle/src/mac-application";
+import project from "../../../package.json";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   closeSync,
@@ -60,8 +61,10 @@ function runBun(arguments_: readonly string[]): void {
 }
 
 function compileExecutable(entrypoint: string, output: string, platform: PackagePlatform, arch: PackageArch): void {
-  const targetArgs = platform === process.platform && arch === process.arch
-    ? [] : [`--target=bun-${platform === "win32" ? "windows" : platform}-${arch}`];
+  const bunVersion = project.engines.bun;
+  const currentRuntimeMatches = platform === process.platform && arch === process.arch && Bun.version === bunVersion;
+  const targetArgs = currentRuntimeMatches
+    ? [] : [`--target=bun-${platform === "win32" ? "windows" : platform}-${arch}-v${bunVersion}`];
   runBun(["build", entrypoint, "--compile", ...targetArgs, `--outfile=${output}`]);
 }
 

@@ -430,8 +430,8 @@ or `--target-platform linux` and select `--target-arch x64` or `arm64`. For exam
 bun run package:build --output ./build/tela-windows-x64 --version 0.0.0-preview --target-platform win32 --target-arch x64
 ```
 
-Use a new or empty output directory. The builder uses the checkout's pinned Electron
-release and leaves the build host's Electron installation in place. If providing
+Use a new or empty output directory. The builder uses the checkout's pinned Bun and
+Electron versions and leaves the build host's Electron installation in place. If providing
 `--workspace-files`, build the helper for the same operating system and architecture
 and use an `.exe` suffix on Windows. For installation and removal, see the
 [packaged CLI guide](docs/consumer-installation.md#packaged-cli).
