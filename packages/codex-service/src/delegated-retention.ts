@@ -244,6 +244,24 @@ export function createDelegatedRetention(input: {
         } finally { await rpc.close(); }
       });
     },
+    listForParent(slot: number, parentThreadId: string) {
+      id(parentThreadId);
+      const scope = hash(input.profile(slot).scope);
+      const tracked = [...records.values()]
+        .filter(record => record.slot === slot && record.scope === scope
+          && record.parentThreadId === parentThreadId && record.releasedAt == null)
+        .sort((a, b) => b.enrolledAt - a.enrolledAt)
+        .map(record => ({
+          threadId: record.threadId, title: record.title, enrolledAt: record.enrolledAt,
+          dueAt: record.dueAt, archivedAt: record.archivedAt,
+          ...(record.acknowledgement ? { lastReceipt: {
+            turnId: record.acknowledgement.result.turnId,
+            outcome: record.acknowledgement.result.outcome,
+            acknowledgedAt: record.acknowledgement.acknowledgedAt,
+          } } : {}),
+        }));
+      return { slot, tracked };
+    },
     status(includeTracked = false) {
       const observedAt = now();
       const open = [...records].filter(([, record]) => settledAt(record) == null);

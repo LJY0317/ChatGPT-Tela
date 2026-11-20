@@ -4,7 +4,7 @@ import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-
 import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 import { profileSlotFromArguments } from "./profile-selection";
 
-export const DELEGATION_COMMANDS = ["retain-delegation", "read-delegation-result", "acknowledge-result", "reconcile-delegations"];
+export const DELEGATION_COMMANDS = ["retain-delegation", "list-delegations", "read-delegation-result", "acknowledge-result", "reconcile-delegations"];
 
 /** Source and installed launchers use the same command and existing owned service. */
 export async function runDelegationCommand(args: readonly string[], input: {
@@ -25,14 +25,19 @@ export async function runDelegationCommand(args: readonly string[], input: {
   if (all && (command !== "reconcile-delegations" || args.includes("--slot"))) throw Error("--all is only for reconciliation without --slot");
   const slot = all ? undefined : profileSlotFromArguments(args.slice(1));
   const standalone = args.includes("--standalone");
-  if (standalone && (command === "reconcile-delegations" || !args.includes("--slot"))) throw Error("--standalone requires an explicit --slot and a chat");
+  if (standalone && (command === "reconcile-delegations" || command === "list-delegations" || !args.includes("--slot"))) throw Error("--standalone requires an explicit --slot and a chat");
   const parentThreadId = standalone ? undefined : (input.environment ?? process.env).CODEX_THREAD_ID;
   if (command !== "reconcile-delegations" && !standalone && !parentThreadId) throw Error(`Run ${command} from the coordinating Native chat`);
   const owner = standalone ? { standalone: true as const } : { parentThreadId: parentThreadId! };
   let request: Parameters<CodexServiceClient["manageDelegation"]>[0];
   if (command === "reconcile-delegations") request = { action: "reconcile", ...(slot === undefined ? {} : { slot }) };
   else if (command === "retain-delegation") request = { action: "enroll", slot: slot!, ...owner, threadId: required("--thread") };
-  else if (command === "read-delegation-result") request = { action: "read-result", slot: slot!, ...owner, threadId: required("--thread") };
+  else if (command === "list-delegations") request = { action: "list-tracked", slot: slot!, parentThreadId: parentThreadId! };
+  else if (command === "read-delegation-result") {
+    const previousBefore = option("--previous-before");
+    request = { action: "read-result", slot: slot!, ...owner, threadId: required("--thread"),
+      ...(previousBefore ? { previousBefore } : {}) };
+  }
   else {
     const outcome = option("--outcome") ?? "answer";
     if (!["answer", "failed", "interrupted"].includes(outcome)

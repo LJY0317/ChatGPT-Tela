@@ -134,6 +134,10 @@ export async function startCodexServiceHttpServer(input: {
             return Response.json(await manager.stopTracking(body.trackingId, body.enrolledAt));
           }
           if (!validSlot) return error(400, "Invalid delegation profile");
+          if (body.action === "list-tracked") {
+            if (typeof body.parentThreadId !== "string") return error(400, "Invalid delegation coordinator");
+            return Response.json(manager.listForParent(body.slot, body.parentThreadId), { headers: { "cache-control": "no-store" } });
+          }
           const useRegistration = body.registered === true && body.standalone === undefined && body.parentThreadId === undefined
             && (body.action === "read-result" || body.action === "acknowledge");
           const validOwner = useRegistration || (body.registered === undefined && (body.standalone === true
@@ -144,7 +148,7 @@ export async function startCodexServiceHttpServer(input: {
           }
           if (body.action === "enroll") return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId));
           if (body.action === "read-result") {
-            if (body.previousBefore !== undefined && (!useRegistration || typeof body.previousBefore !== "string")) {
+            if (body.previousBefore !== undefined && typeof body.previousBefore !== "string") {
               return error(400, "Invalid previous answer request");
             }
             return Response.json(await manager.readResult(body.slot, useRegistration ? null : body.parentThreadId,

@@ -41,6 +41,8 @@ Usage:
   chatgpt-tela local-mcp [package <destination>|register|status]
   chatgpt-tela retain-delegation --thread <child-id> [--slot N]
   chatgpt-tela retain-delegation --standalone --thread <web-chat-id> --slot N
+  chatgpt-tela list-delegations [--slot N]
+  chatgpt-tela read-delegation-result --thread <id> [--slot N] [--previous-before <turn-id>]
   chatgpt-tela read-delegation-result --standalone --thread <web-chat-id> --slot N
   chatgpt-tela acknowledge-result --thread <id> --turn <id> (--item <id> | --outcome failed|interrupted) [--slot N]
   chatgpt-tela reconcile-delegations [--slot N|--all]

@@ -595,6 +595,10 @@ test("tracked Web child supports result collection and due archive without a Nat
       overdue: [], automaticDeleteEnabled: false,
       tracked: [{ slot: 2, threadId: "child", title: "[Tela Agent] Web task", enrolledAt: now }],
     });
+    const list = { action: "list-tracked", parentThreadId: "parent", slot: 2 } as const;
+    expect(await client.manageDelegation(list)).toMatchObject({ slot: 2, tracked: [{ threadId: "child", enrolledAt: now }] });
+    expect(await client.manageDelegation({ ...list, slot: 1 })).toEqual({ slot: 1, tracked: [] });
+    expect(await client.manageDelegation({ ...list, parentThreadId: "other" })).toEqual({ slot: 2, tracked: [] });
     expect(methods).toHaveLength(beforeListing);
     const blockedRead = await fetch(trackedUrl);
     expect(blockedRead.status).toBe(401);
@@ -621,6 +625,8 @@ test("tracked Web child supports result collection and due archive without a Nat
       .toEqual({ threadId: "child", turnId: "follow-up", outcome: "interrupted" });
     expect(await (await post(previous)).json())
       .toEqual({ threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer", text: "fixture response" });
+    expect(await client.manageDelegation({ action: "read-result", slot: 2, parentThreadId: "parent", threadId: "child", previousBefore: "follow-up" }))
+      .toEqual({ threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer", text: "fixture response" });
     expect((await post({ ...previous, slot: 1 })).ok).toBe(false);
     expect((await post({ ...target, action: "acknowledge", turnId: "turn", outcome: "answer", itemId: "answer" })).ok).toBe(false);
     expect(readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8")).toBe(enrolled);
@@ -633,6 +639,9 @@ test("tracked Web child supports result collection and due archive without a Nat
     expect(await client.manageDelegation({ action: "reconcile" })).toEqual({ outcomes: [{ threadId: "child", status: "archived" }], automaticDeleteEnabled: false });
     expect(methods).not.toContain("turn/start"); expect(methods).not.toContain("thread/delete");
     expect(await (await fetch(trackedUrl, { headers })).json()).toMatchObject({ tracked: [] });
+    expect(await client.manageDelegation(list)).toMatchObject({ tracked: [{
+      threadId: "child", archivedAt: now, lastReceipt: { turnId: "turn", outcome: "answer" },
+    }] });
     await client.manageDelegation({ action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" });
     now += 7 * 24 * 3_600_000;
     const pending = (await (await fetch(url, { headers })).json()).overdue[0]!;

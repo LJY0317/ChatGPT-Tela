@@ -191,6 +191,19 @@ implicitly call this command. A new child's first Web turn uses the observation 
 above; other deliberately selected children require this explicit command.
 No AGENTS.md rule or additional model request is needed for the operation itself.
 
+The coordinator can recover its own tracked child IDs from the existing registry:
+
+```sh
+chatgpt-tela list-delegations --slot 1
+chatgpt-tela read-delegation-result --thread CHILD --slot 1
+```
+
+The list is scoped to the calling coordinator and selected profile. It includes
+archived registrations while their metadata is retained. A listed receipt is
+historical; read the current result before assuming it covers the latest turn.
+If the latest turn failed or was interrupted, add `--previous-before TURN` to
+read the most recent prior saved answer without acknowledging it.
+
 After receiving an exact result, the coordinator confirms it through the same service:
 
 ```sh

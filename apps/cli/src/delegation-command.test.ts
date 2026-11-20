@@ -5,6 +5,8 @@ test("source and packaged delegation command binds the Native parent and exact s
   const requests: unknown[] = [];
   const input = { environment: { CODEX_THREAD_ID: "parent" }, client: { async manageDelegation(value: any) { requests.push(value); return { accepted: true }; } } };
   await runDelegationCommand(["retain-delegation", "--thread", "child", "--slot", "2"], input);
+  await runDelegationCommand(["list-delegations", "--slot", "2"], input);
+  await runDelegationCommand(["read-delegation-result", "--thread", "child", "--slot", "2", "--previous-before", "follow-up"], input);
   await runDelegationCommand(["acknowledge-result", "--thread", "child", "--turn", "turn", "--item", "final", "--slot", "2"], input);
   await runDelegationCommand(["acknowledge-result", "--thread", "child", "--turn", "turn", "--outcome", "interrupted"], input);
   await runDelegationCommand(["reconcile-delegations", "--slot", "2"], input);
@@ -12,6 +14,8 @@ test("source and packaged delegation command binds the Native parent and exact s
   await runDelegationCommand(["read-delegation-result", "--standalone", "--thread", "independent", "--slot", "1"], input);
   expect(requests).toEqual([
     { action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" },
+    { action: "list-tracked", slot: 2, parentThreadId: "parent" },
+    { action: "read-result", slot: 2, parentThreadId: "parent", threadId: "child", previousBefore: "follow-up" },
     { action: "acknowledge", slot: 2, parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "answer", itemId: "final" },
     { action: "acknowledge", slot: 1, parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "interrupted" },
     { action: "reconcile", slot: 2 },
@@ -27,6 +31,7 @@ test("invalid Native context or result cannot invoke or start a service", async 
   await expect(runDelegationCommand(["retain-delegation", "--standalone", "--thread", "child"], input)).rejects.toThrow("explicit --slot");
   await expect(runDelegationCommand(["acknowledge-result"], { ...input, environment: { CODEX_THREAD_ID: "parent" } })).rejects.toThrow("requires --thread");
   await expect(runDelegationCommand(["acknowledge-result", "--thread", "child", "--turn", "turn", "--outcome", "failed", "--item", "final"], { ...input, environment: { CODEX_THREAD_ID: "parent" } })).rejects.toThrow("Use --item");
+  await expect(runDelegationCommand(["list-delegations"], input)).rejects.toThrow("coordinating Native");
   expect(calls).toBe(0);
 });
 

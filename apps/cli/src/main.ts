@@ -1082,6 +1082,8 @@ async function main(): Promise<void> {
     + "  diagnostics desktop [--seconds <5-60>] (macOS)\n"
     + "  retain-delegation --thread <child-id> [--slot <n>]\n"
     + "  retain-delegation --standalone --thread <web-chat-id> --slot <n>\n"
+    + "  list-delegations [--slot <n>]\n"
+    + "  read-delegation-result --thread <id> [--slot <n>] [--previous-before <turn-id>]\n"
     + "  read-delegation-result --standalone --thread <web-chat-id> --slot <n>\n"
     + "  reconcile-delegations [--slot <n>|--all]\n"
     + "  retention-canary [--minutes <1-120>]\n"
