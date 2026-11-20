@@ -25,7 +25,10 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   and removal through systemd and Task Scheduler under clean user profiles. Clean
   Debian 13 ARM64 and emulated x64 VMs verified the extracted packages' three-service
   lifecycle, repair, keep-data reinstall and full removal. The x64 run also verified
-  a workspace file export. Windows target runs, OS upgrades and platform-specific
+  a workspace file export. A Debian 13 ARM64 VM also verified a Tela package
+  upgrade with the original configuration, install identity and systemd units
+  preserved. Gateway and Codex resumed, and Chat stayed stopped as before the
+  upgrade. Windows target runs, underlying OS upgrades and platform-specific
   workspace identity checks remain pending.
   Preserve active work, unresolved operations and recovery material when testing cleanup.
 - **Physical device isolation.** On two owned computers sharing an account, use separate
