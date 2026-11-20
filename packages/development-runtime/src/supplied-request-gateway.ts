@@ -283,6 +283,7 @@ export function createSuppliedRequestGateway(input: {
             const signal = AbortSignal.any([controller.signal, owned.cancellation.signal,
               ...(input.webTurnTimeoutMs === undefined ? [] : [AbortSignal.timeout(input.webTurnTimeoutMs)])]);
             let plan: DevelopmentWebTurnPlan | undefined;
+            let responseContext: typeof correlation & { operation_fingerprint?: string } = correlation;
             let acquired = false;
             let plannerStage = "not_started";
             try {
@@ -305,55 +306,58 @@ export function createSuppliedRequestGateway(input: {
                     "delegation_retention_enrollment_failed", diagnosticFailureFields(error)));
                 });
               }
-              plan = await planner.planSuppliedRequest(identity, body, { signal, onProgress: publish,
+              const webPlan = await planner.planSuppliedRequest(identity, body, { signal, onProgress: publish,
                 onPlannerStage: stage => { plannerStage = stage; },
               });
-              owned.historyEnabled = !!input.suppliedHistory && !!plan.physicalContext.deferredHistory;
+              plan = webPlan;
+              responseContext = { ...correlation, operation_fingerprint: diagnosticFingerprint([identity.threadId, identity.turnId, webPlan.webEpochId].join("\n")) };
+              owned.historyEnabled = !!input.suppliedHistory && !!webPlan.physicalContext.deferredHistory;
               const chatTools = {
                 ...(owned.historyEnabled ? { nativeHistoryControl: capability } : {}),
                 ...(owned.advertisedGoals.length ? { nativeGoalControl: capability } : {}) };
-              assertWebMessageFitsComposer({ ...plan, chatTools });
-              if (plan.physicalContext.mode !== "retained-delta") await epochs.retire(identity.threadId);
-              const page = await epochs.acquire(plan.nativeTaskId, plan.webEpochId);
+              assertWebMessageFitsComposer({ ...webPlan, chatTools });
+              if (webPlan.physicalContext.mode !== "retained-delta") await epochs.retire(identity.threadId);
+              const page = await epochs.acquire(webPlan.nativeTaskId, webPlan.webEpochId);
               acquired = true;
-              const bound = bindWebEpochDocument(plan, page, signal);
-              withDiagnosticContext(correlation, () => emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_started", { native_authority: false }));
-              const answer = await runBrowserTurnOnSurface({
-                surface: page.surface, provider: input.provider, nativeTaskId: plan.nativeTaskId,
-                nativeTurnId: identity.turnId, webEpochId: plan.webEpochId,
-                physicalContext: plan.physicalContext, chatTools, signal: bound.signal, onProgress: publish,
-                isToolExecutionPending: () => owned.round.pending !== undefined,
-                ...(resultIdentity && completedResults ? { beforeSend: async () => {
-                  if (typeof input.completedResults === "function"
-                    && input.completedResults()?.accountFingerprint !== resultIdentity.accountFingerprint) {
-                    throw Error("App-owned Web result storage account binding changed");
-                  }
-                  await completedResults.store.recordSuppliedSend(resultIdentity, owned.previousRequestFingerprint);
-                } } : {}),
-                onSubmitted: (surface, handle) => {
-                  owned.armContinuation = async callId => {
-                    const proof = await input.provider.armToolContinuation(surface, handle, callId, bound.signal);
-                    if (proof.state !== "proven") throw new NativeWebHandoffUnproven(proof.state);
-                    if (proof.value.callId !== callId || proof.value.providerTurnId !== handle.providerTurnId) {
-                      throw new NativeWebHandoffUnproven("ambiguous");
+              const bound = bindWebEpochDocument(webPlan, page, signal);
+              const answer = await withDiagnosticContext(responseContext, () => {
+                emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_started", { native_authority: false });
+                return runBrowserTurnOnSurface({
+                  surface: page.surface, provider: input.provider, nativeTaskId: webPlan.nativeTaskId,
+                  nativeTurnId: identity.turnId, webEpochId: webPlan.webEpochId,
+                  physicalContext: webPlan.physicalContext, chatTools, signal: bound.signal, onProgress: publish,
+                  isToolExecutionPending: () => owned.round.pending !== undefined,
+                  ...(resultIdentity && completedResults ? { beforeSend: async () => {
+                    if (typeof input.completedResults === "function"
+                      && input.completedResults()?.accountFingerprint !== resultIdentity.accountFingerprint) {
+                      throw Error("App-owned Web result storage account binding changed");
                     }
-                  };
-                },
-                ...(plan.contextAttachment ? { contextAttachment: plan.contextAttachment } : {}),
-                ...(plan.media ? { media: plan.media } : {}),
-                ...(plan.physicalLimits ? { physicalLimits: plan.physicalLimits } : {}),
-                prepareForSubmit: (surface, signal) => (input.prepareForSubmit ?? selectChatGptWebModel)(surface, route, signal),
+                    await completedResults.store.recordSuppliedSend(resultIdentity, owned.previousRequestFingerprint);
+                  } } : {}),
+                  onSubmitted: (surface, handle) => {
+                    owned.armContinuation = async callId => {
+                      const proof = await input.provider.armToolContinuation(surface, handle, callId, bound.signal);
+                      if (proof.state !== "proven") throw new NativeWebHandoffUnproven(proof.state);
+                      if (proof.value.callId !== callId || proof.value.providerTurnId !== handle.providerTurnId) {
+                        throw new NativeWebHandoffUnproven("ambiguous");
+                      }
+                    };
+                  },
+                  ...(webPlan.contextAttachment ? { contextAttachment: webPlan.contextAttachment } : {}),
+                  ...(webPlan.media ? { media: webPlan.media } : {}),
+                  ...(webPlan.physicalLimits ? { physicalLimits: webPlan.physicalLimits } : {}),
+                  prepareForSubmit: (surface, signal) => (input.prepareForSubmit ?? selectChatGptWebModel)(surface, route, signal),
+                });
               });
-              await epochs.complete(plan.nativeTaskId, plan.webEpochId, () => plan!.settle?.({
+              await epochs.complete(webPlan.nativeTaskId, webPlan.webEpochId, () => webPlan.settle?.({
                 status: "completed", answer, surfaceLeaseId: page.surface.leaseId,
                 ...(owned.historyReleasedBytes ? { releasedToolResultBytes: owned.historyReleasedBytes } : {}),
                 ...(bound.document ? { documentGeneration: bound.document.generation } : {}),
               }));
-              const responseContext = { ...correlation, operation_fingerprint: diagnosticFingerprint([identity.threadId, identity.turnId, plan.webEpochId].join("\n")) };
               withDiagnosticContext(responseContext, () => emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_completed", {
                 native_authority: false,
-                context_mode: plan!.physicalContext.mode, retained_surface: page.reused,
-                logical_estimate: plan!.physicalContext.logicalTokens, transfer_estimate: plan!.physicalContext.transferTokens,
+                context_mode: webPlan.physicalContext.mode, retained_surface: page.reused,
+                logical_estimate: webPlan.physicalContext.logicalTokens, transfer_estimate: webPlan.physicalContext.transferTokens,
                 effort: route.effort,
               }));
               if (resultIdentity) {
@@ -379,8 +383,7 @@ export function createSuppliedRequestGateway(input: {
             } catch (error) {
               owned.failed = true;
               if (webSubmissionFailureReason(error) === "recorded_send_without_result") owned.unresolvedRecordedSend = true;
-              const failureContext = { ...correlation, ...(plan ? { operation_fingerprint: diagnosticFingerprint([identity.threadId, identity.turnId, plan.webEpochId].join("\n")) } : {}) };
-              withDiagnosticContext(failureContext, () => emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_failed", {
+              withDiagnosticContext(responseContext, () => emitDiagnosticEvent("chatgpt_tela_work", "provider_input_response_failed", {
                 native_authority: false,
                 boundary: !plan ? "planning" : acquired ? "browser" : "acquisition",
                 ...(!plan ? { planner_stage: plannerStage } : {}),
@@ -389,10 +392,10 @@ export function createSuppliedRequestGateway(input: {
               }));
               if (error !== null && (typeof error === "object" || typeof error === "function")) {
                 try { Object.defineProperty(error, SUPPLIED_FAILURE_DIAGNOSTICS, { configurable: true,
-                  value: { context: failureContext, finish: () => diagnostics?.finish() } satisfies SuppliedFailureDiagnostics }); }
+                  value: { context: responseContext, finish: () => diagnostics?.finish() } satisfies SuppliedFailureDiagnostics }); }
                 catch { /* Preserve the original provider failure. */ }
               }
-              if (!plan) withDiagnosticContext(failureContext, () => {
+              if (!plan) withDiagnosticContext(responseContext, () => {
                 // Keep the small error independently: a large body must not discard its cause.
                 capturePrivateDiagnosticValue("web_preparation_failure", {
                   phase: "provider_input", plannerStage, error,

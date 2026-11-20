@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { BROWSER_DOCUMENT_LIFETIME, type BrowserHost, type BrowserSurfaceLease, type BrowserSurfaceCapability } from "@chatgpt-tela/browser-host";
 import { chatGptWebFamilyKey, chatGptWebModelId, type WebConversationProvider, type WebTurnRequest } from "@chatgpt-tela/chatgpt";
 import { NativeHistoryBootstrapRequired } from "@chatgpt-tela/codex";
-import { listDiagnosticIncidents, readDiagnosticIncident, setPrivateDiagnosticCapture } from "@chatgpt-tela/core";
+import { emitDiagnosticEvent, listDiagnosticIncidents, readDiagnosticIncident, setPrivateDiagnosticCapture, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
 import { startLocalResponsesServer } from "@chatgpt-tela/local-server";
 import { handleNativeResponsesHttp } from "@chatgpt-tela/responses";
 import { createProfileTurnBridge, createSuppliedRequestGateway } from "./supplied-request-gateway";
@@ -85,7 +85,9 @@ test("supplied HTTP body drain retains provider delivery evidence without invent
   const file = join(root, "events.jsonl");
   const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
   process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
-  const f = fixture();
+  const f = fixture({ onSubmit() {
+    emitDiagnosticEvent("chatgpt_tela_work", "web_send_activation_started", { phase: "turn" });
+  } });
   const server = await startLocalResponsesServer({ gateway: f.gateway });
   try {
     const response = await fetch(new URL("responses", server.baseUrl), { method: "POST",
@@ -95,7 +97,17 @@ test("supplied HTTP body drain retains provider delivery evidence without invent
     await response.text();
     const incidents = listDiagnosticIncidents(join(root, "diagnostics"));
     expect(incidents).toHaveLength(1);
-    const incident = readDiagnosticIncident(join(root, "diagnostics"), incidents[0]!.ref) as { timeline: { stage: string }[] };
+    const incident = readDiagnosticIncident(join(root, "diagnostics"), incidents[0]!.ref) as { timeline: StructuralDiagnosticEvent[] };
+    const started = incident.timeline.find(row => row.stage === "provider_input_response_started");
+    const send = incident.timeline.find(row => row.stage === "web_send_activation_started");
+    expect(send).toMatchObject({
+      scope_fingerprint: expect.any(String), turn_fingerprint: expect.any(String),
+      request_fingerprint: expect.any(String), operation_fingerprint: expect.any(String),
+    });
+    expect(started).toMatchObject({
+      scope_fingerprint: send?.scope_fingerprint, turn_fingerprint: send?.turn_fingerprint,
+      request_fingerprint: send?.request_fingerprint, operation_fingerprint: send?.operation_fingerprint,
+    });
     const stages = incident.timeline.map(row => row.stage);
     expect(stages).toEqual(expect.arrayContaining([
       "provider_input_response_completed", "provider_input_response_ready",
