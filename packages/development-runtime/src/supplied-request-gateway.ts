@@ -97,6 +97,10 @@ export function createSuppliedRequestGateway(input: {
   const planner = input.planner ?? createNativeRequestDevelopmentWebTurnPlanner({ ...(input.suppliedHistory ? { suppliedHistory: input.suppliedHistory } : {}) });
   const controller = new AbortController();
   const operations = new Map<string, Operation>();
+  const retireOperation = (task: string) => {
+    operations.get(task)?.diagnostics?.finish();
+    operations.delete(task);
+  };
   // Negative-only replay receipts. Keep no old answer/input copies; use the same idle retention period.
   const superseded = new Map<string, number>();
   const epochs = new RetainedBrowserEpochRegistry(input.browserHost, {
@@ -105,7 +109,7 @@ export function createSuppliedRequestGateway(input: {
     onRetire(task, surface) {
       planner.retireSurface(task, surface);
       const op = operations.get(task);
-      if (op?.finishedAt !== undefined && op.delivered) operations.delete(task);
+      if (op?.finishedAt !== undefined && op.delivered) retireOperation(task);
     },
   });
 
@@ -152,7 +156,7 @@ export function createSuppliedRequestGateway(input: {
     async resetWebAccount() {
       if (shutdownReadiness() !== "ready") throw Error("Finish active Web work before changing the account");
       await epochs.retireAll();
-      operations.clear();
+      for (const task of operations.keys()) retireOperation(task);
       superseded.clear();
     },
     prepareShutdown() {
@@ -181,7 +185,7 @@ export function createSuppliedRequestGateway(input: {
       }
       if (superseded.has(key) || superseded.has(`${key}\u0000${hash}`)) throw new Error("This provider response operation has already been superseded");
       for (const [task, op] of operations) {
-        if (op.finishedAt !== undefined && Date.now() - op.finishedAt >= WEB_EPOCH_IDLE_RETENTION_MS) operations.delete(task);
+        if (op.finishedAt !== undefined && Date.now() - op.finishedAt >= WEB_EPOCH_IDLE_RETENTION_MS) retireOperation(task);
       }
       let operation = operations.get(identity.threadId);
       let previousRequestFingerprint: string | undefined;
@@ -193,6 +197,7 @@ export function createSuppliedRequestGateway(input: {
         && !operation.round.pending) {
         previousRequestFingerprint = operation.fingerprint;
         superseded.set(`${key}\u0000${operation.fingerprint}`, Date.now());
+        retireOperation(identity.threadId);
         operation = undefined;
       }
       if (operation?.turnId === identity.turnId) {
@@ -245,7 +250,10 @@ export function createSuppliedRequestGateway(input: {
         }
       } else {
         if (operation && operation.finishedAt === undefined) throw new Error("This Web conversation still has an unfinished response");
-        if (operation) superseded.set(`${identity.threadId}\u0000${operation.turnId}`, Date.now());
+        if (operation) {
+          superseded.set(`${identity.threadId}\u0000${operation.turnId}`, Date.now());
+          retireOperation(identity.threadId);
+        }
         const listeners = new Set<(summary: string) => void | boolean>();
         const capability = createRoutedOperationCapability(input.routeId);
         // Advertisements are data from this authenticated Responses ingress, not
@@ -284,7 +292,8 @@ export function createSuppliedRequestGateway(input: {
                 const saved = await completedResults!.store.readSuppliedResult(resultIdentity);
                 if (saved) {
                   owned.preserved = true;
-                  return { type: "final", answer: saved.answer, delivery: { capability } } as const;
+                  return { type: "final", answer: saved.answer, delivery: { capability,
+                    diagnosticContext: correlation, finishDiagnostics: () => diagnostics?.finish() } } as const;
                 }
               }
               if (claim.parentThreadId && input.onWebChild) {
@@ -436,8 +445,8 @@ export function createSuppliedRequestGateway(input: {
       controller.abort(new Error("Web provider runtime stopped"));
       for (const op of operations.values()) op.round.fail(new Error("supplied operation stopped"));
       epochs.dispose();
-      await Promise.allSettled([...operations.values()].map(op => op.outcome));
-      operations.clear();
+      await Promise.allSettled([...operations.values()].map(op => op.webRun));
+      for (const task of operations.keys()) retireOperation(task);
       superseded.clear();
       await input.browserHost.close();
     },

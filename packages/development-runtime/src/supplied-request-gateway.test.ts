@@ -117,6 +117,32 @@ function request(turn = "turn-1", input: unknown[] = firstInput) {
   };
 }
 
+test("replacing and closing Web operations finish diagnostics without a response body", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-supplied-retired-"));
+  const file = join(root, "events.jsonl");
+  const previous = process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+  process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = file;
+  const f = fixture();
+  try {
+    await f.gateway.handle(request("turn-1"));
+    await f.gateway.handle(request("turn-2"));
+    await f.gateway.close();
+    const summaries = readFileSync(file, "utf8").trim().split("\n")
+      .map(line => JSON.parse(line)).filter(row => row.stage === "native_cycle_summary");
+    expect(summaries).toHaveLength(2);
+    expect(new Set(summaries.map(row => row.turn_fingerprint)).size).toBe(2);
+    expect(summaries.every(row => row.native_final_committed === false)).toBe(true);
+  } finally {
+    try {
+      await f.gateway.close();
+    } finally {
+      if (previous === undefined) delete process.env.CHATGPT_TELA_DIAGNOSTIC_FILE;
+      else process.env.CHATGPT_TELA_DIAGNOSTIC_FILE = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure?: Error; planner?: ReturnType<typeof createNativeRequestDevelopmentWebTurnPlanner>;
   providerBehavior?: Partial<Pick<WebConversationProvider, "armToolContinuation" | "waitForTurnEvent">>;
   onWebChild?: Parameters<typeof createSuppliedRequestGateway>[0]["onWebChild"];
