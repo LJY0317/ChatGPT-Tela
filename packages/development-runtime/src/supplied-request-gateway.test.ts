@@ -311,6 +311,7 @@ test("a recorded Web send without a final cannot submit again after restart", as
         }), restarted.gateway);
         expect(await response.json()).toMatchObject({ error: {
           code: "tela_web_submission_unproven", reason: "recorded_send_without_result", retryable: false,
+          message: expect.stringContaining("If its browser session is still listed"),
         } });
       }
       expect(restarted.acquisitions).toBe(0);

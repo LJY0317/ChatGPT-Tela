@@ -982,7 +982,8 @@ test("delivery timeout ends HTTP/SSE once, with the shared natural error and no 
         error = failures[0].response.error;
       } else { expect(response.status).toBe(400); error = (await response.json() as any).error; }
       expect(error).toMatchObject({ code: "tela_web_observation_unproven", reason: "response_wait_timeout", retryable: false });
-      expect(error.message).toContain("응답 확인 시간이 초과되어 대기를 중단했습니다");
+      expect(error.message).toContain("응답 확인 시간이 초과되었습니다");
+      expect(error.message).toContain("Work → Web activity에 세션이 남아 있으면 Open browser");
       const replay = await handleNativeResponsesHttp(post(body()), gateway);
       expect((await replay.json() as any).error).toEqual(error);
       expect(sends).toBe(1);

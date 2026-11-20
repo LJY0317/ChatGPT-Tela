@@ -10,7 +10,7 @@ export function webContinuityRecovery(error: unknown) {
       requires_new_native_turn: true as const, requires_new_conversation: false as const,
       original_history_preserved: true as const, reuse_verified_context_first: true as const },
     message: observationReason === "response_wait_timeout"
-      ? "응답 확인 시간이 초과되어 대기를 중단했습니다. 기존 대화는 보존했으며, 실제 작업의 완료 여부는 아직 확인되지 않았습니다."
+      ? "응답 확인 시간이 초과되었습니다. Tela 제어 센터의 Work → Web activity에 세션이 남아 있으면 Open browser로 확인하세요."
       : "The Web request was accepted, but its response could not be verified as belonging to the original request. Do not resend it automatically. Reconcile the existing operation before continuing in this conversation with a new authorized turn.",
   };
   const submissionReason = webSubmissionFailureReason(error);
@@ -22,7 +22,7 @@ export function webContinuityRecovery(error: unknown) {
     recovery: { kind: "reconcile_web_submission" as const, requires_user_action: true as const,
       requires_new_native_turn: true as const, original_history_preserved: true as const },
     message: submissionReason === "recorded_send_without_result"
-      ? "This Web request may already have been sent. No verified answer is available. Check the original Web conversation before sending it again."
+      ? "This Web request may already have been sent. Tela has no saved answer to recover. If its browser session is still listed under Tela → Work → Web activity, open it to check the result before sending again."
       : "The Web message may have been accepted, but local verification failed. Do not resend it. Reconcile the existing submission before continuing with a new authorized Native turn. Prepared context and original history are preserved.",
   };
   const reason = webRetainedContextFailureReason(error);

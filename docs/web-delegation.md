@@ -30,6 +30,14 @@ including automatically registered Web children. Choose **Confirm receipt** afte
 If the latest request failed or was interrupted, **View previous answer** opens the
 most recent earlier saved final in the same chat. Reading it does not confirm receipt
 or change the archive deadline.
+
+If a Web request may have been sent, Tela can return its verified saved answer
+on an exact reconnect. If its browser session is still listed under
+**Control Center → Work → Web activity**, select it and choose **Open browser**
+to check for a result. Once the temporary browser session is gone, a send record
+alone cannot recover its answer. Check the saved task history before starting a
+new request.
+
 To register an independent Web chat, choose **Use a task link…** if the list is shown.
 Paste the ChatGPT task link, select the matching profile if asked, and choose **Track task**.
 You can also use the link to open an answer from a tracked, already archived chat.
