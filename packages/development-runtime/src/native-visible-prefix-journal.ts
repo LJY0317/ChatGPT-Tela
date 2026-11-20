@@ -51,6 +51,9 @@ function sha(value: string): string { return createHash("sha256").update(value).
 // Final answers must be nonempty. Older readers already treat a bodyless record
 // as a receipt that forbids replay, so rollback remains fail-closed.
 const SUPPLIED_SEND_WITHOUT_FINAL = sha("");
+function suppliedResultExpired(item: StoredSuppliedResult, now: number): boolean {
+  return item.answerHash !== SUPPLIED_SEND_WITHOUT_FINAL && now - item.updatedAt > RETENTION_MS;
+}
 function validSuppliedIdentity(value: SuppliedResultIdentity): boolean {
   return Number.isSafeInteger(value.profileSlot) && value.profileSlot >= 1 && value.profileSlot <= 99
     && /^[a-f0-9]{64}$/.test(value.accountFingerprint)
@@ -246,7 +249,7 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     if (state.checkpoints) state.checkpoints = state.checkpoints
       .filter(item => now - item.updatedAt <= RETENTION_MS);
     if (state.suppliedResults) state.suppliedResults = state.suppliedResults
-      .filter(item => now - item.updatedAt <= RETENTION_MS);
+      .filter(item => !suppliedResultExpired(item, now));
     const occupied = () => 1 + Buffer.byteLength(JSON.stringify(state), "utf8")
       + state.entries.filter(item => item.status === "pending").length * RESERVED_ENTRY_BYTES;
     while (occupied() > MAX_BYTES) {
@@ -314,7 +317,7 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     if (!validSuppliedIdentity(identity)) throw Error("Invalid supplied result identity");
     return this.#transaction(async state => {
       const stored = state.suppliedResults?.find(item => suppliedKey(item) === suppliedKey(identity));
-      if (stored && Date.now() - stored.updatedAt > RETENTION_MS) {
+      if (stored && suppliedResultExpired(stored, Date.now())) {
         // A replay is an existing maintenance opportunity. Retire all expired
         // derived data from the owned ledger, including the negative receipt.
         await this.#write(state);
@@ -346,8 +349,9 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
   /** Called on owned profile readiness; no periodic worker or extra storage. */
   async pruneExpiredResults(): Promise<void> {
     await this.#transaction(async state => {
-      if (!(state.suppliedResults?.some(item => Date.now() - item.updatedAt > RETENTION_MS)
-        || state.checkpoints?.some(item => Date.now() - item.updatedAt > RETENTION_MS))) return;
+      const now = Date.now();
+      if (!(state.suppliedResults?.some(item => suppliedResultExpired(item, now))
+        || state.checkpoints?.some(item => now - item.updatedAt > RETENTION_MS))) return;
       await this.#write(state);
     });
   }

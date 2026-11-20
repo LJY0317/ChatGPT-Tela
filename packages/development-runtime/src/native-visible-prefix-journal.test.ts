@@ -301,6 +301,27 @@ test("owned readiness and expired replay retire raw finals and negative receipts
   expect(JSON.parse((await readFile(file, "utf8")).slice(1)).suppliedResults).toEqual([]);
 }));
 
+test("profile readiness preserves an unresolved send after completed results expire", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options);
+  const sent = { profileSlot: 2, accountFingerprint: hash("account"),
+    threadId: "sent-thread", turnId: "sent-turn", requestFingerprint: hash("sent-request") };
+  const finished = { ...sent, turnId: "finished-turn" };
+  await journal.recordSuppliedSend(sent);
+  await journal.preserveSuppliedResult({ ...finished, answer: "already finished" });
+  const file = join(options.directory, "state.json");
+  const state = JSON.parse((await readFile(file, "utf8")).slice(1));
+  for (const item of state.suppliedResults) item.updatedAt -= 29 * 24 * 60 * 60 * 1000;
+  await writeFile(file, "=" + JSON.stringify(state));
+
+  const restarted = new FileNativeVisiblePrefixStageJournal(options);
+  await restarted.pruneExpiredResults();
+  expect(await restarted.readSuppliedResult(finished)).toBeUndefined();
+  await expect(restarted.readSuppliedResult(sent)).rejects.toMatchObject({ reason: "recorded_send_without_result", retryable: false });
+  await expect(restarted.recordSuppliedSend(sent)).rejects.toMatchObject({ reason: "recorded_send_without_result", retryable: false });
+  expect(await restarted.preserveSuppliedResult({ ...sent, answer: "settled later" })).toBe(true);
+  expect((await restarted.readSuppliedResult(sent))?.answer).toBe("settled later");
+}));
+
 test("profile readiness retires expired replaced-account results within its owned slot", () => fixture(async options => {
   const root = dirname(dirname(options.directory));
   const userDataDir = join(root, "Canary-Profile2");
