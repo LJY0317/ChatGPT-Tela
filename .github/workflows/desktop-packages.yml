@@ -61,6 +61,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Could not create the package archive." }
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $archive" | Set-Content -Encoding utf8NoBOM SHA256SUMS.txt
+      - name: Verify Linux package with systemd
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          account=tela-package-test
+          sudo useradd --create-home --shell /bin/bash "$account"
+          uid_number="$(id -u "$account")"
+          cleanup() {
+            sudo loginctl disable-linger "$account" || true
+            sudo loginctl terminate-user "$account" || true
+            sudo userdel --remove "$account" || true
+          }
+          trap cleanup EXIT
+          home_dir="$(getent passwd "$account" | cut -d: -f6)"
+          sudo cp -a build/desktop-packages/ChatGPT-Tela "$home_dir/package"
+          sudo install -o "$account" -m 0644 apps/package-smoke/src/linux-acceptance.sh "$home_dir/linux-acceptance.sh"
+          sudo chown -hR "$account" "$home_dir/package"
+          sudo loginctl enable-linger "$account"
+          sudo systemctl start "user@$uid_number.service"
+          sudo -H -u "$account" env XDG_RUNTIME_DIR="/run/user/$uid_number" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid_number/bus" \
+            bash "$home_dir/linux-acceptance.sh" "$home_dir/package"
       - name: Archive Linux package
         if: runner.os == 'Linux'
         shell: bash

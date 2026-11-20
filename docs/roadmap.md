@@ -21,8 +21,9 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   existing transition receipts instead of repeating apply or reusing lost approval.
 - **Resources and platform support.** Measure installed disk/cache residue and idle
   CPU/wakeups under representative use, plus restart continuity. The source can build
-  Windows and Linux payloads from another OS. Verify real service registration, updates,
-  removal and workspace identity on both target systems.
+  Windows and Linux payloads from another OS. The Linux package job now has a real systemd install, repair and removal check
+  under a disposable user. A target run, OS upgrade, Windows installation and
+  workspace identity verification remain pending.
   Preserve active work, unresolved operations and recovery material when testing cleanup.
 - **Physical device isolation.** On two owned computers sharing an account, use separate
   sentinel files and one local service offline. Verify local tools never discover or fall
