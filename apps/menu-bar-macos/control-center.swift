@@ -39,7 +39,6 @@ private struct ControlCenterProfilesEnvelope: Decodable {
   let profiles: [ControlCenterProfileStatus]
 }
 
-private struct ControlCenterBridgeSurface: Decodable, Equatable { let id: String; let label: String; let title: String? }
 private struct ControlCenterBridgeInventory: Decodable {
   let contractVersion: Int
   let slot: Int
@@ -1655,15 +1654,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
             identity == BridgeTitleReadIdentity(owner: surfaceOwners[slot], watchID: surfaceWatchIDs[slot],
               inventory: bridgeSurfaces[slot], selectedSlot: selectedPreviewSlot, selectedSurface: selectedBridgeSurface),
             profiles.contains(where: { $0.slot == slot && $0.controlState == "running" }) else { return }
-      bridgeSurfaces[slot] = value.surfaces
+      bridgeSurfaces[slot] = preservingBridgeTitles(value.surfaces, from: bridgeSurfaces[slot] ?? [])
       renderCurrentPage()
     } catch {
-      if identity == BridgeTitleReadIdentity(owner: surfaceOwners[slot], watchID: surfaceWatchIDs[slot],
-         inventory: bridgeSurfaces[slot], selectedSlot: selectedPreviewSlot, selectedSurface: selectedBridgeSurface),
-         let current = bridgeSurfaces[slot] {
-        bridgeSurfaces[slot] = current.map { ControlCenterBridgeSurface(id: $0.id, label: $0.label, title: nil) }
-        renderCurrentPage()
-      }
+      // Keep the existing list. The surface watch owns transport-failure status.
     }
   }
 
@@ -2404,16 +2398,13 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     for slot in Array(surfaceWatches.keys) where !slots.contains(slot) || surfaceOwners[slot] != owners[slot] {
       surfaceWatches.removeValue(forKey: slot)?.cancel()
       surfaceWatchIDs.removeValue(forKey: slot)
-      if surfaceOwners[slot] != owners[slot] {
-        bridgeSurfaces.removeValue(forKey: slot)
-        if selectedPreviewSlot == slot { clearBridgeSelection() }
-      }
     }
-    surfaceOwners = owners
-    for slot in Array(bridgeSurfaces.keys) where !profiles.contains(where: { $0.slot == slot && $0.controlState == "running" }) {
+    for slot in Array(bridgeSurfaces.keys) where surfaceOwners[slot] != owners[slot]
+      || !profiles.contains(where: { $0.slot == slot && $0.controlState == "running" }) {
       bridgeSurfaces.removeValue(forKey: slot)
       if selectedPreviewSlot == slot { clearBridgeSelection() }
     }
+    surfaceOwners = owners
     guard let descriptor else { return }
     for slot in slots where surfaceWatches[slot] == nil {
       let watchID = UUID()
@@ -2438,10 +2429,11 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
                   self.surfaceWatchIDs[slot] == watchID else { return }
             revision = value.revision
             let wasUnavailable = self.surfaceMessages.removeValue(forKey: slot) != nil
-            if self.bridgeSurfaces[slot] != value.surfaces {
-              self.bridgeSurfaces[slot] = value.surfaces
+            let surfaces = preservingBridgeTitles(value.surfaces, from: self.bridgeSurfaces[slot] ?? [])
+            if self.bridgeSurfaces[slot] != surfaces {
+              self.bridgeSurfaces[slot] = surfaces
               if self.selectedPreviewSlot == slot,
-                 !value.surfaces.contains(where: { $0.id == self.selectedBridgeSurface }) {
+                 !surfaces.contains(where: { $0.id == self.selectedBridgeSurface }) {
                 self.clearBridgeSelection()
               }
               self.renderCurrentPage()
