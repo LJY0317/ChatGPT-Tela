@@ -187,6 +187,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     restoringDesktopApps = outstanding > 0
     changed?()
     for profile in remaining {
+      recordMenuDiagnostic("desktop_restore_open_requested", fields: ["slot": profile.slot, "targetBuild": build])
       reopenDesktop(profile) { [weak self] error in
         Task { @MainActor in
           guard let self else { return }

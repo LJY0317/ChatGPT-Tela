@@ -58,7 +58,9 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
   const adapter: CodexNativeTargetAdapter = {
     kind: "default-desktop", profiles: forbidden, resolve: forbidden,
     async session(targetId) { if (targetId !== "default") throw Error("foreign target");
-      return { targetId, state: JSON.parse(readFileSync(state, "utf8")).desktopRunning ? "restart-required" : "available" }; },
+      return JSON.parse(readFileSync(state, "utf8")).desktopRunning
+        ? { targetId, state: "restart-required", desktopProcessId: 123 }
+        : { targetId, state: "available" }; },
     quit: forbidden,
     profileRuntimeEnvironment: () => ({ FIXTURE_STATE: state, FIXTURE_RECEIPTS: receipts,
       FIXTURE_RESPONSES: `http://127.0.0.1:${ingress.port}/${ingress.capability}/v1/` }),
@@ -111,7 +113,7 @@ if(JSON.parse(readFileSync(process.env.FIXTURE_STATE,'utf8')).badExit)process.ex
     try {
       expect(await service.shutdownReadiness()).toBe("native_activity_unobservable");
       expect(diagnostics).toMatchObject([{ slot: 1, target_kind: "default-desktop",
-        state: "restart-required", endpoint_available: false, policy: "selected" }]);
+        state: "restart-required", desktop_pid: 123, endpoint_available: false, policy: "selected" }]);
       await expect(client.waitForShutdownReadiness()).rejects.toMatchObject({ reason: "native_activity_unobservable" });
       await expect(update.wait("codex")).rejects.toMatchObject({ service: "codex", cause: { reason: "native_activity_unobservable" } });
     } finally { unobserve?.(); }

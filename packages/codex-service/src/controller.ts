@@ -469,6 +469,7 @@ export async function startCodexService(input: {
     if (blocked) emitDiagnosticEvent("chatgpt_tela_codex", "desktop_activity_unobservable", {
       slot: profile.slot, target_kind: profile.target.adapterKind,
       state: session.state, desktop_present: session.desktopProcessId !== undefined,
+      ...(session.desktopProcessId === undefined ? {} : { desktop_pid: session.desktopProcessId }),
       endpoint_available: session.endpoint !== undefined, policy: selection,
     });
     return blocked;

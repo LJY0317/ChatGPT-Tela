@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { observeDiagnosticEvents } from "@chatgpt-tela/core";
 import { resolveProductPaths, PackagedServiceShutdownNotStartedError } from "@chatgpt-tela/product-lifecycle";
 import { startChatService, createChatToolRuntime } from "@chatgpt-tela/chat-service";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
@@ -202,7 +203,17 @@ test("consented update closes official apps then drains Web work without a Nativ
       version: 1, service: "codex", instanceId: "fixture-interrupt", installId: "fixture", pid: process.pid,
       endpoint: http.endpoint.href, bearerToken: http.bearerToken, startedAt: new Date().toISOString(),
     });
-    await settleOwnedUpdateWork("fixture", paths, ["codex"], "close-chatgpt", desktop);
+    const closeEvents: Record<string, unknown>[] = [];
+    const stopObserving = observeDiagnosticEvents(row => {
+      if (row.stage === "desktop_close_started" || row.stage === "desktop_close_finished") closeEvents.push(row);
+    });
+    try {
+      await settleOwnedUpdateWork("fixture", paths, ["codex"], "close-chatgpt", desktop);
+    } finally { stopObserving?.(); }
+    expect(closeEvents).toMatchObject([
+      { stage: "desktop_close_started", slot: 1, desktop_pid: 123 },
+      { stage: "desktop_close_finished", slot: 1, desktop_pid: 123, outcome: "completed" },
+    ]);
     expect(closed).toEqual([1]); expect(interrupted).toEqual([]);
     closed.length = 0;
     await settleOwnedUpdateWork("fixture", paths, ["codex"], "interrupt-work", desktop);

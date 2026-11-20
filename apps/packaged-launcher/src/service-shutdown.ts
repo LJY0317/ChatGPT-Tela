@@ -31,7 +31,8 @@ export async function settleOwnedUpdateWork(installId: string, paths: ProductPat
         const { target, session } = await targets.resolve(profile.slot);
         if (target.id !== profile.targetId) throw Error("ChatGPT profile changed before update closure");
         if (session.state !== "available") {
-          const fields = { slot: profile.slot, target_kind: target.adapterKind };
+          const fields = { slot: profile.slot, target_kind: target.adapterKind,
+            ...(session.desktopProcessId === undefined ? {} : { desktop_pid: session.desktopProcessId }) };
           emitDiagnosticEvent("chatgpt_tela_update", "desktop_close_started", fields);
           let closed = false;
           try { await targets.quit(target.id, undefined, session.desktopProcessId); closed = true; }
