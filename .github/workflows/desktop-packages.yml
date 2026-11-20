@@ -51,6 +51,10 @@ jobs:
             --output "build/desktop-packages/ChatGPT-Tela" \
             --version "$TELA_PACKAGE_VERSION" \
             --workspace-files "build/workspace-files-target/release/$TELA_PACKAGE_HELPER"
+      - name: Verify Windows package with Task Scheduler
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./apps/package-smoke/src/windows-acceptance.ps1 -PackagePath build/desktop-packages/ChatGPT-Tela
       - name: Archive Windows package
         if: runner.os == 'Windows'
         shell: pwsh
