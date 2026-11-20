@@ -1,3 +1,4 @@
+import { systemdUnitFixture } from "../../../tests/support/systemd-unit";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,13 +11,14 @@ import { runPackagedLifecycleCommand } from "../../packaged-launcher/src/lifecyc
 
 /** Compiled production lifecycle with fake registration; never launch a real service/profile. */
 class Registrations implements ServiceRegistrationCommandRunner {
+  constructor(readonly home: string) {}
   readonly enabled = new Set<string>();
   readonly running = new Set<string>();
   async run(command: string, args: readonly string[]) {
     assert.equal(command, "systemctl", "fixture prohibits external platform commands");
     const unit = args.at(-1)!;
     const result = (stdout = "", exitCode = 0) => ({ stdout, exitCode, stderr: "" });
-    if (args.includes("show")) return result(this.enabled.has(unit) ? "loaded\n" : "not-found\n", this.enabled.has(unit) ? 0 : 1);
+    if (args.includes("show")) return systemdUnitFixture(this.enabled.has(unit) ? join(this.home, ".config", "systemd", "user", unit) : undefined);
     if (args.includes("is-enabled")) return result(this.enabled.has(unit) ? "enabled\n" : "disabled\n", this.enabled.has(unit) ? 0 : 1);
     if (args.includes("is-active")) return result(this.running.has(unit) ? "active\n" : "inactive\n", this.running.has(unit) ? 0 : 3);
     if (args.includes("daemon-reload")) return result();
@@ -48,7 +50,7 @@ try {
         entrypointSourcePath: join(inputs, "runtime.cjs"), setupEntrypointSourcePath: join(inputs, "runtime.cjs") },});
     return outputPath;
   };
-  const source = payload("1.0.0"), target = payload("2.0.0"), runner = new Registrations();
+  const source = payload("1.0.0"), target = payload("2.0.0"), runner = new Registrations(home);
   let failStop = true;
   const options = { platform: "linux" as const, home, environment: {}, runner,
     shutdownService: async (service: TelaServiceId) => {

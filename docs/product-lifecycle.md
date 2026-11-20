@@ -245,7 +245,7 @@ for manual start. New tasks have no execution time limit and can run on battery 
 Ownership checks also verify the current account and absence of automatic triggers.
 Interrupted binary copies or
 service registration can resume only while the same manifest/marker/definition identity is still provable.
-Foreign files, orphaned markers, changed payload bytes, and changed definitions remain non-destructive.
+Foreign files, orphaned markers, changed payload bytes, and changed definitions remain non-destructive. On Linux, the loaded unit must also resolve to the recorded Tela file without applied drop-ins before lifecycle operations can act on it.
 
 The source package builder now supplies the actual multi-file runtime payload. It compiles a stable launcher
 and separate Gateway/Chat/Codex executables, carries the Electron/profile runtime, and on macOS includes the

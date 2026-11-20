@@ -1,3 +1,4 @@
+import { systemdUnitFixture } from "../../../tests/support/systemd-unit";
 import { withPackagedTransitionOwner } from "./transition-owner";
 import { retainPackagedRecoveryArtifact, reviewPackagedRecoveryArtifact } from "./recovery-artifact";
 import { describe, expect, test } from "bun:test";
@@ -25,6 +26,7 @@ import { resolveProductPaths } from "./layout";
 import { PackagedServiceShutdownNotStartedError } from "./service-shutdown";
 
 class SystemdUpgradeRunner implements ServiceRegistrationCommandRunner {
+  constructor(readonly home: string) {}
   readonly calls: string[] = [];
   readonly loaded = new Set<string>();
   readonly enabled = new Set<string>();
@@ -36,7 +38,7 @@ class SystemdUpgradeRunner implements ServiceRegistrationCommandRunner {
     const unit = arguments_.at(-1) ?? "";
     if (arguments_.includes("show")) {
       const present = this.loaded.has(unit);
-      return { exitCode: present ? 0 : 1, stdout: present ? "loaded\n" : "not-found\n", stderr: "" };
+      return systemdUnitFixture(present ? join(this.home, ".config", "systemd", "user", unit) : undefined);
     }
     if (arguments_.includes("is-enabled")) {
       const present = this.enabled.has(unit);
@@ -72,7 +74,7 @@ test("macOS package replacement is retired before source reads or shutdown", asy
 
 async function recoveryFixture() {
   const root = mkdtempSync(join(tmpdir(), "tela-owned-recovery-")), home = join(root, "home"); mkdirSync(home);
-  const runner = new SystemdUpgradeRunner(), options = { platform: "linux" as const, home, environment: {}, runner };
+  const runner = new SystemdUpgradeRunner(home), options = { platform: "linux" as const, home, environment: {}, runner };
 
   const source = createPayload(root, "1.0.0", "source"), target = createPayload(root, "2.0.0", "target");
   for (const path of [source, target]) {
@@ -295,7 +297,7 @@ async function installV1(root: string, home: string, runner: SystemdUpgradeRunne
 
 test("direct upgrade cannot stop services while another transition owns the installation", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-upgrade-competing-owner-")), home = join(root, "home");
-  mkdirSync(home); const runner = new SystemdUpgradeRunner();
+  mkdirSync(home); const runner = new SystemdUpgradeRunner(home);
   try {
     await installV1(root, home, runner);
     const options = { platform: "linux" as const, home, environment: {}, runner };
@@ -315,7 +317,7 @@ test("direct upgrade cannot stop services while another transition owns the inst
 describe("packaged upgrade journal", () => {
   test("format changes during shutdown are refused before payload replacement and retain the checkpoint", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-upgrade-storage-drain-")), home = join(root, "home");
-    mkdirSync(home); const runner = new SystemdUpgradeRunner();
+    mkdirSync(home); const runner = new SystemdUpgradeRunner(home);
     const options = { platform: "linux" as const, home, environment: {}, runner };
     try {
       await installV1(root, home, runner);
@@ -345,7 +347,7 @@ describe("packaged upgrade journal", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-upgrade-platform-controller-"));
     const home = join(root, "home");
     mkdirSync(home);
-    const runner = new SystemdUpgradeRunner();
+    const runner = new SystemdUpgradeRunner(home);
     try {
       await installV1(root, home, runner);
       const target = createPayload(root, "2.0.0", "v2\n");
@@ -372,7 +374,7 @@ describe("packaged upgrade journal", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-upgrade-"));
     const home = join(root, "home");
     mkdirSync(home);
-    const runner = new SystemdUpgradeRunner();
+    const runner = new SystemdUpgradeRunner(home);
     try {
       await installV1(root, home, runner);
       const target = createPayload(root, "2.0.0", "v2\n");
@@ -402,7 +404,7 @@ describe("packaged upgrade journal", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-upgrade-resume-"));
     const home = join(root, "home");
     mkdirSync(home);
-    const runner = new SystemdUpgradeRunner();
+    const runner = new SystemdUpgradeRunner(home);
     try {
       await installV1(root, home, runner);
       const target = createPayload(root, "2.0.0", "v2\n");
@@ -435,7 +437,7 @@ describe("packaged upgrade journal", () => {
     const root = mkdtempSync(join(tmpdir(), "tela-upgrade-drift-"));
     const home = join(root, "home");
     mkdirSync(home);
-    const runner = new SystemdUpgradeRunner();
+    const runner = new SystemdUpgradeRunner(home);
     try {
       await installV1(root, home, runner);
       const changedDefinition = createPayload(root, "2.0.0", "v2\n", "gateway-new");
@@ -465,7 +467,7 @@ describe("packaged upgrade journal", () => {
 test("isolated upgrade preserves optional provider, official config and external registration", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-upgrade-independent-"));
   const home = join(root, "home"); mkdirSync(home);
-  const runner = new SystemdUpgradeRunner();
+  const runner = new SystemdUpgradeRunner(home);
   try {
     await installV1(root, home, runner);
     const target = createPayload(root, "2.0.0", "v2\n");
@@ -492,7 +494,7 @@ test("isolated upgrade preserves optional provider, official config and external
 for (const boundary of ["restore", "interrupted", "replacing", "payload-drift", "store-version", "old-launcher"] as const) {
   test(`pre-replacement cancellation: ${boundary}`, async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-source-cancel-")), home = join(root, "home");
-    mkdirSync(home); const runner = new SystemdUpgradeRunner();
+    mkdirSync(home); const runner = new SystemdUpgradeRunner(home);
     const options = { platform: "linux" as const, home, environment: {}, runner };
     try {
       const source = createPayload(root, "1.0.0", "source");
@@ -562,7 +564,7 @@ for (const boundary of ["restore", "interrupted", "replacing", "payload-drift", 
 for(const boundary of ['restore','uncertain','post-replacement','restoration-interrupted'] as const){
  test(`automatic upgrade recovery: ${boundary}`,async()=>{
   const root=mkdtempSync(join(tmpdir(),'tela-auto-recover-')),home=join(root,'home');mkdirSync(home);
-  const runner=new SystemdUpgradeRunner(),options={platform:'linux' as const,home,environment:{},runner};
+  const runner=new SystemdUpgradeRunner(home),options={platform:'linux' as const,home,environment:{},runner};
   try{
    const source=createPayload(root,'1.0.0','source'), target=createPayload(root,'2.0.0','target');
    for(const payload of[source,target]){
@@ -609,7 +611,7 @@ for(const boundary of ['restore','uncertain','post-replacement','restoration-int
 test("runtime readiness failure retains target journal and retry observes without another OS start", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-upgrade-runtime-ready-")), home = join(root, "home");
   mkdirSync(home);
-  const runner = new SystemdUpgradeRunner();
+  const runner = new SystemdUpgradeRunner(home);
   try {
     await installV1(root, home, runner);
     const target = createPayload(root, "2.0.0", "runtime-ready");

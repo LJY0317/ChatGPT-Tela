@@ -1,3 +1,4 @@
+import { systemdUnitFixture } from "../../../tests/support/systemd-unit";
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +23,7 @@ import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporar
 const removeFixture = registerTemporaryFixtureCleanup();
 
 class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
+  constructor(readonly home: string) {}
   readonly loaded = new Set<string>();
   readonly enabled = new Set<string>();
   readonly running = new Set<string>();
@@ -34,7 +36,7 @@ class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
     if (arguments_.includes("start")) { this.running.add(unit); return { exitCode: 0, stdout: "", stderr: "" }; }
     if (arguments_.includes("show")) {
       const present = this.loaded.has(unit);
-      return { exitCode: present ? 0 : 1, stdout: present ? "loaded\n" : "not-found\n", stderr: "" };
+      return systemdUnitFixture(present ? join(this.home, ".config", "systemd", "user", unit) : undefined);
     }
     if (arguments_.includes("is-enabled")) {
       const present = this.enabled.has(unit);
@@ -83,7 +85,7 @@ function buildFixture(root: string, withFilePublisher = false) {
 test("a failed service stop leaves later peers alone and restores only acknowledged running peers", async () => {
   for (const [gatewayRunning, restoreFails] of [[true, false], [false, false], [true, true]] as const) {
     const root = mkdtempSync(join(tmpdir(), "tela-service-stop-settlement-")), home = join(root, "home");
-    mkdirSync(home); const { payload } = buildFixture(root), runner = new SystemdFixtureRunner();
+    mkdirSync(home); const { payload } = buildFixture(root), runner = new SystemdFixtureRunner(home);
     const pathOptions = { platform: "linux" as const, home, environment: {} };
     try {
       const planned = await planPackagedInstallFromPayload({ payloadSourcePath: payload, ...pathOptions, runner });
@@ -129,7 +131,7 @@ test("launcher discovers one app root from a real macOS executable and its exter
 describe("packaged service launcher", () => {
   test("only the recorded service can start at a proven final update or repair checkpoint", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-launch-restoration-")), home = join(root, "home"); mkdirSync(home);
-    const { payload } = buildFixture(root), runner = new SystemdFixtureRunner();
+    const { payload } = buildFixture(root), runner = new SystemdFixtureRunner(home);
     const pathOptions = { platform: "linux" as const, home, environment: {} };
     try {
       const planned = await planPackagedInstallFromPayload({ payloadSourcePath: payload, ...pathOptions, runner });
@@ -189,7 +191,7 @@ describe("packaged service launcher", () => {
     const home = join(root, "home");
     mkdirSync(home);
     const { payload } = buildFixture(root, true);
-    const runner = new SystemdFixtureRunner();
+    const runner = new SystemdFixtureRunner(home);
     const pathOptions = { platform: "linux" as const, home, environment: {} };
     try {
       const planned = await planPackagedInstallFromPayload({
@@ -278,7 +280,7 @@ describe("packaged service launcher", () => {
     const home = join(root, "home");
     mkdirSync(home);
     const { payload } = buildFixture(root);
-    const runner = new SystemdFixtureRunner();
+    const runner = new SystemdFixtureRunner(home);
     const pathOptions = { platform: "linux" as const, home, environment: {} };
     try {
       const planned = await planPackagedInstallFromPayload({
@@ -314,7 +316,7 @@ describe("packaged service launcher", () => {
     const home = join(root, "home");
     mkdirSync(home);
     const { payload } = buildFixture(root);
-    const runner = new SystemdFixtureRunner();
+    const runner = new SystemdFixtureRunner(home);
     const pathOptions = { platform: "linux" as const, home, environment: {} };
     try {
       const planned = await planPackagedInstallFromPayload({

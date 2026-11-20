@@ -8,6 +8,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -236,13 +237,30 @@ async function serviceLoaded(
     return true;
   }
   if (identity.platform === "linux") {
-    const result = await runner.run("systemctl", ["--user", "show", "--property=LoadState", "--value", resource.registrationId]);
-    const state = result.stdout.trim();
-    if (state === "not-found") return false;
-    if (result.exitCode !== 0 || !state) throw Error("systemd user service inspection failed");
+    const unit = await inspectLinuxUnit(resource, runner);
+    if (unit.load === "not-found" && unit.source === "" && unit.dropIns === "" && unit.inactive) return false;
+    if (unit.exitCode !== 0 || !unit.load || !unit.source || unit.dropIns !== "") {
+      throw Error("systemd user service definition is unavailable or overridden");
+    }
+    const expected = identity.definitionPath!;
+    if (unit.source !== expected && realpathSync(unit.source) !== realpathSync(expected)) {
+      throw Error("systemd loaded a different service definition");
+    }
     return true;
   }
   return (await windowsFingerprint(runner, resource.registrationId)).exists;
+}
+
+async function inspectLinuxUnit(resource: ServiceRegistrationResource, runner: ServiceRegistrationCommandRunner) {
+  const response = await runner.run("systemctl", ["--user", "show", "--all",
+    "--property=LoadState,ActiveState,FragmentPath,DropInPaths", resource.registrationId]);
+  const fields = new Map(response.stdout.split(/\r?\n/).flatMap(line => {
+    const separator = line.indexOf("=");
+    return separator < 0 ? [] : [[line.slice(0, separator), line.slice(separator + 1)] as const];
+  }));
+  const active = fields.get("ActiveState");
+  return { load: fields.get("LoadState"), source: fields.get("FragmentPath"), dropIns: fields.get("DropInPaths"),
+    inactive: active === "inactive" || active === "failed", exitCode: response.exitCode };
 }
 
 /** A prior removal may have deleted the file before clearing systemd's cached unit. */
@@ -250,17 +268,10 @@ async function linuxRemovedDefinitionState(
   resource: ServiceRegistrationResource,
   runner: ServiceRegistrationCommandRunner,
 ): Promise<"missing" | "cached" | "unproven"> {
-  const response = await runner.run("systemctl", ["--user", "show", "--all",
-    "--property=LoadState,ActiveState,FragmentPath,DropInPaths", resource.registrationId]);
-  const fields = new Map(response.stdout.split(/\r?\n/).flatMap(line => {
-    const separator = line.indexOf("=");
-    return separator < 0 ? [] : [[line.slice(0, separator), line.slice(separator + 1)] as const];
-  }));
-  const active = fields.get("ActiveState"), source = fields.get("FragmentPath");
-  const load = fields.get("LoadState");
-  if ((active !== "inactive" && active !== "failed") || fields.get("DropInPaths") !== "") return "unproven";
-  if (load === "not-found" && source === "") return "missing";
-  if (response.exitCode === 0 && load === "loaded" && source === resource.identity!.definitionPath) return "cached";
+  const unit = await inspectLinuxUnit(resource, runner);
+  if (!unit.inactive || unit.dropIns !== "") return "unproven";
+  if (unit.load === "not-found" && unit.source === "") return "missing";
+  if (unit.exitCode === 0 && unit.load === "loaded" && unit.source === resource.identity!.definitionPath) return "cached";
   return "unproven";
 }
 
@@ -508,6 +519,7 @@ export class ServiceRegistrationInstaller {
         } else {
           const reload = await this.#runner.run("systemctl", ["--user", "daemon-reload"]);
           if (reload.exitCode !== 0) throw new Error(`systemd daemon-reload failed: ${reload.stderr.trim().slice(0, 240)}`);
+          await serviceLoaded(input.resource, this.#runner);
           const enable = await this.#runner.run("systemctl", ["--user", "enable", input.resource.registrationId]);
           if (enable.exitCode !== 0) throw new Error(`systemd enable failed: ${enable.stderr.trim().slice(0, 240)}`);
         }

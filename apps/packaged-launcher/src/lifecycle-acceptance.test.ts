@@ -1,3 +1,4 @@
+import { systemdUnitFixture } from "../../../tests/support/systemd-unit";
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +25,7 @@ const removeFixture = registerTemporaryFixtureCleanup();
 
 /** No real service manager, profile, credential store or user installation is used. */
 class LifecycleServices implements ServiceRegistrationCommandRunner {
+  constructor(readonly home: string) {}
   readonly loaded = new Set<string>();
   readonly running = new Set<string>();
   readonly calls: string[][] = [];
@@ -33,7 +35,7 @@ class LifecycleServices implements ServiceRegistrationCommandRunner {
     if (command !== "systemctl") throw new Error("fixture refused an external command");
     const unit = args.at(-1)!;
     const result = (stdout = "", exitCode = 0) => ({ stdout, exitCode, stderr: "" });
-    if (args.includes("show")) return result(this.loaded.has(unit) ? "loaded\n" : "not-found\n", this.loaded.has(unit) ? 0 : 1);
+    if (args.includes("show")) return systemdUnitFixture(this.loaded.has(unit) ? join(this.home, ".config", "systemd", "user", unit) : undefined);
     if (args.includes("is-enabled")) return result(this.loaded.has(unit) ? "enabled\n" : "disabled\n", this.loaded.has(unit) ? 0 : 1);
     if (args.includes("is-active")) return result(this.running.has(unit) ? "active\n" : "inactive\n", this.running.has(unit) ? 0 : 3);
     if (args.includes("daemon-reload")) return result();
@@ -68,7 +70,7 @@ test("install -> update -> keep-data removal -> reinstall -> complete removal pr
       return outputPath;
     };
     const first = payload("1.0.0"), next = payload("1.0.1");
-    const runner = new LifecycleServices();
+    const runner = new LifecycleServices(home);
     const shutdownService = async (service: "gateway" | "chat" | "codex") => {
       const unit = `chatgpt-tela-${service}.service`;
       if (unit === runner.failStopFor) throw new Error("synthetic service shutdown refused");

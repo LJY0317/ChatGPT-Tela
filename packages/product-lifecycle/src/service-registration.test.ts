@@ -1,3 +1,4 @@
+import { systemdUnitFixture } from "../../../tests/support/systemd-unit";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +19,7 @@ import {
 } from "./service-registration";
 
 class LinuxFixtureRunner implements ServiceRegistrationCommandRunner {
+  constructor(readonly definitionPath?: string) {}
   loaded = true;
   enabled = true;
   readonly calls: Array<readonly [string, readonly string[]]> = [];
@@ -30,12 +32,8 @@ class LinuxFixtureRunner implements ServiceRegistrationCommandRunner {
     if (command !== "systemctl") throw new Error(`unexpected command ${command}`);
     if (arguments_.includes("show")) {
       if (!this.reachable) return { exitCode: 1, stdout: "", stderr: "user manager is unreachable" };
-      if (arguments_.includes("--all")) {
-        const cached = this.removedDefinition;
-        return { exitCode: cached ? 0 : 1, stderr: "", stdout:
-          `LoadState=${cached ? "loaded" : "not-found"}\nActiveState=${cached?.active ?? "inactive"}\nFragmentPath=${cached?.path ?? ""}\nDropInPaths=${cached?.dropIns ?? ""}\n` };
-      }
-      return { exitCode: this.loaded ? 0 : 1, stdout: this.loaded ? "loaded\n" : "not-found\n", stderr: "" };
+      const cached = this.removedDefinition;
+      return systemdUnitFixture(cached?.path ?? (this.loaded ? this.definitionPath : undefined), cached?.active, cached?.dropIns);
     }
     if (arguments_.includes("is-enabled")) {
       return { exitCode: this.enabled ? 0 : 1, stdout: this.enabled ? "enabled\n" : "disabled\n", stderr: "" };
@@ -47,6 +45,7 @@ class LinuxFixtureRunner implements ServiceRegistrationCommandRunner {
     }
     if (arguments_.includes("daemon-reload")) {
       if (this.reloadFails) return { exitCode: 1, stdout: "", stderr: "reload fixture failure" };
+      if (this.removedDefinition) this.loaded = false;
       delete this.removedDefinition;
       return { exitCode: 0, stdout: "", stderr: "" };
     }
@@ -98,6 +97,7 @@ class WindowsFixtureRunner implements ServiceRegistrationCommandRunner {
 }
 
 class LinuxInstallFixtureRunner implements ServiceRegistrationCommandRunner {
+  constructor(readonly definitionPath: string) {}
   loaded = false;
   enabled = false;
   readonly calls: Array<readonly [string, readonly string[]]> = [];
@@ -106,7 +106,7 @@ class LinuxInstallFixtureRunner implements ServiceRegistrationCommandRunner {
     this.calls.push([command, [...arguments_]]);
     if (command !== "systemctl") throw new Error(`unexpected command ${command}`);
     if (arguments_.includes("show")) {
-      return { exitCode: this.loaded ? 0 : 1, stdout: this.loaded ? "loaded\n" : "not-found\n", stderr: "" };
+      return systemdUnitFixture(this.loaded ? this.definitionPath : undefined);
     }
     if (arguments_.includes("is-enabled")) {
       return { exitCode: this.enabled ? 0 : 1, stdout: this.enabled ? "enabled\n" : "disabled\n", stderr: "" };
@@ -182,7 +182,7 @@ describe("service registration ownership", () => {
     const markerPath = join(root, "markers", "chat.json");
     const definition = { platform: "linux" as const,
       content: "[Unit]\nDescription=ChatGPT Tela Chat\n[Service]\nExecStart=/fixture/tela chat\n[Install]\nWantedBy=default.target\n" };
-    const runner = new LinuxInstallFixtureRunner();
+    const runner = new LinuxInstallFixtureRunner(definitionPath);
     const manifest = createOwnershipManifest("1.2.3");
     writeOwnershipManifest(manifestPath, manifest);
     const resource = serviceRegistrationResourceForDefinition({
@@ -216,7 +216,7 @@ describe("service registration ownership", () => {
     const markerPath = join(root, "markers", "codex.json");
     const definition = { platform: "linux" as const,
       content: "[Service]\nExecStart=/fixture/tela codex\n[Install]\nWantedBy=default.target\n" };
-    const runner = new LinuxInstallFixtureRunner();
+    const runner = new LinuxInstallFixtureRunner(definitionPath);
     const manifest = createOwnershipManifest("1.2.3");
     writeOwnershipManifest(manifestPath, manifest);
     const resource = serviceRegistrationResourceForDefinition({
@@ -243,7 +243,7 @@ describe("service registration ownership", () => {
     const markerPath = join(root, "markers", "gateway.json");
     const definition = { platform: "linux" as const,
       content: "[Service]\nExecStart=/fixture/tela gateway\n[Install]\nWantedBy=default.target\n" };
-    const runner = new LinuxInstallFixtureRunner();
+    const runner = new LinuxInstallFixtureRunner(definitionPath);
     const manifest = createOwnershipManifest("1.2.3");
     writeOwnershipManifest(manifestPath, manifest);
     const resource = serviceRegistrationResourceForDefinition({
@@ -276,7 +276,7 @@ describe("service registration ownership", () => {
     const markerPath = join(root, "markers", "chat.json");
     const definition = { platform: "linux" as const,
       content: "[Service]\nExecStart=/fixture/tela chat\n[Install]\nWantedBy=default.target\n" };
-    const runner = new LinuxInstallFixtureRunner();
+    const runner = new LinuxInstallFixtureRunner(definitionPath);
     const manifest = createOwnershipManifest("1.2.3");
     writeOwnershipManifest(manifestPath, manifest);
     const resource = serviceRegistrationResourceForDefinition({
@@ -311,7 +311,7 @@ describe("service registration ownership", () => {
       resourceId: "gateway-service", owner: "gateway", registrationId: "chatgpt-tela-gateway.service",
       markerPath, definitionPath, definition,
     });
-    const runner = new LinuxInstallFixtureRunner();
+    const runner = new LinuxInstallFixtureRunner(definitionPath);
     try {
       const installer = new ServiceRegistrationInstaller({ platform: "linux", runner });
       expect(await installer.observeReady(resource, manifest)).toBe("ownership-drift");
@@ -373,7 +373,7 @@ describe("service registration ownership", () => {
     const manifestPath = join(root, "ownership-v1.json");
     const definitionPath = join(root, "chatgpt-tela-chat.service");
     const markerPath = join(root, "markers", "chat.json");
-    const runner = new LinuxFixtureRunner();
+    const runner = new LinuxFixtureRunner(definitionPath);
     const manifest = createOwnershipManifest("0.0.0");
     writeOwnershipManifest(manifestPath, manifest);
     writeFileSync(definitionPath, "[Service]\nExecStart=/fixture/tela chat\n");
@@ -391,8 +391,24 @@ describe("service registration ownership", () => {
         runner,
       });
       const manager = new ServiceRegistrationManager({ platform: "linux", runner });
-      expect(await manager.observe(resource, readOwnershipManifest(manifestPath)!)).toBe("owned");
-      expect((await manager.release(resource, readOwnershipManifest(manifestPath)!)).removed).toBe(true);
+      const installed = readOwnershipManifest(manifestPath)!;
+      const installer = new ServiceRegistrationInstaller({ platform: "linux", runner });
+      expect(await manager.observe(resource, installed)).toBe("owned");
+      const alternate = join(root, "other", resource.registrationId);
+      mkdirSync(join(root, "other"));
+      writeFileSync(alternate, readFileSync(definitionPath));
+      for (const loaded of [
+        { path: alternate, active: "inactive" },
+        { path: definitionPath, active: "inactive", dropIns: "/fixture/user-override.conf" },
+      ]) {
+        runner.removedDefinition = loaded;
+        expect(await installer.observeReady(resource, installed)).toBe("unknown");
+        expect(await manager.observe(resource, installed)).toBe("unknown");
+        expect((await manager.release(resource, installed)).removed).toBe(false);
+      }
+      expect(runner.calls.some(([, args]) => args.includes("disable"))).toBe(false);
+      delete runner.removedDefinition;
+      expect((await manager.release(resource, installed)).removed).toBe(true);
       expect(runner.calls.some(([, args]) => args.includes("disable") && args.includes("chatgpt-tela-chat.service"))).toBe(true);
       expect(runner.calls.some(([, args]) => args.includes("daemon-reload"))).toBe(true);
       expect(() => readFileSync(definitionPath)).toThrow();
@@ -407,7 +423,7 @@ describe("service registration ownership", () => {
     const manifestPath = join(root, "ownership-v1.json");
     const definitionPath = join(root, "chatgpt-tela-chat.service");
     const markerPath = join(root, "marker.json");
-    const runner = new LinuxFixtureRunner();
+    const runner = new LinuxFixtureRunner(definitionPath);
     const manifest = createOwnershipManifest("0.0.0");
     writeOwnershipManifest(manifestPath, manifest);
     writeFileSync(definitionPath, "[Service]\nExecStart=/fixture/tela chat\n");
@@ -457,7 +473,7 @@ describe("service registration ownership", () => {
     const manifestPath = join(root, "ownership-v1.json");
     const definitionPath = join(root, "chatgpt-tela-gateway.service");
     const markerPath = join(root, "marker.json");
-    const runner = new LinuxFixtureRunner();
+    const runner = new LinuxFixtureRunner(definitionPath);
     const manifest = createOwnershipManifest("0.0.0");
     writeOwnershipManifest(manifestPath, manifest);
     writeFileSync(definitionPath, "original\n");
@@ -490,7 +506,7 @@ describe("service registration ownership", () => {
     const manifestPath = join(root, "ownership-v1.json");
     const definitionPath = join(root, "chatgpt-tela-chat.service");
     const markerPath = join(root, "marker.json");
-    const runner = new LinuxFixtureRunner();
+    const runner = new LinuxFixtureRunner(definitionPath);
     const manifest = createOwnershipManifest("0.0.0");
     writeOwnershipManifest(manifestPath, manifest);
     writeFileSync(definitionPath, "[Service]\nExecStart=/fixture/tela chat\n");

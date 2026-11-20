@@ -1,3 +1,4 @@
+import { systemdUnitFixture } from "../../../tests/support/systemd-unit";
 import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,12 +18,12 @@ import { prepareLocalChatPlugin, validateOwnedLocalChatPlugin } from "./plugin-p
 // The runner models only the standard OS registration contract. Nothing is
 // installed in the real user account, and no service is started or restarted.
 class LocalSystemd implements ServiceRegistrationCommandRunner {
+  constructor(readonly home: string) {}
   readonly enabled = new Set<string>();
   async run(command: string, args: readonly string[]) {
     if (command !== "systemctl") throw Error("unexpected host executable");
     const unit = args.at(-1)!;
-    if (args.includes("show")) return { exitCode: this.enabled.has(unit) ? 0 : 1,
-      stdout: this.enabled.has(unit) ? "loaded\n" : "not-found\n", stderr: "" };
+    if (args.includes("show")) return systemdUnitFixture(this.enabled.has(unit) ? join(this.home, ".config", "systemd", "user", unit) : undefined);
     if (args.includes("is-enabled")) return { exitCode: this.enabled.has(unit) ? 0 : 1,
       stdout: this.enabled.has(unit) ? "enabled\n" : "disabled\n", stderr: "" };
     if (args.includes("is-active")) return { exitCode: 3, stdout: "inactive\n", stderr: "" };
@@ -50,7 +51,7 @@ test("owned local MCP source, alias and marketplace settle across packaged insta
   const root = mkdtempSync(join(tmpdir(), "tela-local-lifecycle-"));
   const home = join(root, "home");
   mkdirSync(home);
-  const runner = new LocalSystemd(), options = { platform: "linux" as const, home, environment: {}, runner };
+  const runner = new LocalSystemd(home), options = { platform: "linux" as const, home, environment: {}, runner };
   const paths = resolveProductPaths(options);
   const first = payload(root, "1.0.0"), second = payload(root, "2.0.0");
   let client: Client | undefined;

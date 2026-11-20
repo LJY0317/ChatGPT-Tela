@@ -1,3 +1,4 @@
+import { systemdUnitFixture } from "../../../tests/support/systemd-unit";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -19,6 +20,7 @@ import { withPackagedTransitionOwner } from "./transition-owner";
 import type { ServiceRegistrationCommandResult, ServiceRegistrationCommandRunner } from "./service-registration";
 
 class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
+  constructor(readonly home: string) {}
   readonly loaded = new Set<string>();
   readonly enabled = new Set<string>();
   readonly calls: Array<readonly [string, readonly string[]]> = [];
@@ -29,7 +31,7 @@ class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
     const unit = arguments_.at(-1) ?? "";
     if (arguments_.includes("show")) {
       const present = this.loaded.has(unit);
-      return { exitCode: present ? 0 : 1, stdout: present ? "loaded\n" : "not-found\n", stderr: "" };
+      return systemdUnitFixture(present ? join(this.home, ".config", "systemd", "user", unit) : undefined);
     }
     if (arguments_.includes("is-enabled")) {
       const present = this.enabled.has(unit);
@@ -47,7 +49,7 @@ class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
 
 test("initial install shares the transition lock and preserves an active removal checkpoint", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-first-install-owner-")), home = join(root, "home"); mkdirSync(home);
-  const runner = new SystemdFixtureRunner(), spec = fixture(root), options = { platform: "linux" as const, home, environment: {}, runner };
+  const runner = new SystemdFixtureRunner(home), spec = fixture(root), options = { platform: "linux" as const, home, environment: {}, runner };
   try {
     const planned = await planPackagedInstall({ spec, ...options });
     writeOwnershipManifest(planned.blueprint.paths.installManifest, planned.manifest);
@@ -153,7 +155,7 @@ describe("packaged product install", () => {
         { executable: "tela", arguments: ["service", service] }])),
     };
     writeFileSync(join(payload, PACKAGED_PRODUCT_MANIFEST), `${JSON.stringify(packageManifest)}\n`);
-    const runner = new SystemdFixtureRunner();
+    const runner = new SystemdFixtureRunner(home);
     try {
       const planned = await planPackagedInstallFromPayload({ payloadSourcePath: payload, platform: "linux",
         home, environment: {}, runner });
@@ -182,7 +184,7 @@ describe("packaged product install", () => {
         { executable: "tela", arguments: ["service", service] }])),
     };
     writeFileSync(manifestPath, `${JSON.stringify(packageManifest)}\n`);
-    const runner = new SystemdFixtureRunner();
+    const runner = new SystemdFixtureRunner(home);
     try {
       const planned = await planPackagedInstallFromPayload({ payloadSourcePath: payload, platform: "linux",
         home, environment: {}, runner });
@@ -201,7 +203,7 @@ describe("packaged product install", () => {
     const home = join(root, "home");
     mkdirSync(home);
     const spec = fixture(root);
-    const runner = new SystemdFixtureRunner();
+    const runner = new SystemdFixtureRunner(home);
     try {
       const planned = await planPackagedInstall({ spec, platform: "linux", home, environment: {}, runner });
       expect(planned.plan.createCount).toBe(4);
@@ -233,7 +235,7 @@ describe("packaged product install", () => {
     const home = join(root, "home");
     mkdirSync(home);
     const spec = fixture(root);
-    const runner = new SystemdFixtureRunner();
+    const runner = new SystemdFixtureRunner(home);
     try {
       const planned = await planPackagedInstall({ spec, platform: "linux", home, environment: {}, runner });
       writeFileSync(join(spec.payloadSourcePath, "tela"), "changed after plan\n");
@@ -250,7 +252,7 @@ describe("packaged product install", () => {
     const home = join(root, "home");
     mkdirSync(home);
     const spec = fixture(root);
-    const runner = new SystemdFixtureRunner();
+    const runner = new SystemdFixtureRunner(home);
     try {
       const blueprint = createPackagedInstallBlueprint({ spec, platform: "linux", home, environment: {} });
       const chat = blueprint.services.find(service => service.service === "chat")!;
@@ -273,7 +275,7 @@ describe("packaged product install", () => {
     const home = join(root, "home");
     mkdirSync(home);
     const spec = fixture(root);
-    const runner = new SystemdFixtureRunner();
+    const runner = new SystemdFixtureRunner(home);
     try {
       const planned = await planPackagedInstall({ spec, platform: "linux", home, environment: {}, runner });
       mkdirSync(join(planned.blueprint.paths.stateRoot, "install"), { recursive: true });
@@ -426,7 +428,7 @@ test("first binary install preserves preexisting runtime data ownership across a
   const root = mkdtempSync(join(tmpdir(), "tela-first-package-"));
   try {
     const home = join(root, "home"); mkdirSync(home);
-    const spec = fixture(root); const runner = new SystemdFixtureRunner();
+    const spec = fixture(root); const runner = new SystemdFixtureRunner(home);
     const options = { spec, platform: "linux" as const, home, environment: {}, runner };
     const blueprint = createPackagedInstallBlueprint(options);
     const state = join(home, "chat-state"); mkdirSync(state); writeFileSync(join(state, "user-data"), "keep");
@@ -449,7 +451,7 @@ test("a claimed binary installation still requires an explicit version upgrade",
   const root = mkdtempSync(join(tmpdir(), "tela-existing-package-"));
   try {
     const home = join(root, "home"); mkdirSync(home); const spec = fixture(root);
-    const options = { spec, platform: "linux" as const, home, environment: {}, runner: new SystemdFixtureRunner() };
+    const options = { spec, platform: "linux" as const, home, environment: {}, runner: new SystemdFixtureRunner(home) };
     const blueprint = createPackagedInstallBlueprint(options);
     writeOwnershipManifest(blueprint.paths.installManifest, { ...createOwnershipManifest("0.0.0"), resources: [blueprint.payload.resource] });
     await expect(planPackagedInstall(options)).rejects.toThrow("explicit upgrade plan");
@@ -460,7 +462,7 @@ test("a concurrent first binary installation invalidates the bootstrap plan befo
   const root = mkdtempSync(join(tmpdir(), "tela-package-bootstrap-race-"));
   try {
     const home = join(root, "home"); mkdirSync(home); const spec = fixture(root);
-    const options = { spec, platform: "linux" as const, home, environment: {}, runner: new SystemdFixtureRunner() };
+    const options = { spec, platform: "linux" as const, home, environment: {}, runner: new SystemdFixtureRunner(home) };
     const blueprint = createPackagedInstallBlueprint(options); const initial = createOwnershipManifest("0.0.0");
     writeOwnershipManifest(blueprint.paths.installManifest, initial);
     const planned = await planPackagedInstall(options);

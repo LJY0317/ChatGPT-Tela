@@ -1,3 +1,4 @@
+import { systemdUnitFixture } from "../../../tests/support/systemd-unit";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +16,7 @@ import { registerTemporaryFixtureCleanup } from "../../../tests/support/temporar
 const removeFixture = registerTemporaryFixtureCleanup();
 
 class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
+  constructor(readonly home: string) {}
   readonly loaded = new Set<string>();
   readonly enabled = new Set<string>();
 
@@ -23,7 +25,7 @@ class SystemdFixtureRunner implements ServiceRegistrationCommandRunner {
     const unit = arguments_.at(-1) ?? "";
     if (arguments_.includes("show")) {
       const present = this.loaded.has(unit);
-      return { exitCode: present ? 0 : 1, stdout: present ? "loaded\n" : "not-found\n", stderr: "" };
+      return systemdUnitFixture(present ? join(this.home, ".config", "systemd", "user", unit) : undefined);
     }
     if (arguments_.includes("is-enabled")) {
       const present = this.enabled.has(unit);
@@ -93,7 +95,7 @@ describe("packaged lifecycle CLI", () => {
     const home = join(root, "home");
     mkdirSync(home);
     const { payload } = fixture(root);
-    const runner = new SystemdFixtureRunner();
+    const runner = new SystemdFixtureRunner(home);
     const options = { defaultPayloadRoot: payload, platform: "linux" as const, home, environment: {}, runner };
     try {
       const dryRun = await runPackagedLifecycleCommand([

@@ -1,3 +1,4 @@
+import { systemdUnitFixture } from "../../../tests/support/systemd-unit";
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +13,7 @@ import { editOfficialCodexProviderFile } from "@chatgpt-tela/default-desktop-tar
 const removeFixture = registerTemporaryFixtureCleanup();
 
 class FakeManager implements ServiceRegistrationCommandRunner {
+  constructor(readonly home: string) {}
   readonly loaded = new Set<string>();
   readonly running = new Set<string>();
   async run(command: string, args: readonly string[]) {
@@ -20,8 +22,7 @@ class FakeManager implements ServiceRegistrationCommandRunner {
     if (args.includes("is-active")) return { exitCode: this.running.has(unit) ? 0 : 3, stdout: this.running.has(unit) ? "active\n" : "inactive\n", stderr: "" };
     if (args.includes("is-enabled")) return { exitCode: this.loaded.has(unit) ? 0 : 1,
       stdout: this.loaded.has(unit) ? "enabled\n" : "disabled\n", stderr: "" };
-    if (args.includes("show")) return { exitCode: this.loaded.has(unit) ? 0 : 1,
-      stdout: this.loaded.has(unit) ? "loaded\n" : "not-found\n", stderr: "" };
+    if (args.includes("show")) return systemdUnitFixture(this.loaded.has(unit) ? join(this.home, ".config", "systemd", "user", unit) : undefined);
     if (args.includes("enable")) this.loaded.add(unit);
     else if (args.includes("disable")) this.loaded.delete(unit);
     else if (args.includes("stop")) this.running.delete(unit);
@@ -47,7 +48,7 @@ function fixture(root: string) {
       profileRuntime: { electronBundleSourcePath: join(input, "electron"), electronExecutableRelativePath: "bin/electron", entrypointSourcePath: join(input, "profile.cjs") },});
     return payload;
   };
-  return { home, first: build("1.0.0"), second: build("2.0.0"), runner: new FakeManager() };
+  return { home, first: build("1.0.0"), second: build("2.0.0"), runner: new FakeManager(home) };
 }
 
 test("review -> repair -> keep-data removal uses fake OS manager and preserves unrelated data", async () => {

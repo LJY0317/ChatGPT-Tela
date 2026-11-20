@@ -1,3 +1,4 @@
+import { systemdUnitFixture } from "../../../tests/support/systemd-unit";
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +17,7 @@ import type { TelaServiceId } from "./layout";
 import type { ServiceRegistrationCommandResult, ServiceRegistrationCommandRunner } from "./service-registration";
 
 class SystemdRepairRunner implements ServiceRegistrationCommandRunner {
+  constructor(readonly home: string) {}
   readonly loaded = new Set<string>();
   readonly enabled = new Set<string>();
 
@@ -24,7 +26,7 @@ class SystemdRepairRunner implements ServiceRegistrationCommandRunner {
     const unit = arguments_.at(-1) ?? "";
     if (arguments_.includes("show")) {
       const present = this.loaded.has(unit);
-      return { exitCode: present ? 0 : 1, stdout: present ? "loaded\n" : "not-found\n", stderr: "" };
+      return systemdUnitFixture(present ? join(this.home, ".config", "systemd", "user", unit) : undefined);
     }
     if (arguments_.includes("is-enabled")) {
       const present = this.enabled.has(unit);
@@ -103,7 +105,7 @@ async function installFixture(root: string, runner: SystemdRepairRunner) {
 describe("same-version packaged repair", () => {
   test("healthy install plans keep and applies without quiescing anything", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-repair-healthy-"));
-    const runner = new SystemdRepairRunner();
+    const runner = new SystemdRepairRunner(join(root, "home"));
     try {
       const f = await installFixture(root, runner);
       const plan = await planPackagedRepairFromPayload({ payloadSourcePath: f.payload, platform: "linux",
@@ -124,7 +126,7 @@ describe("same-version packaged repair", () => {
 
   test("exact payload byte drift quiesces exact services, repairs bytes, and resumes only prior running services", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-repair-payload-"));
-    const runner = new SystemdRepairRunner();
+    const runner = new SystemdRepairRunner(join(root, "home"));
     try {
       const f = await installFixture(root, runner);
       writeFileSync(join(f.blueprint.paths.binaryRoot, "tela"), "damaged\n");
@@ -149,7 +151,7 @@ describe("same-version packaged repair", () => {
 
   test("resume failure leaves a durable journal and retry resumes only the outstanding service", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-repair-resume-"));
-    const runner = new SystemdRepairRunner();
+    const runner = new SystemdRepairRunner(join(root, "home"));
     try {
       const f = await installFixture(root, runner);
       writeFileSync(join(f.blueprint.paths.binaryRoot, "tela"), "damaged\n");
@@ -174,7 +176,7 @@ describe("same-version packaged repair", () => {
 
   test("missing service registration repairs independently while healthy payload stays untouched", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-repair-service-"));
-    const runner = new SystemdRepairRunner();
+    const runner = new SystemdRepairRunner(join(root, "home"));
     try {
       const f = await installFixture(root, runner);
       const chat = f.blueprint.services.find(service => service.service === "chat")!;
@@ -199,7 +201,7 @@ describe("same-version packaged repair", () => {
 
   test("foreign service definition drift is preserved and blocks payload byte repair", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-repair-drift-"));
-    const runner = new SystemdRepairRunner();
+    const runner = new SystemdRepairRunner(join(root, "home"));
     try {
       const f = await installFixture(root, runner);
       const gateway = f.blueprint.services.find(service => service.service === "gateway")!;
@@ -223,7 +225,7 @@ describe("same-version packaged repair", () => {
 
   test("keep plan never escalates into repair after later damage", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-repair-nonescalating-"));
-    const runner = new SystemdRepairRunner();
+    const runner = new SystemdRepairRunner(join(root, "home"));
     try {
       const f = await installFixture(root, runner);
       const plan = await planPackagedRepairFromPayload({ payloadSourcePath: f.payload, platform: "linux",
@@ -242,7 +244,7 @@ describe("same-version packaged repair", () => {
 
   test("repair and upgrade journals are mutually exclusive", async () => {
     const root = mkdtempSync(join(tmpdir(), "tela-repair-conflict-"));
-    const runner = new SystemdRepairRunner();
+    const runner = new SystemdRepairRunner(join(root, "home"));
     try {
       const f = await installFixture(root, runner);
       mkdirSync(join(f.blueprint.paths.stateRoot, "install"), { recursive: true });

@@ -1,3 +1,4 @@
+import { systemdUnitFixture } from "../../../tests/support/systemd-unit";
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,8 +26,8 @@ test("packaged registration preserves server discovery without a prepared snapsh
         setupEntrypointSourcePath: join(sources, "runtime.cjs") },
     });
     const runner: ServiceRegistrationCommandRunner = { async run(_command, arguments_): Promise<ServiceRegistrationCommandResult> {
-      const stdout = arguments_.includes("show") ? "not-found\n" : arguments_.includes("is-active") ? "inactive\n" : "";
-      return { stdout, stderr: "", exitCode: arguments_.includes("show") ? 1 : 0 };
+      if (arguments_.includes("show")) return systemdUnitFixture();
+      return { stdout: arguments_.includes("is-active") ? "inactive\n" : "", stderr: "", exitCode: 0 };
     } };
     const pathOptions = { platform: "linux" as const, home, environment: {} };
     await runPackagedLifecycleCommand(["install", "--apply", "--payload", payload], { ...pathOptions, runner });
