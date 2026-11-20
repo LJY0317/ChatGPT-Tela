@@ -2090,17 +2090,39 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     let target: [String: Any] = ["registered": true, "threadId": threadId, "slot": slot]
     let data = try await request(descriptor, path: path, method: "POST",
       body: target.merging(["action": "read-result"]) { _, current in current })
-    let result = try JSONDecoder().decode(TelaWebTaskResult.self, from: data)
+    var result = try JSONDecoder().decode(TelaWebTaskResult.self, from: data)
     guard result.threadId == threadId else { throw NSError(domain: "ChatGPTTelaControlCenter", code: 4) }
+    let previous: Bool
     switch result.outcome {
     case .pending: webTaskMessage = "The answer isn’t ready yet."; return
-    case .failed: webTaskMessage = "The task failed. Open it in ChatGPT for details."; return
-    case .interrupted: webTaskMessage = "The task was stopped."; return
-    case .answer: break
+    case .failed, .interrupted:
+      let failure = NSAlert()
+      failure.messageText = telaText(result.outcome == .failed ? "The latest request failed." : "The latest request was stopped.")
+      failure.addButton(withTitle: telaText("Close")).keyEquivalent = "\u{1b}"
+      failure.addButton(withTitle: telaText("View previous answer")).keyEquivalent = ""
+      guard failure.runModal() == .alertSecondButtonReturn, let failedTurnId = result.turnId else { return }
+      do {
+        let earlier = try await request(descriptor, path: path, method: "POST",
+          body: target.merging(["action": "read-result", "previousBefore": failedTurnId]) { _, current in current })
+        result = try JSONDecoder().decode(TelaWebTaskResult.self, from: earlier)
+      } catch {
+        webTaskMessage = "Couldn’t load the previous answer. Reopen the task to check its latest status."
+        return
+      }
+      guard result.threadId == threadId, result.turnId != failedTurnId else {
+        throw NSError(domain: "ChatGPTTelaControlCenter", code: 4)
+      }
+      if result.outcome == .noPreviousAnswer {
+        webTaskMessage = "There’s no previous answer saved for this task."
+        return
+      }
+      previous = true
+    case .answer: previous = false
+    case .noPreviousAnswer: throw NSError(domain: "ChatGPTTelaControlCenter", code: 4)
     }
     guard let answer = result.answer(in: threadId) else { throw NSError(domain: "ChatGPTTelaControlCenter", code: 4) }
     let alert = NSAlert()
-    alert.messageText = telaText("Web task answer")
+    alert.messageText = telaText(previous ? "Previous Web task answer" : "Web task answer")
     let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 480, height: 260))
     scroll.hasVerticalScroller = true
     scroll.borderType = .bezelBorder
@@ -2113,8 +2135,10 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     scroll.documentView = text
     alert.accessoryView = scroll
     alert.addButton(withTitle: telaText("Close")).keyEquivalent = "\u{1b}"
-    alert.addButton(withTitle: telaText("Confirm receipt")).keyEquivalent = ""
-    guard alert.runModal() == .alertSecondButtonReturn else { return }
+    if !previous {
+      alert.addButton(withTitle: telaText("Confirm receipt")).keyEquivalent = ""
+    }
+    guard alert.runModal() == .alertSecondButtonReturn, !previous else { return }
     do {
       _ = try await request(descriptor, path: path, method: "POST",
         body: target.merging(["action": "acknowledge", "outcome": "answer", "turnId": answer.turn, "itemId": answer.item]) { _, current in current })

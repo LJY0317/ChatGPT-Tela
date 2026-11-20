@@ -15,7 +15,10 @@ func telaDelegationThreadId(_ input: String) -> String? {
 }
 
 struct TelaWebTaskResult: Decodable {
-  enum Outcome: String, Decodable { case pending, answer, failed, interrupted }
+  enum Outcome: String, Decodable {
+    case pending, answer, failed, interrupted
+    case noPreviousAnswer = "no_previous_answer"
+  }
   let threadId: String
   let turnId: String?
   let itemId: String?

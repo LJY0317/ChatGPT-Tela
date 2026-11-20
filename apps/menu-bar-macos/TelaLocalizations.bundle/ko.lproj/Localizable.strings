@@ -357,8 +357,12 @@
 "View answer" = "답변 보기";
 "Couldn’t load the answer. Check that this task is tracked in the selected profile." = "답변을 불러올 수 없습니다. 선택한 프로필에 작업이 등록됐는지 확인하세요.";
 "The answer isn’t ready yet." = "아직 답변이 없습니다.";
-"The task failed. Open it in ChatGPT for details." = "작업이 실패했습니다. ChatGPT에서 자세한 내용을 확인하세요.";
-"The task was stopped." = "작업이 중단됐습니다.";
+"The latest request failed." = "최근 요청이 실패했습니다.";
+"The latest request was stopped." = "최근 요청이 중단됐습니다.";
+"View previous answer" = "이전 답변 보기";
+"Previous Web task answer" = "이전 Web 작업 답변";
+"Couldn’t load the previous answer. Reopen the task to check its latest status." = "이전 답변을 불러올 수 없습니다. 작업을 다시 열어 최신 상태를 확인하세요.";
+"There’s no previous answer saved for this task." = "이 작업에 저장된 이전 답변이 없습니다.";
 "Web task answer" = "Web 작업 답변";
 "Confirm receipt" = "회수 확인";
 "Answer receipt confirmed." = "답변 회수를 확인했습니다.";

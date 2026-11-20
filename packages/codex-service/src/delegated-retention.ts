@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync
 import { join } from "node:path";
 import { readIndexedNativeItemsPage, type CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { acknowledgeNativeResult, assertManagedThread, findFinalAnswer, readLatestResultTurn, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
+import { acknowledgeNativeResult, assertManagedThread, findFinalAnswer, readLatestResultTurn, readPreviousResultAnswer, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
 
 const DAY = 86_400_000, MAX_BYTES = 4 * 1024 * 1024;
 const HALF_DAY = DAY / 2;
@@ -183,7 +183,7 @@ export function createDelegatedRetention(input: {
       });
     },
     // A null owner resolves the already-verified lineage from the exact registration.
-    readResult(slot: number, parentThreadId: string | undefined | null, threadId: string, signal?: AbortSignal) {
+    readResult(slot: number, parentThreadId: string | undefined | null, threadId: string, signal?: AbortSignal, previousBefore?: string) {
       return serial(async () => {
         signal?.throwIfAborted();
         const profile = input.profile(slot), scope = hash(profile.scope);
@@ -196,6 +196,7 @@ export function createDelegatedRetention(input: {
         try {
           const data: any = await rpc.request("thread/read", { threadId, includeTurns: false }, signal);
           assertManagedThread(data?.thread, threadId, record.parentThreadId);
+          if (previousBefore !== undefined) return await readPreviousResultAnswer(rpc, threadId, id(previousBefore), signal);
           const turn = await readLatestResultTurn(rpc, threadId, signal);
           if (turn === undefined) return { threadId, outcome: "pending" as const };
           const turnId = id(turn.id);

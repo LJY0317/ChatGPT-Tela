@@ -43,22 +43,65 @@ export function assertManagedThread(thread: any, threadId: string, parentThreadI
     || parentThreadId === undefined && typeof thread.source !== "string") throw Error("Delegation lineage changed");
 }
 
-export async function readLatestResultTurn(rpc: Pick<CodexAppServerRpc, "request">,
-  threadId: string, signal?: AbortSignal): Promise<{ id: string; status: string } | undefined> {
+async function readResultTurnsPage(rpc: Pick<CodexAppServerRpc, "request">, threadId: string,
+  limit: number, cursor?: string, signal?: AbortSignal) {
   const result = object(await rpc.request("thread/turns/list", {
-    threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded",
+    threadId, limit, sortDirection: "desc", itemsView: "notLoaded", ...(cursor ? { cursor } : {}),
   }, signal));
-  if (!Array.isArray(result.data) || result.data.length > 1 || result.data.length === 0 && result.nextCursor != null) {
-    throw Error("Official latest-turn metadata is unavailable");
+  if (!Array.isArray(result.data) || result.data.length > limit
+    || (result.nextCursor != null && (typeof result.nextCursor !== "string" || !result.nextCursor || !result.data.length))) {
+    throw Error("Official turn metadata is unavailable");
   }
-  if (!result.data.length) return undefined;
-  const turn = object(result.data[0]);
-  if (typeof turn.id !== "string" || typeof turn.status !== "string") throw Error("Official latest-turn metadata is unavailable");
-  return { id: turn.id, status: turn.status };
+  const turns = result.data.map(raw => {
+    const turn = object(raw);
+    if (typeof turn.id !== "string" || !turn.id || typeof turn.status !== "string") throw Error("Official turn metadata is unavailable");
+    return { id: turn.id, status: turn.status };
+  });
+  return { turns, nextCursor: result.nextCursor as string | undefined | null };
+}
+
+export async function readLatestResultTurn(rpc: Pick<CodexAppServerRpc, "request">,
+  threadId: string, signal?: AbortSignal) {
+  return (await readResultTurnsPage(rpc, threadId, 1, undefined, signal)).turns[0];
+}
+
+export async function readPreviousResultAnswer(rpc: Pick<CodexAppServerRpc, "request">,
+  threadId: string, failedTurnId: string, signal?: AbortSignal) {
+  const visited = new Set<string>();
+  let cursor: string | null | undefined;
+  do {
+    const page = await readResultTurnsPage(rpc, threadId, 16, cursor ?? undefined, signal);
+    if (cursor == null) {
+      const latest = page.turns[0];
+      if (latest?.id !== failedTurnId || !["failed", "interrupted"].includes(latest.status)) {
+        throw Error("The latest turn changed. View the task again.");
+      }
+    }
+    for (const turn of page.turns) {
+      if (turn.status !== "completed" || turn.id === failedTurnId) continue;
+      const item = await findSavedFinal(rpc, threadId, turn.id, signal);
+      if (item && typeof item.text === "string" && item.text.trim()) {
+        return { threadId, turnId: turn.id, itemId: item.id, text: item.text, outcome: "answer" as const };
+      }
+    }
+    cursor = page.nextCursor;
+    if (cursor != null) {
+      if (visited.has(cursor)) throw Error("Official turn paging did not advance");
+      visited.add(cursor);
+    }
+  } while (cursor != null);
+  return { threadId, outcome: "no_previous_answer" as const };
 }
 
 /** Read the newest final. Older finals from the same turn are not collection evidence. */
 export async function findFinalAnswer(rpc: Pick<CodexAppServerRpc, "request">,
+  threadId: string, turnId: string, signal?: AbortSignal) {
+  const item = await findSavedFinal(rpc, threadId, turnId, signal);
+  if (!item) throw Error("Final answer was not found in the specified turn");
+  return item;
+}
+
+async function findSavedFinal(rpc: Pick<CodexAppServerRpc, "request">,
   threadId: string, turnId: string, signal?: AbortSignal) {
   let cursor: string | undefined;
   const visited = new Set<string>();
@@ -73,7 +116,6 @@ export async function findFinalAnswer(rpc: Pick<CodexAppServerRpc, "request">,
     cursor = page.nextCursor;
     visited.add(cursor);
   } while (cursor);
-  throw Error("Final answer was not found in the specified turn");
 }
 
 /** Confirmation of one result, not task enrollment, completion, or authority to remove a chat. */

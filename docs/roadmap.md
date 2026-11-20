@@ -78,7 +78,8 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   first-turn checks exclude ordinary chats and later model switches. Other Native
   children and standalone Web chats require explicit enrollment. Work's **Manage Web tasks…**
   lists existing registrations by profile, accepts a link for explicit enrollment, and separates
-  viewing the latest saved answer from confirming receipt.
+  viewing the latest saved answer from confirming receipt. A failed or interrupted
+  follow-up can open the previous saved final without confirming receipt.
   Automatic standalone enrollment still needs an official creation callback or a supported
   profile-scoped creation API. Retention is 12h from confirmed latest-answer collection,
   otherwise 7d from first enrollment; missing timestamps and new uncollected turns

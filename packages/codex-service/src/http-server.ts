@@ -144,7 +144,11 @@ export async function startCodexServiceHttpServer(input: {
           }
           if (body.action === "enroll") return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId));
           if (body.action === "read-result") {
-            return Response.json(await manager.readResult(body.slot, useRegistration ? null : body.parentThreadId, body.threadId, request.signal),
+            if (body.previousBefore !== undefined && (!useRegistration || typeof body.previousBefore !== "string")) {
+              return error(400, "Invalid previous answer request");
+            }
+            return Response.json(await manager.readResult(body.slot, useRegistration ? null : body.parentThreadId,
+              body.threadId, request.signal, body.previousBefore),
               { headers: { "cache-control": "no-store" } });
           }
           if (body.action === "acknowledge" && typeof body.turnId === "string"

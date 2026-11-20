@@ -27,6 +27,9 @@ Using a Web model or adding the prefix does not enroll a chat in retention.
 Open **Control Center → Work → Manage Web tasks…** and select a tracked task
 to **View answer**. The list uses existing registrations for the configured profiles,
 including automatically registered Web children. Choose **Confirm receipt** after reading.
+If the latest request failed or was interrupted, **View previous answer** opens the
+most recent earlier saved final in the same chat. Reading it does not confirm receipt
+or change the archive deadline.
 To register an independent Web chat, choose **Use a task link…** if the list is shown.
 Paste the ChatGPT task link, select the matching profile if asked, and choose **Track task**.
 You can also use the link to open an answer from a tracked, already archived chat.

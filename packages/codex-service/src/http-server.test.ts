@@ -555,6 +555,7 @@ test("tracked Web child supports result collection and due archive without a Nat
   const directory = mkdtempSync(join(tmpdir(), "tela-retention-http-"));
   let now = 1_000_000_000;
   const methods: string[] = [];
+  let failedFollowUp = false;
   const manager = createDelegatedRetention({ directory: join(directory, "records"), acknowledgementDirectory: join(directory, "ack"),
     automatic: false, now: () => now,
     profile(slot) { return { scope: `installed-profile-${slot}`, async connect() { expect(slot).toBe(2); return {
@@ -562,7 +563,12 @@ test("tracked Web child supports result collection and due archive without a Nat
         methods.push(method);
         const thread = { id: "child", status: { type: "idle" }, source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } };
         if (["thread/read", "thread/resume"].includes(method)) return { thread };
-        if (method === "thread/turns/list") return { data: [{ id: "turn", status: "completed", completedAt: 1_000_000 }] };
+        if (method === "thread/turns/list") {
+          if (failedFollowUp && !params.cursor) return {
+            data: [{ id: "follow-up", status: "interrupted" }], nextCursor: "older",
+          };
+          return { data: [{ id: "turn", status: "completed", completedAt: 1_000_000 }] };
+        }
         if (method === "thread/items/list") return { data: [{ turnId: params.turnId ?? "turn", item: { id: "answer", type: "agentMessage", phase: "final_answer", text: "fixture response" } }], nextCursor: null };
         if (method === "thread/list") return { data: [], nextCursor: null };
         if (method === "thread/name/set") return {};
@@ -609,6 +615,17 @@ test("tracked Web child supports result collection and due archive without a Nat
     const viewed = await post({ ...target, action: "read-result" });
     expect(await viewed.json()).toEqual({ threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer", text: "fixture response" });
     expect(readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8")).toBe(enrolled);
+    const previous = { ...target, action: "read-result", previousBefore: "follow-up" };
+    failedFollowUp = true;
+    expect(await (await post({ ...target, action: "read-result" })).json())
+      .toEqual({ threadId: "child", turnId: "follow-up", outcome: "interrupted" });
+    expect(await (await post(previous)).json())
+      .toEqual({ threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer", text: "fixture response" });
+    expect((await post({ ...previous, slot: 1 })).ok).toBe(false);
+    expect((await post({ ...target, action: "acknowledge", turnId: "turn", outcome: "answer", itemId: "answer" })).ok).toBe(false);
+    expect(readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8")).toBe(enrolled);
+    failedFollowUp = false;
+    expect((await post(previous)).ok).toBe(false);
     const receipt = await post({ ...target, action: "acknowledge", turnId: "turn", outcome: "answer", itemId: "answer" });
     expect(await receipt.json()).toMatchObject({ enrolled: true, automaticArchiveEnabled: true, automaticDeleteEnabled: false,
       acknowledgement: { result: { parentThreadId: "parent" } } });
