@@ -33,7 +33,8 @@ ChatGPT plugin disconnection or deletion is a separate host operation. When the 
 
 ## Packaged CLI
 
-Run the launcher from the extracted package directory. Use `./chatgpt-tela` on
+Extract the ZIP on Windows or the tar.gz archive on Linux and open the
+`ChatGPT-Tela` folder. Run the launcher from there. Use `./chatgpt-tela` on
 Linux or `.\chatgpt-tela.exe` in Windows PowerShell. For a source build, see the
 [package builder](../README.md#windows-and-linux-packages). The launcher uses its own package
 directory by default. Pass `--payload` to select another matching package.

@@ -1,0 +1,79 @@
+name: Windows and Linux packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (for example, 0.1.0-preview.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x64
+            helper: tela-workspace-files.exe
+            extension: zip
+          - os: ubuntu-latest
+            target: linux-x64
+            helper: tela-workspace-files
+            extension: tar.gz
+    runs-on: ${{ matrix.os }}
+    env:
+      TELA_PACKAGE_VERSION: ${{ inputs.version }}
+      TELA_PACKAGE_TARGET: ${{ matrix.target }}
+      TELA_PACKAGE_HELPER: ${{ matrix.helper }}
+    steps:
+      - name: Validate package version
+        shell: bash
+        run: |
+          if [[ ! "$TELA_PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?$ ]]; then
+            echo "Use a version such as 0.1.0 or 0.1.0-preview.1." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bun install --frozen-lockfile
+      - run: bun run workspace-files:build
+      - name: Assemble package
+        shell: bash
+        run: |
+          bun run package:build \
+            --output "build/desktop-packages/ChatGPT-Tela" \
+            --version "$TELA_PACKAGE_VERSION" \
+            --workspace-files "build/workspace-files-target/release/$TELA_PACKAGE_HELPER"
+      - name: Archive Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: build/desktop-packages
+        run: |
+          $archive = "ChatGPT-Tela-$env:TELA_PACKAGE_VERSION-$env:TELA_PACKAGE_TARGET.zip"
+          & "$env:SystemRoot\System32\tar.exe" -a -cf $archive ChatGPT-Tela
+          if ($LASTEXITCODE -ne 0) { throw "Could not create the package archive." }
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content -Encoding utf8NoBOM SHA256SUMS.txt
+      - name: Archive Linux package
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: build/desktop-packages
+        run: |
+          archive="ChatGPT-Tela-$TELA_PACKAGE_VERSION-$TELA_PACKAGE_TARGET.tar.gz"
+          tar -czf "$archive" ChatGPT-Tela
+          sha256sum "$archive" > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ChatGPT-Tela-${{ inputs.version }}-${{ matrix.target }}
+          path: |
+            build/desktop-packages/ChatGPT-Tela-${{ inputs.version }}-${{ matrix.target }}.${{ matrix.extension }}
+            build/desktop-packages/SHA256SUMS.txt
+          compression-level: 0
+          if-no-files-found: error
