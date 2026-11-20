@@ -29,8 +29,13 @@ struct TelaWebTaskResult: Decodable {
   }
 }
 
-// On-demand official CLI metadata, scoped to this installation's local source.
 struct TelaRetentionStatus: Decodable {
+  struct TrackedTask: Decodable {
+    let slot: Int
+    let threadId: String
+    let title: String?
+  }
+  let tracked: [TrackedTask]?
   struct Item: Decodable {
     let trackingId: String
     let enrolledAt: Double

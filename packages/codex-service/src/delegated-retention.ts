@@ -243,12 +243,25 @@ export function createDelegatedRetention(input: {
         } finally { await rpc.close(); }
       });
     },
-    status() {
+    status(includeTracked = false) {
       const observedAt = now();
-      return { overdue: [...records].filter(([, r]) => settledAt(r) == null && r.dueAt <= observedAt).map(([trackingId, r]) => ({
+      const open = [...records].filter(([, record]) => settledAt(record) == null);
+      const overdue = open.filter(([, r]) => r.dueAt <= observedAt).map(([trackingId, r]) => ({
         trackingId, enrolledAt: r.enrolledAt, slot: r.slot, threadId: r.threadId, title: r.title, dueAt: r.dueAt,
         reason: r.archivePending ? "archive_unconfirmed" : r.issue ?? "overdue",
-      })), automaticDeleteEnabled: false };
+      }));
+      const status = { overdue, automaticDeleteEnabled: false };
+      if (!includeTracked) return status;
+      const scopes = new Map<number, string | undefined>();
+      const tracked = open.flatMap(([, record]) => {
+        if (!scopes.has(record.slot)) {
+          try { scopes.set(record.slot, hash(input.profile(record.slot).scope)); }
+          catch { scopes.set(record.slot, undefined); }
+        }
+        if (scopes.get(record.slot) !== record.scope) return [];
+        return [{ slot: record.slot, threadId: record.threadId, title: record.title, enrolledAt: record.enrolledAt }];
+      }).sort((a, b) => b.enrolledAt - a.enrolledAt);
+      return { ...status, tracked };
     },
     stopTracking(trackingId: string, enrolledAt: number) {
       return serial(async () => {

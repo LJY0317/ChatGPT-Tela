@@ -794,7 +794,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       append(label("Web tasks", style: .headline), to: webTasks)
       append(secondary("Start or delegate tasks with a Web model in ChatGPT."), to: webTasks)
       if serviceStates["codex"] == "Ready", !profiles.isEmpty, workInventory.error == nil {
-        let manage = actionButton("Manage Web task…", action: #selector(manageWebTask))
+        let manage = actionButton("Manage Web tasks…", action: #selector(manageWebTask))
         manage.isEnabled = !managingWebTask
         webTasks.addArrangedSubview(manage)
       }
@@ -1982,16 +1982,54 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     return value
   }
 
-  private func loadRetentionStatus() async {
+  private func loadRetentionStatus(includeTracked: Bool = false) async {
     do {
       guard let descriptor = try readDescriptor("codex") else { retentionStatus = nil; return }
-      let data = try await request(descriptor, path: "v1/codex/delegations")
+      let path = includeTracked ? "v1/codex/delegations?include=tracked" : "v1/codex/delegations"
+      let data = try await request(descriptor, path: path)
       retentionStatus = try JSONDecoder().decode(TelaRetentionStatus.self, from: data)
     } catch { retentionStatus = nil }
   }
 
   @objc private func manageWebTask() {
-    guard !managingWebTask, let onlyProfile = profiles.first else { return }
+    guard !managingWebTask else { return }
+    managingWebTask = true
+    webTaskMessage = nil
+    renderCurrentPage()
+    Task {
+      defer { managingWebTask = false; renderCurrentPage() }
+      await loadRetentionStatus(includeTracked: true)
+      let tasks = retentionStatus?.tracked ?? []
+      if !tasks.isEmpty {
+        let alert = NSAlert()
+        alert.messageText = telaText("Tracked Web tasks")
+        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 440, height: 26))
+        picker.setAccessibilityLabel(telaText("Tracked Web tasks"))
+        for (index, task) in tasks.enumerated() {
+          let title = webTaskLabel(slot: task.slot, title: task.title, threadId: task.threadId)
+          picker.addItem(withTitle: "\(index + 1). \(title.prefix(90))")
+          picker.lastItem?.toolTip = title
+        }
+        alert.accessoryView = picker
+        alert.addButton(withTitle: telaText("View answer"))
+        alert.addButton(withTitle: telaText("Use a task link…"))
+        alert.addButton(withTitle: telaText("Cancel")).keyEquivalent = "\u{1b}"
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+          guard tasks.indices.contains(picker.indexOfSelectedItem) else { return }
+          let task = tasks[picker.indexOfSelectedItem]
+          await performWebTaskAction(slot: task.slot, threadId: task.threadId, readAnswer: true)
+          return
+        case .alertSecondButtonReturn: break
+        default: return
+        }
+      }
+      await manageWebTaskByLink()
+    }
+  }
+
+  private func manageWebTaskByLink() async {
+    guard let onlyProfile = profiles.first else { return }
     let alert = NSAlert()
     alert.messageText = telaText("Manage a Web task")
     alert.informativeText = telaText("Tracked tasks are archived after 7 days, or 12 hours after you confirm the answer.")
@@ -2025,25 +2063,24 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       renderCurrentPage()
       return
     }
-    managingWebTask = true
-    webTaskMessage = nil
-    renderCurrentPage()
-    Task {
-      defer { managingWebTask = false; renderCurrentPage() }
-      do {
-        guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "ChatGPTTelaControlCenter", code: 2) }
-        if readAnswer {
-          try await showWebTaskAnswer(descriptor, slot: slot, threadId: threadId)
-        } else {
-          _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
-            body: ["action": "enroll", "standalone": true, "threadId": threadId, "slot": slot])
-          webTaskMessage = "Web task tracked."
-        }
-      } catch {
-        webTaskMessage = readAnswer
-          ? "Couldn’t load the answer. Check that this task is tracked in the selected profile."
-          : "Couldn’t track this task. Check its profile and Web model."
+    await performWebTaskAction(slot: slot, threadId: threadId, readAnswer: readAnswer)
+  }
+
+  private func performWebTaskAction(slot: Int, threadId: String, readAnswer: Bool) async {
+    do {
+      guard let descriptor = try readDescriptor("codex") else { throw NSError(domain: "ChatGPTTelaControlCenter", code: 2) }
+      if readAnswer {
+        try await showWebTaskAnswer(descriptor, slot: slot, threadId: threadId)
+      } else {
+        _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
+          body: ["action": "enroll", "standalone": true, "threadId": threadId, "slot": slot])
+        webTaskMessage = "Web task tracked."
+        await loadRetentionStatus()
       }
+    } catch {
+      webTaskMessage = readAnswer
+        ? "Couldn’t load the answer. Check that this task is tracked in the selected profile."
+        : "Couldn’t track this task. Check its profile and Web model."
     }
   }
 
@@ -2110,9 +2147,13 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   private func retentionItemLabel(_ item: TelaRetentionStatus.Item) -> String {
-    let profile = profiles.first(where: { $0.slot == item.slot })?.targetDisplayName
-      ?? String(format: telaText("Profile %d"), item.slot)
-    return "\(profile) · \(item.title ?? item.threadId)"
+    webTaskLabel(slot: item.slot, title: item.title, threadId: item.threadId)
+  }
+
+  private func webTaskLabel(slot: Int, title: String?, threadId: String) -> String {
+    let profile = profiles.first(where: { $0.slot == slot })?.targetDisplayName
+      ?? String(format: telaText("Profile %d"), slot)
+    return "\(profile) · \(title ?? threadId)"
   }
 
   private func stopTrackingOverdueChat(_ pending: [TelaRetentionStatus.Item]) {

@@ -565,6 +565,7 @@ test("tracked Web child supports result collection and due archive without a Nat
         if (method === "thread/turns/list") return { data: [{ id: "turn", status: "completed", completedAt: 1_000_000 }] };
         if (method === "thread/items/list") return { data: [{ turnId: params.turnId ?? "turn", item: { id: "answer", type: "agentMessage", phase: "final_answer", text: "fixture response" } }], nextCursor: null };
         if (method === "thread/list") return { data: [], nextCursor: null };
+        if (method === "thread/name/set") return {};
         if (method === "thread/archive") return {};
         throw Error("Unexpected Native action");
       },
@@ -580,7 +581,16 @@ test("tracked Web child supports result collection and due archive without a Nat
     const post = (body: Record<string, unknown>) => fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
     const snapshot = await fetch(url, { headers });
     expect(await snapshot.json()).toEqual({ overdue: [], automaticDeleteEnabled: false });
-    const blockedRead = await fetch(new URL("v1/codex/delegations", server.endpoint));
+    const trackedUrl = new URL(url);
+    trackedUrl.searchParams.set("include", "tracked");
+    const beforeListing = methods.length;
+    const tracked = await fetch(trackedUrl, { headers });
+    expect(await tracked.json()).toEqual({
+      overdue: [], automaticDeleteEnabled: false,
+      tracked: [{ slot: 2, threadId: "child", title: "[Tela Agent] Web task", enrolledAt: now }],
+    });
+    expect(methods).toHaveLength(beforeListing);
+    const blockedRead = await fetch(trackedUrl);
     expect(blockedRead.status).toBe(401);
     const enrolled = readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8");
     await client.manageDelegation({ action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" });
@@ -605,6 +615,7 @@ test("tracked Web child supports result collection and due archive without a Nat
     now += 12 * 3_600_000;
     expect(await client.manageDelegation({ action: "reconcile" })).toEqual({ outcomes: [{ threadId: "child", status: "archived" }], automaticDeleteEnabled: false });
     expect(methods).not.toContain("turn/start"); expect(methods).not.toContain("thread/delete");
+    expect(await (await fetch(trackedUrl, { headers })).json()).toMatchObject({ tracked: [] });
     await client.manageDelegation({ action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" });
     now += 7 * 24 * 3_600_000;
     const pending = (await (await fetch(url, { headers })).json()).overdue[0]!;

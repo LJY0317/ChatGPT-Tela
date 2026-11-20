@@ -341,7 +341,9 @@
 "Some profiles still need to reopen." = "일부 프로필을 다시 열어야 합니다.";
 "Reopen ChatGPT…" = "ChatGPT 다시 열기…";
 
-"Manage Web task…" = "Web 작업 관리…";
+"Manage Web tasks…" = "Web 작업 관리…";
+"Tracked Web tasks" = "관리 중인 Web 작업";
+"Use a task link…" = "작업 링크 사용…";
 "Manage a Web task" = "Web 작업 관리";
 "Tracked tasks are archived after 7 days, or 12 hours after you confirm the answer." = "등록한 작업은 7일 뒤, 답변 회수를 확인하면 12시간 뒤 보관됩니다.";
 "Paste a ChatGPT task link" = "ChatGPT 작업 링크 붙여넣기";
