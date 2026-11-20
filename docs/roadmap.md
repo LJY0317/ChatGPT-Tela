@@ -22,7 +22,9 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
 - **Resources and platform support.** Measure installed disk/cache residue and idle
   CPU/wakeups under representative use, plus restart continuity. The source can build
   Windows and Linux payloads from another OS. The package jobs exercise install, repair
-  and removal through systemd and Task Scheduler under clean user profiles. Target runs,
+  and removal through systemd and Task Scheduler under clean user profiles. A clean
+  Debian 13 ARM64 VM verified the extracted package's three-service lifecycle,
+  repair, keep-data reinstall and full removal. Linux x64 and Windows target runs,
   OS upgrades and workspace identity verification remain pending.
   Preserve active work, unresolved operations and recovery material when testing cleanup.
 - **Physical device isolation.** On two owned computers sharing an account, use separate
