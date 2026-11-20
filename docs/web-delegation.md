@@ -61,18 +61,29 @@ before browser submission. The host supplied each assignment in an
 The assignment was absent from the visible input, so dropping the opaque part
 would send an incomplete task. Neither child returned an answer.
 
-The [official engine supports plaintext collaboration messages](https://github.com/openai/codex/pull/35845)
-when the producer explicitly marks them as plaintext. The installed coordinator
-did not produce that form in either run, and the exposed tool and documented
-agent settings offer no plaintext selector.
+The official engine accepts plaintext collaboration messages when the caller
+marks the tool arguments as plaintext or invokes the collaboration tool through
+Code Mode. The default Desktop and direct CLI trials did not produce a readable
+assignment. The public app-server's direct turn APIs also reject user input on
+parent-controlled V2 children. Parent/root turn attribution alone cannot create
+that relationship.
 
-The bundled Codex `0.169.0-alpha.11.1` schema exposes plaintext user input and
-`parentTurnId` / `rootTurnId` attribution on `turn/start`. These fields attribute
-turns. They do not create the official subagent relationship or deliver a child
-completion to the parent. The official desktop tools can also create a separate
-Web-model chat and wait by thread ID, which is a distinct workflow from native
-child completion. Direct child dispatch still needs a supported way for the
-host to deliver the entire readable assignment.
+The official engine bundled with Desktop (`0.171.0-alpha.13`) completed a native
+child Web task in a scoped CLI trial with
+`features.multi_agent_v2={enabled=true,non_code_mode_only=false}`. The coordinator
+used the nested Code Mode tool. The child's saved first turn contained the
+plaintext assignment, the actual Web answer reached the parent, and Tela's
+existing registry automatically registered the child and acknowledged the exact
+final. The setting applied only to the trial process. Desktop's default tool
+availability and a supported consumer setting for enabling this route remain
+unverified.
+[Engine implementation](https://github.com/openai/codex/blob/rust-v0.171.0-alpha.13/codex-rs/core/src/tools/handlers/multi_agents_v2.rs#L54-L66)
+· [Direct input restriction](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/request_processors/thread_input.rs).
+
+When nested Code Mode collaboration is unavailable, the official desktop
+thread tools can create an independent Web task with the full assignment and
+return its result by thread ID. This route was also verified with a live Web
+answer and explicit retention registration.
 
 ### Cross-profile dispatch
 
