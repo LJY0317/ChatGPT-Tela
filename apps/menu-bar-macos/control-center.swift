@@ -2091,21 +2091,56 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   @objc private func reviewRetention() {
     guard let pending = retentionStatus?.overdue, !pending.isEmpty else { return }
     let alert = NSAlert(); alert.messageText = telaText("Review chat cleanup")
-    alert.informativeText = telaText("Overdue chats stay listed until resolved. Review other affected chats before archiving.")
     let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 540, height: 250))
     scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
     let text = NSTextView(frame: scroll.bounds); text.isEditable = false; text.isSelectable = true
     text.isVerticallyResizable = true; text.autoresizingMask = [.width]
-    text.string = pending.map { item in
-      let title = item.title ?? item.threadId
-      let profile = item.slot == 1 ? "ChatGPT" : "ChatGPT Profile \(item.slot)"
-      return "\(profile) · \(title)\n\(item.explanation)\n\(item.threadId)"
+    text.string = pending.enumerated().map { index, item in
+      "\(index + 1). \(retentionItemLabel(item))\n\(item.explanation)\n\(item.threadId)"
     }.joined(separator: "\n\n")
     scroll.documentView = text; alert.accessoryView = scroll
     alert.addButton(withTitle: telaText("Close"))
     alert.addButton(withTitle: telaText("Check again"))
-    if alert.runModal() == .alertSecondButtonReturn {
-      reconcileDelegationsAfterLifecycleEvent()
+    alert.addButton(withTitle: telaText("Stop tracking…"))
+    switch alert.runModal() {
+    case .alertSecondButtonReturn: reconcileDelegationsAfterLifecycleEvent()
+    case .alertThirdButtonReturn: stopTrackingOverdueChat(pending)
+    default: break
+    }
+  }
+
+  private func retentionItemLabel(_ item: TelaRetentionStatus.Item) -> String {
+    let profile = profiles.first(where: { $0.slot == item.slot })?.targetDisplayName
+      ?? String(format: telaText("Profile %d"), item.slot)
+    return "\(profile) · \(item.title ?? item.threadId)"
+  }
+
+  private func stopTrackingOverdueChat(_ pending: [TelaRetentionStatus.Item]) {
+    let alert = NSAlert()
+    alert.messageText = telaText("Stop tracking a chat")
+    alert.informativeText = telaText("The chat stays in ChatGPT.")
+    let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 460, height: 26))
+    for (index, item) in pending.enumerated() {
+      picker.addItem(withTitle: "\(index + 1). \(retentionItemLabel(item))")
+    }
+    alert.accessoryView = picker
+    alert.addButton(withTitle: telaText("Cancel")).keyEquivalent = "\u{1b}"
+    alert.addButton(withTitle: telaText("Stop tracking")).keyEquivalent = ""
+    guard alert.runModal() == .alertSecondButtonReturn, pending.indices.contains(picker.indexOfSelectedItem) else { return }
+    let item = pending[picker.indexOfSelectedItem]
+    Task {
+      do {
+        guard let descriptor = try readDescriptor("codex") else {
+          throw NSError(domain: "ChatGPTTelaControlCenter", code: 2)
+        }
+        _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
+          body: ["action": "stop-tracking", "trackingId": item.trackingId, "enrolledAt": item.enrolledAt])
+        webTaskMessage = "Chat tracking stopped."
+      } catch {
+        webTaskMessage = "Couldn’t stop tracking this chat."
+      }
+      await loadRetentionStatus()
+      renderCurrentPage()
     }
   }
 

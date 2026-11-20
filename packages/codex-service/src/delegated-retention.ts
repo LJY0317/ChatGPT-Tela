@@ -11,8 +11,9 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 type State = {
   version: 1; scope: string; slot: number; parentThreadId?: string; threadId: string;
   enrolledAt: number; dueAt: number; acknowledgement?: ResultAcknowledgement;
-  archivedAt?: number; archivePending?: true; reviewAfter?: number; issue?: string; title?: string;
+  archivedAt?: number; releasedAt?: number; archivePending?: true; reviewAfter?: number; issue?: string; title?: string;
 };
+const settledAt = (record: State) => record.archivedAt ?? record.releasedAt;
 export interface DelegatedRetentionProfile {
   /** Install identity + exact configured profile/home; never a model-supplied label. */
   scope: string;
@@ -83,9 +84,11 @@ export function createDelegatedRetention(input: {
       || !/^[a-f0-9]{64}$/.test(record.scope) || !Number.isFinite(record.enrolledAt)
       || !Number.isFinite(record.dueAt) || record.reviewAfter != null && !Number.isFinite(record.reviewAfter)
       || record.archivedAt != null && !Number.isFinite(record.archivedAt)
+      || record.releasedAt != null && !Number.isFinite(record.releasedAt)
       || key(record.scope, id(record.threadId)) + ".json" !== file) throw Error("Invalid delegation state");
     if (record.parentThreadId !== undefined) id(record.parentThreadId);
-    if (record.archivedAt != null && now() - record.archivedAt > 60 * DAY) unlinkSync(join(input.directory, file));
+    const settled = settledAt(record);
+    if (settled != null && now() - settled > 60 * DAY) unlinkSync(join(input.directory, file));
     else {
       // Old completion-based deadlines must not postpone the fixed fallback.
       record.dueAt = Math.min(record.dueAt, record.enrolledAt + 7 * DAY);
@@ -104,7 +107,7 @@ export function createDelegatedRetention(input: {
   const schedule = () => {
     if (timer) clearTimeout(timer);
     if (closed || input.automatic === false) return;
-    const due = Math.min(...[...records.values()].filter(r => r.archivedAt == null && !r.archivePending).map(r => Math.max(r.dueAt, r.reviewAfter ?? r.dueAt)));
+    const due = Math.min(...[...records.values()].filter(r => settledAt(r) == null && !r.archivePending).map(r => Math.max(r.dueAt, r.reviewAfter ?? r.dueAt)));
     if (!Number.isFinite(due)) return;
     timer = setTimeout(() => { void api.reconcile(undefined, true).catch(report); }, Math.min(Math.max(0, due - now()), 2_147_483_647));
     timer.unref?.();
@@ -142,7 +145,7 @@ export function createDelegatedRetention(input: {
         try {
           const data: any = await rpc.request("thread/read", { threadId, includeTurns: false });
           assertManagedThread(data?.thread, threadId, parentThreadId);
-          if (existing && existing.archivedAt == null) return existing;
+          if (existing && settledAt(existing) == null) return existing;
           if (standalone && (typeof data.thread.model !== "string"
             || !/^chatgpt-tela-web\/family\/[a-f0-9]{20}$/.test(data.thread.model))) {
             throw Error("The selected standalone chat does not have a Web model");
@@ -220,7 +223,7 @@ export function createDelegatedRetention(input: {
           const acknowledgement = record?.acknowledgement?.scope === scope
             && JSON.stringify(record.acknowledgement.result) === JSON.stringify(verified.result)
             ? record.acknowledgement : verified;
-          if (record && record.archivedAt == null && !record.archivePending) {
+          if (record && settledAt(record) == null && !record.archivePending) {
             if (record.parentThreadId !== result.parentThreadId) throw Error("Acknowledgement parent changed");
             const next = { ...record, acknowledgement };
             next.dueAt = archiveDeadline(next, acknowledgement.result.outcome === "answer");
@@ -229,15 +232,30 @@ export function createDelegatedRetention(input: {
             if (record.acknowledgement?.acknowledgedAt !== acknowledgement.acknowledgedAt
               || record.acknowledgement?.result.turnId !== acknowledgement.result.turnId) event("delegation_retention_acknowledged", next);
           }
-          return { acknowledgement, enrolled: !!record, automaticArchiveEnabled: !!record && record.archivedAt == null && !record.archivePending, automaticDeleteEnabled: false };
+          return { acknowledgement, enrolled: !!record, automaticArchiveEnabled: !!record && settledAt(record) == null && !record.archivePending, automaticDeleteEnabled: false };
         } finally { await rpc.close(); }
       });
     },
     status() {
-      return { overdue: [...records.values()].filter(r => r.archivedAt == null && r.dueAt <= now()).map(r => ({
-        slot: r.slot, threadId: r.threadId, title: r.title, dueAt: r.dueAt,
+      const observedAt = now();
+      return { overdue: [...records].filter(([, r]) => settledAt(r) == null && r.dueAt <= observedAt).map(([trackingId, r]) => ({
+        trackingId, enrolledAt: r.enrolledAt, slot: r.slot, threadId: r.threadId, title: r.title, dueAt: r.dueAt,
         reason: r.archivePending ? "archive_unconfirmed" : r.issue ?? "overdue",
       })), automaticDeleteEnabled: false };
+    },
+    stopTracking(trackingId: string, enrolledAt: number) {
+      return serial(async () => {
+        const record = records.get(trackingId), observedAt = now();
+        if (!record || record.enrolledAt !== enrolledAt || settledAt(record) != null || record.dueAt > observedAt) {
+          throw Error("The selected cleanup entry is no longer pending");
+        }
+        // This releases the local entry even if its original profile is unavailable.
+        const next = { ...record, releasedAt: observedAt };
+        delete next.reviewAfter;
+        save(trackingId, next);
+        event("delegation_retention_released", next);
+        return { stopped: true };
+      });
     },
     // Scheduled checks honor a deferred review deadline. Real lifecycle/user
     // events can check sooner without changing the original retention clock.
@@ -245,7 +263,7 @@ export function createDelegatedRetention(input: {
       return serial(async () => {
         const outcomes: { threadId: string; status: string }[] = [];
         for (const [k, record] of records) {
-          if (slot != null && record.slot !== slot || record.archivedAt != null) continue;
+          if (slot != null && record.slot !== slot || settledAt(record) != null) continue;
           if (record.archivePending) { outcomes.push({ threadId: record.threadId, status: "archive_unconfirmed" }); continue; }
           if (record.dueAt > now() || scheduled && (record.reviewAfter ?? 0) > now()) continue;
           let rpc: CodexAppServerRpc | undefined, reason = "profile_unavailable";

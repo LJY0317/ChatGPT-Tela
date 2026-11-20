@@ -229,8 +229,9 @@ or error bodies. A wait wakeup is not a collection receipt.
 
 - An archive request has a durable pending intent followed by a confirmed archive
   timestamp. A crash or ambiguous failure between them reports `archive_unconfirmed`
-  and never automatically repeats the mutation. Confirmed records are never
-  re-archived after manual restore; re-enrollment must be explicit.
+  and never automatically repeats the mutation. Check the chat in ChatGPT and use
+  **Stop tracking…** to clear that review entry. This only ends Tela's automatic tracking.
+  Confirmed or released entries require explicit re-enrollment.
 - Work shows **Cleanup needs review** only when registered chats are overdue. **Review…**
   lists their profile, saved title/ID and reason. **Check again** invokes the same lifecycle
   reconciliation; it never starts a turn or silently approves recursive archive.
@@ -240,7 +241,7 @@ or error bodies. A wait wakeup is not a collection receipt.
   or permanently inaccessible official app can perform an archive. Exact per-thread stopping
   through the app-owned engine and an affected-chat approval flow remain incomplete; do not
   substitute whole-profile interruption or claim they are implemented.
-- Archived metadata expires after 60 days on startup; registration/acknowledgement
+- Archived or released tracking metadata expires after 60 days on startup; registration/acknowledgement
   metadata uses total-byte limits without file-count limits. Existing unresolved
   records are preserved when new registration would exceed the storage budget.
   Acknowledgement receipts retain their existing 60-day/4-MiB age/byte policy.

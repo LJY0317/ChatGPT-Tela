@@ -129,6 +129,9 @@ export async function startCodexServiceHttpServer(input: {
           if (!body || typeof body !== "object") return error(400, "Invalid delegation request");
           const validSlot = Number.isInteger(body.slot) && body.slot >= 1 && body.slot <= 99;
           if (body.action === "reconcile" && (body.slot === undefined || validSlot)) return Response.json(await manager.reconcile(body.slot));
+          if (body.action === "stop-tracking" && typeof body.trackingId === "string" && Number.isFinite(body.enrolledAt)) {
+            return Response.json(await manager.stopTracking(body.trackingId, body.enrolledAt));
+          }
           if (!validSlot) return error(400, "Invalid delegation profile");
           const validOwner = body.standalone === true ? body.parentThreadId === undefined
             : body.standalone === undefined && typeof body.parentThreadId === "string";

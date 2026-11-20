@@ -320,6 +320,19 @@ test("ambiguous archive preserves durable intent and never repeats after restart
     manager = createDelegatedRetention(f.options);
     expect((await manager.reconcile()).outcomes[0]?.status).toBe("archive_unconfirmed");
     expect(f.calls.filter(c => c.method === "thread/archive")).toHaveLength(1);
+
+    const pending = manager.status().overdue[0]!;
+    const priorCalls = f.calls.length;
+    await expect(manager.stopTracking(pending.trackingId, pending.enrolledAt - 1)).rejects.toThrow("no longer pending");
+    f.changeScope();
+    expect(await manager.stopTracking(pending.trackingId, pending.enrolledAt)).toEqual({ stopped: true });
+    expect(manager.status().overdue).toEqual([]);
+    expect(f.calls).toHaveLength(priorCalls);
+    await manager.close();
+    manager = createDelegatedRetention(f.options);
+    expect((await manager.reconcile()).outcomes).toEqual([]);
+    expect(manager.status().overdue).toEqual([]);
+    expect(f.calls).toHaveLength(priorCalls);
   } finally { await manager?.close(); await f.close(); }
 });
 

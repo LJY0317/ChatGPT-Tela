@@ -595,7 +595,16 @@ test("owned management client connects observed Web creation, acknowledgement an
     now += 12 * 3_600_000;
     expect(await client.manageDelegation({ action: "reconcile" })).toEqual({ outcomes: [{ threadId: "child", status: "archived" }], automaticDeleteEnabled: false });
     expect(methods).not.toContain("turn/start"); expect(methods).not.toContain("thread/delete");
-    const unauthorized = await fetch(new URL("v1/codex/delegations", server.endpoint), { method: "POST", body: JSON.stringify({ action: "reconcile", slot: 2 }) });
-    expect(unauthorized.status).toBe(401);
+    await client.manageDelegation({ action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" });
+    now += 7 * 24 * 3_600_000;
+    const url = new URL("v1/codex/delegations", server.endpoint);
+    const headers = { authorization: `Bearer ${server.bearerToken}` };
+    const pending = (await (await fetch(url, { headers })).json()).overdue[0]!;
+    const body = JSON.stringify({ action: "stop-tracking", trackingId: pending.trackingId, enrolledAt: pending.enrolledAt });
+    const beforeRelease = methods.length;
+    expect((await fetch(url, { method: "POST", body })).status).toBe(401);
+    expect(await (await fetch(url, { method: "POST", headers, body })).json()).toEqual({ stopped: true });
+    expect((await (await fetch(url, { headers })).json()).overdue).toEqual([]);
+    expect(methods).toHaveLength(beforeRelease);
   } finally { await server.close(); await manager.close(); rmSync(directory, { recursive: true, force: true }); }
 });
