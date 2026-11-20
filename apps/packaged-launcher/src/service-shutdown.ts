@@ -7,25 +7,27 @@ import { emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { readProductConfig } from "@chatgpt-tela/product-config";
 import { CompositeNativeTargetAdapter, MultiProfileNativeTargetAdapter, type CodexNativeTargetAdapter } from "../../../packages/codex-service/src/native-target";
 
-/** Explicit user consent only. Reuse task cancellation; never kill a service or delete its work. */
-export async function interruptOwnedWork(installId: string, paths: ProductPaths, running: readonly TelaServiceId[],
-  desktop?: Pick<CodexNativeTargetAdapter, "resolve" | "quit">) {
+export type UpdateWorkAction = "close-chatgpt" | "interrupt-work";
+
+/** Explicit user consent only. Closing ChatGPT leaves Tela's own tasks to drain. */
+export async function settleOwnedUpdateWork(installId: string, paths: ProductPaths, running: readonly TelaServiceId[],
+  action: UpdateWorkAction, desktop?: Pick<CodexNativeTargetAdapter, "resolve" | "quit">) {
   const supervisor = new LocalServiceSupervisor({ installId });
-  for (const service of running.filter(id => id === "codex" || id === "chat")) {
+  for (const service of running.filter(id => id === "codex" || id === "chat" && action === "interrupt-work")) {
     const current = await supervisor.current({ service, descriptorPath: join(paths.serviceRuntime(service), "descriptor.json") });
     if (!current || current.status.state !== "ready") throw Error(`${service} is unavailable for task cancellation`);
     let count = 0;
     if (service === "codex") {
       const client = new CodexServiceClient(descriptorForService(current.descriptor, "codex"));
       const configPath = join(paths.configRoot, "product-v1.json");
-      const config = existsSync(configPath) ? readProductConfig(configPath) : undefined;
+      const config = action === "interrupt-work" && existsSync(configPath) ? readProductConfig(configPath) : undefined;
       const targets = desktop ?? new CompositeNativeTargetAdapter({
         ...(config?.multiProfile ? { multiProfile: new MultiProfileNativeTargetAdapter(config.multiProfile) } : {}),
       });
       for (const profile of await client.profiles()) {
         // An app-owned provider runs inside Tela, but its Native engine belongs
         // to the official Desktop. It exposes no terminal that Tela may interrupt.
-        if (profile.controlState !== "running") continue;
+        if (profile.controlState !== "running" || action === "close-chatgpt" && profile.slot !== 1) continue;
         const { target, session } = await targets.resolve(profile.slot);
         if (target.id !== profile.targetId) throw Error("ChatGPT profile changed before update closure");
         if (session.state !== "available") {
@@ -37,7 +39,9 @@ export async function interruptOwnedWork(installId: string, paths: ProductPaths,
             ...fields, outcome: closed ? "completed" : "failed",
           }); }
         }
-        count += await client.interruptWebWork(profile.slot, AbortSignal.timeout(PACKAGED_TRANSITION_TIMEOUT_MS));
+        if (action === "interrupt-work") {
+          count += await client.interruptWebWork(profile.slot, AbortSignal.timeout(PACKAGED_TRANSITION_TIMEOUT_MS));
+        }
       }
     } else {
       const client = new ChatServiceClient(descriptorForService(current.descriptor, "chat"));
@@ -46,7 +50,7 @@ export async function interruptOwnedWork(installId: string, paths: ProductPaths,
         count++;
       }
     }
-    emitDiagnosticEvent("chatgpt_tela_update", "work_interruption_requested", { service, count });
+    if (action === "interrupt-work") emitDiagnosticEvent("chatgpt_tela_update", "work_interruption_requested", { service, count });
   }
 }
 

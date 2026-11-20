@@ -230,6 +230,9 @@ mutation owner and authenticated shutdown/readiness contracts:
   records the previously running services, and unloads their exact launchd jobs.
   An AppKit termination veto prevents Sparkle from proceeding when preparation
   fails. A partial refusal restores acknowledged peers without repeating shutdown.
+  If Tela cannot observe Native work, **Close and Update** asks the default
+  ChatGPT app to quit normally and checks readiness again. Tela task cancellation
+  requires the separate **Stop and Update** confirmation.
 - `finish` verifies the installed app signature and prepared build, updates only
   external ownership/receipt metadata, reinstalls service registrations and restores
   the previously running services. Interrupted readiness resumes without another

@@ -99,7 +99,7 @@ enum TelaUpdateBlocked: LocalizedError {
     case .nativeActivityUnobservable:
       return telaText("Tela can’t check for running work while ChatGPT is open.")
     case .workNotReady:
-      return telaText("Running work may be interrupted.")
+      return telaText("Running work may be interrupted. ChatGPT may close.")
     }
   }
 }
@@ -304,16 +304,18 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
         MainActor.assumeIsolated {
           var failure: Error?
           if case .failure(let error) = result { failure = error }
-          if let blocked = failure as? TelaUpdateBlocked, !arguments.contains("--interrupt-work") {
+          if let blocked = failure as? TelaUpdateBlocked,
+             !arguments.contains("--close-chatgpt"), !arguments.contains("--interrupt-work") {
             self.preparationWindow?.orderOut(nil)
             let alert = NSAlert()
-            alert.messageText = telaText("Close ChatGPT and update?")
+            let closeOnly = blocked == .nativeActivityUnobservable
+            alert.messageText = closeOnly ? telaText("Close ChatGPT and update?") : telaText("Stop work and update?")
             alert.informativeText = blocked.localizedDescription
-            alert.addButton(withTitle: telaText("Close and Update"))
+            alert.addButton(withTitle: closeOnly ? telaText("Close and Update") : telaText("Stop and Update"))
             alert.addButton(withTitle: telaText("Later"))
             if alert.runModal() == .alertFirstButtonReturn {
               self.preparationWindow?.makeKeyAndOrderFront(nil)
-              self.prepareTermination(arguments + ["--interrupt-work"], app: app, started: started)
+              self.prepareTermination(arguments + [closeOnly ? "--close-chatgpt" : "--interrupt-work"], app: app, started: started)
               return
             }
             failure = CancellationError()
@@ -329,7 +331,8 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
           if let error = failure, !(error is CancellationError) {
             let alert = NSAlert()
             alert.messageText = telaText("Update postponed")
-            alert.informativeText = error.localizedDescription
+            alert.informativeText = failure as? TelaUpdateBlocked == .workNotReady
+              ? telaText("Finish any work before continuing.") : error.localizedDescription
             alert.addButton(withTitle: telaText("OK"))
             alert.runModal()
           }

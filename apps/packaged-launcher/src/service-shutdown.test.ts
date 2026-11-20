@@ -6,7 +6,7 @@ import { resolveProductPaths, PackagedServiceShutdownNotStartedError } from "@ch
 import { startChatService, createChatToolRuntime } from "@chatgpt-tela/chat-service";
 import { writeServiceRuntimeDescriptor } from "@chatgpt-tela/service-protocol";
 import { startCodexServiceHttpServer, type CodexService } from "@chatgpt-tela/codex-service";
-import { interruptOwnedWork, ownedServiceShutdown } from "./service-shutdown";
+import { settleOwnedUpdateWork, ownedServiceShutdown } from "./service-shutdown";
 import { ChatServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
 
 test("explicit maintenance cancellation is followed by observed shutdown readiness", async () => {
@@ -37,7 +37,9 @@ test("explicit maintenance cancellation is followed by observed shutdown readine
     await expect(owner.prepare("chat")).rejects.toBeInstanceOf(PackagedServiceShutdownNotStartedError);
     const client = new ChatServiceClient(descriptorForService(descriptor, "chat"));
     expect(await client.maintenanceProcesses()).toEqual([entry]);
-    await interruptOwnedWork("fixture", paths, ["chat"]);
+    await settleOwnedUpdateWork("fixture", paths, ["chat"], "close-chatgpt");
+    expect(cancellations).toBe(0);
+    await settleOwnedUpdateWork("fixture", paths, ["chat"], "interrupt-work");
     expect(cancellations).toBe(1);
     expect(await client.maintenanceProcesses()).toEqual([]);
     await owner.prepare("chat");
@@ -200,14 +202,17 @@ test("consented update closes official apps then drains Web work without a Nativ
       version: 1, service: "codex", instanceId: "fixture-interrupt", installId: "fixture", pid: process.pid,
       endpoint: http.endpoint.href, bearerToken: http.bearerToken, startedAt: new Date().toISOString(),
     });
-    await interruptOwnedWork("fixture", paths, ["codex"], desktop);
+    await settleOwnedUpdateWork("fixture", paths, ["codex"], "close-chatgpt", desktop);
+    expect(closed).toEqual([1]); expect(interrupted).toEqual([]);
+    closed.length = 0;
+    await settleOwnedUpdateWork("fixture", paths, ["codex"], "interrupt-work", desktop);
     expect(closed).toEqual([1, 2]); expect(interrupted).toEqual([1, 2, 3]);
     interrupted.length = 0;
-    await expect(interruptOwnedWork("fixture", paths, ["codex"], { ...desktop,
+    await expect(settleOwnedUpdateWork("fixture", paths, ["codex"], "interrupt-work", { ...desktop,
       async quit() { throw Error("normal quit refused"); },
     })).rejects.toThrow("normal quit refused");
     expect(interrupted).toEqual([]);
-    await expect(interruptOwnedWork("fixture", paths, ["codex"], { ...desktop,
+    await expect(settleOwnedUpdateWork("fixture", paths, ["codex"], "interrupt-work", { ...desktop,
       async resolve(slot) { const r = await desktop.resolve(slot); return { ...r, target: { ...r.target, id: "replaced" } }; },
     })).rejects.toThrow("ChatGPT profile changed");
   } finally { await http.close(); rmSync(home, { recursive: true, force: true }); }

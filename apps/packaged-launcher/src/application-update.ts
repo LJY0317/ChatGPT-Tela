@@ -9,7 +9,7 @@ import {
   readOwnershipManifest, readPackagedProductManifest, recordInstalledApplicationPayload, resolveProductPaths, ServiceRegistrationInstaller,
   withPackagedTransitionOwner, type MacApplicationUpdate, type TelaServiceId,
 } from "@chatgpt-tela/product-lifecycle";
-import { interruptOwnedWork, ownedServiceShutdown } from "./service-shutdown";
+import { settleOwnedUpdateWork, ownedServiceShutdown, type UpdateWorkAction } from "./service-shutdown";
 import type { PackagedLifecycleOptions } from "./lifecycle";
 import { verifyInstalledPackage } from "./runtime";
 import { emitDiagnosticEvent } from "@chatgpt-tela/core";
@@ -22,7 +22,7 @@ const startOrder: readonly TelaServiceId[] = ["chat", "codex", "gateway"];
 
 /** Sparkle replaces the app. This command only settles existing Tela service ownership. */
 export async function runApplicationUpdate(action: "wait" | "prepare" | "finish" | "cancel", input: {
-  payloadRoot: string; targetBuild?: string; interruptWork?: boolean; options?: PackagedLifecycleOptions;
+  payloadRoot: string; targetBuild?: string; workAction?: UpdateWorkAction; options?: PackagedLifecycleOptions;
   verifySignature?: (path: string) => void;
   readBuild?: (path: string) => string;
   waitForShutdownService?: (service: TelaServiceId, signal?: AbortSignal) => Promise<void>;
@@ -186,7 +186,9 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
     if (!input.targetBuild || !/^\d+(\.\d+){0,2}$/.test(input.targetBuild) || input.targetBuild === build) throw Error("a different numeric target build is required");
     const running: TelaServiceId[] = [];
     for (const service of stopOrder) if (await step("service_inspect", () => controller.inspect(service), service) === "running") running.push(service);
-    if (input.interruptWork) await step("work_interruption", () => interruptOwnedWork(owner.installId, paths, running));
+    const workAction = input.workAction;
+    if (workAction) await step(workAction === "interrupt-work" ? "work_interruption" : "desktop_close",
+      () => settleOwnedUpdateWork(owner.installId, paths, running, workAction));
     await step("services_prepare", () => controller.prepare(stopOrder));
     let state = save({ version: 1, installId: owner.installId, sourceVersion: owner.productVersion, sourceBuild: build,
       targetBuild: input.targetBuild, applicationPath: root, sourceFingerprint: fingerprint, phase: "quiescing",

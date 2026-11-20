@@ -95,13 +95,14 @@ async function main(): Promise<void> {
     return;
   }
   if (args[0] === "application-update") {
-    const interruptWork = args.includes("--interrupt-work");
-    if (interruptWork) args.splice(args.indexOf("--interrupt-work"), 1);
+    const workAction = args.includes("--interrupt-work") ? "interrupt-work"
+      : args.includes("--close-chatgpt") ? "close-chatgpt" : undefined;
+    if (workAction) args.splice(args.indexOf(`--${workAction}`), 1);
     const action = args[1], payloadIndex = args.indexOf("--payload"), targetIndex = args.indexOf("--target-build");
     if (!(action === "wait" || action === "prepare" || action === "finish" || action === "cancel") || payloadIndex < 0 || !args[payloadIndex + 1]
       || args.length !== (action === "prepare" ? 6 : 4) || (action === "prepare" && (targetIndex < 0 || !args[targetIndex + 1]))
-      || interruptWork && action !== "prepare") {
-      throw Error("usage: application-update <wait|prepare --target-build N [--interrupt-work]|finish|cancel> --payload app");
+      || workAction && action !== "prepare") {
+      throw Error("usage: application-update <wait|prepare --target-build N [--close-chatgpt|--interrupt-work]|finish|cancel> --payload app");
     }
     // Unlike the independently owned prepare/finish/cancel worker, wait is
     // purely observational and has no purpose after its UI owner's stdin
@@ -113,7 +114,8 @@ async function main(): Promise<void> {
       process.stdin.resume();
     }
     try {
-      const result = await runApplicationUpdate(action, { payloadRoot: args[payloadIndex + 1]!, interruptWork,
+      const result = await runApplicationUpdate(action, { payloadRoot: args[payloadIndex + 1]!,
+        ...(workAction ? { workAction } : {}),
         ...(targetIndex >= 0 ? { targetBuild: args[targetIndex + 1]! } : {}),
         ...(observation ? { waitSignal: observation.signal } : {}) });
       process.stdout.write(JSON.stringify(result) + "\n");

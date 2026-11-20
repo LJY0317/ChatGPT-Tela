@@ -74,7 +74,7 @@ import Sparkle
     precondition(TelaUpdateBlocked.nativeActivityUnobservable.localizedDescription ==
       telaText("Tela can’t check for running work while ChatGPT is open."))
     precondition(TelaUpdateBlocked.workNotReady.localizedDescription ==
-      telaText("Running work may be interrupted."))
+      telaText("Running work may be interrupted. ChatGPT may close."))
     let appsRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: appsRoot) }
     let standard = appsRoot.appendingPathComponent("Applications/ChatGPT.app")
