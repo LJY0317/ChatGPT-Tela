@@ -51,10 +51,6 @@ jobs:
             --output "build/desktop-packages/ChatGPT-Tela" \
             --version "$TELA_PACKAGE_VERSION" \
             --workspace-files "build/workspace-files-target/release/$TELA_PACKAGE_HELPER"
-      - name: Verify Windows package with Task Scheduler
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: ./apps/package-smoke/src/windows-acceptance.ps1 -PackagePath build/desktop-packages/ChatGPT-Tela
       - name: Archive Windows package
         if: runner.os == 'Windows'
         shell: pwsh
@@ -65,7 +61,29 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Could not create the package archive." }
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $archive" | Set-Content -Encoding utf8NoBOM SHA256SUMS.txt
-      - name: Verify Linux package with systemd
+      - name: Verify the extracted Windows archive with Task Scheduler
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $archive = "build/desktop-packages/ChatGPT-Tela-$env:TELA_PACKAGE_VERSION-$env:TELA_PACKAGE_TARGET.zip"
+          $extracted = Join-Path $env:RUNNER_TEMP 'tela-package-acceptance'
+          New-Item -ItemType Directory -Path $extracted -ErrorAction Stop | Out-Null
+          try {
+            & "$env:SystemRoot\System32\tar.exe" -xf $archive -C $extracted
+            if ($LASTEXITCODE -ne 0) { throw "Could not extract the package archive." }
+            ./apps/package-smoke/src/windows-acceptance.ps1 -PackagePath (Join-Path $extracted 'ChatGPT-Tela')
+          } finally {
+            Remove-Item -LiteralPath $extracted -Recurse
+          }
+      - name: Archive Linux package
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: build/desktop-packages
+        run: |
+          archive="ChatGPT-Tela-$TELA_PACKAGE_VERSION-$TELA_PACKAGE_TARGET.tar.gz"
+          tar -czf "$archive" ChatGPT-Tela
+          sha256sum "$archive" > SHA256SUMS.txt
+      - name: Verify the extracted Linux archive with systemd
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -79,22 +97,14 @@ jobs:
           }
           trap cleanup EXIT
           home_dir="$(getent passwd "$account" | cut -d: -f6)"
-          sudo cp -a build/desktop-packages/ChatGPT-Tela "$home_dir/package"
+          archive="build/desktop-packages/ChatGPT-Tela-$TELA_PACKAGE_VERSION-$TELA_PACKAGE_TARGET.tar.gz"
+          sudo -H -u "$account" tar -xzf - -C "$home_dir" < "$archive"
           sudo install -o "$account" -m 0644 apps/package-smoke/src/linux-acceptance.sh "$home_dir/linux-acceptance.sh"
-          sudo chown -hR "$account" "$home_dir/package"
           sudo loginctl enable-linger "$account"
           sudo systemctl start "user@$uid_number.service"
           sudo -H -u "$account" env XDG_RUNTIME_DIR="/run/user/$uid_number" \
             DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid_number/bus" \
-            bash "$home_dir/linux-acceptance.sh" "$home_dir/package"
-      - name: Archive Linux package
-        if: runner.os == 'Linux'
-        shell: bash
-        working-directory: build/desktop-packages
-        run: |
-          archive="ChatGPT-Tela-$TELA_PACKAGE_VERSION-$TELA_PACKAGE_TARGET.tar.gz"
-          tar -czf "$archive" ChatGPT-Tela
-          sha256sum "$archive" > SHA256SUMS.txt
+            bash "$home_dir/linux-acceptance.sh" "$home_dir/ChatGPT-Tela"
       - uses: actions/upload-artifact@v4
         with:
           name: ChatGPT-Tela-${{ inputs.version }}-${{ matrix.target }}

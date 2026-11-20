@@ -418,9 +418,10 @@ at install.
 
 Maintainers can run the **Windows and Linux packages** workflow to build x64 ZIP
 (Windows) and tar.gz (Linux) archives with the native workspace helper and SHA-256
-checksums. Before uploading, each job exercises package installation, the local
-Chat service, repair, keep-data reinstall, and full removal using the platform's
-service manager in a clean user profile. Download the artifacts from that run.
+checksums. Before uploading, each job extracts the archive and tests installation,
+the local Chat service, repair, keep-data reinstall, and full removal using the
+platform's service manager in a clean user profile. Download the tested archive
+from that run.
 
 To build a Windows or Linux payload from another build host, add `--target-platform win32`
 or `--target-platform linux` and select `--target-arch x64` or `arm64`. For example:
