@@ -5,7 +5,7 @@ import { readIndexedNativeItemsPage, type CodexAppServerRpc } from "@chatgpt-tel
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { acknowledgeNativeResult, assertManagedThread, findFinalAnswer, readFirstResultTurn, readLatestResultTurn, readPreviousResultAnswer, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
 
-const DAY = 86_400_000, MAX_BYTES = 4 * 1024 * 1024;
+const DAY = 86_400_000, MAX_BYTES = 4 * 1024 * 1024, MAX_RECORD_BYTES = 8192;
 const HALF_DAY = DAY / 2, METADATA_RETENTION = 60 * DAY;
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 type State = {
@@ -73,6 +73,8 @@ export function createDelegatedRetention(input: {
   let timer: ReturnType<typeof setTimeout> | undefined, closed = false, queue = Promise.resolve();
   let automaticReviewAfter = 0;
   const records = new Map<string, State>();
+  const unreadable = new Set<string>();
+  let unreadableBytes = 0;
   const key = (scope: string, threadId: string) => hash(JSON.stringify([scope, threadId]));
   const path = (k: string) => join(input.directory, k + ".json");
   // This service is the single writer. Interrupted atomic-write scratch files
@@ -82,29 +84,45 @@ export function createDelegatedRetention(input: {
     if (stat.isFile() && !stat.isSymbolicLink()) unlinkSync(scratch);
   }
   for (const file of readdirSync(input.directory).filter(n => /^[a-f0-9]{64}\.json$/.test(n))) {
-    const stat = lstatSync(join(input.directory, file));
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8192) throw Error("Invalid delegation state file");
-    const record = JSON.parse(readFileSync(join(input.directory, file), "utf8")) as State;
-    if (record.version !== 1 || !Number.isInteger(record.slot) || record.slot < 1 || record.slot > 99
-      || !/^[a-f0-9]{64}$/.test(record.scope) || !Number.isFinite(record.enrolledAt)
-      || !Number.isFinite(record.dueAt) || record.reviewAfter != null && !Number.isFinite(record.reviewAfter)
-      || record.archivedAt != null && !Number.isFinite(record.archivedAt)
-      || record.releasedAt != null && !Number.isFinite(record.releasedAt)
-      || key(record.scope, id(record.threadId)) + ".json" !== file) throw Error("Invalid delegation state");
-    if (record.parentThreadId !== undefined) id(record.parentThreadId);
-    if (record.pendingFirstTurnId !== undefined) id(record.pendingFirstTurnId);
-    if (settledExpired(record, now())) unlinkSync(join(input.directory, file));
-    else {
-      // Old completion-based deadlines must not postpone the fixed fallback.
-      record.dueAt = Math.min(record.dueAt, record.enrolledAt + 7 * DAY);
-      records.set(file.slice(0, -5), record);
+    const k = file.slice(0, -5);
+    let size = MAX_RECORD_BYTES;
+    try {
+      const stat = lstatSync(path(k));
+      size = stat.size;
+      if (!stat.isFile() || stat.isSymbolicLink() || size > MAX_RECORD_BYTES) throw Error("Invalid delegation state file");
+      const record = JSON.parse(readFileSync(path(k), "utf8")) as State;
+      if (record.version !== 1 || !Number.isInteger(record.slot) || record.slot < 1 || record.slot > 99
+        || !/^[a-f0-9]{64}$/.test(record.scope) || !Number.isFinite(record.enrolledAt)
+        || !Number.isFinite(record.dueAt) || record.reviewAfter != null && !Number.isFinite(record.reviewAfter)
+        || record.archivedAt != null && !Number.isFinite(record.archivedAt)
+        || record.releasedAt != null && !Number.isFinite(record.releasedAt)
+        || key(record.scope, id(record.threadId)) !== k) throw Error("Invalid delegation state");
+      if (record.parentThreadId !== undefined) id(record.parentThreadId);
+      if (record.pendingFirstTurnId !== undefined) id(record.pendingFirstTurnId);
+      if (settledExpired(record, now())) unlinkSync(path(k));
+      else {
+        // Old completion-based deadlines must not postpone the fixed fallback.
+        record.dueAt = Math.min(record.dueAt, record.enrolledAt + 7 * DAY);
+        records.set(k, record);
+      }
+    } catch {
+      unreadable.add(k);
+      unreadableBytes += size;
     }
   }
+  if (unreadable.size) emitDiagnosticEvent("chatgpt_tela_codex", "delegation_retention_records_unreadable", {
+    count: unreadable.size,
+  });
+  const readRecord = (k: string) => {
+    // The retained file might contain an unconfirmed archive intent.
+    if (unreadable.has(k)) throw Error("Unreadable delegation record; existing tracking was preserved");
+    return records.get(k);
+  };
   const removeRecord = (k: string) => { unlinkSync(path(k)); records.delete(k); };
   const save = (k: string, record: State) => {
     const body = JSON.stringify(record) + "\n";
     const observedAt = now();
-    let size = Buffer.byteLength(body);
+    let size = Buffer.byteLength(body) + unreadableBytes;
     for (const [other, value] of records) {
       if (other === k) continue;
       if (settledExpired(value, observedAt)) removeRecord(other);
@@ -188,7 +206,7 @@ export function createDelegatedRetention(input: {
         id(threadId);
         const standalone = parentThreadId === undefined;
         const profile = input.profile(slot), scope = hash(profile.scope), k = key(scope, threadId);
-        const existing = records.get(k);
+        const existing = readRecord(k);
         if (firstWebTurnId !== undefined) {
           id(firstWebTurnId);
           // The persisted lineage is already verified. Observation cannot change
@@ -232,7 +250,7 @@ export function createDelegatedRetention(input: {
       return serial(async () => {
         signal?.throwIfAborted();
         const profile = input.profile(slot), scope = hash(profile.scope);
-        const record = records.get(key(scope, id(threadId)));
+        const record = readRecord(key(scope, id(threadId)));
         if (!record || record.pendingFirstTurnId !== undefined || record.slot !== slot
           || (parentThreadId === null ? record.releasedAt != null : record.parentThreadId !== parentThreadId)) {
           throw Error("Register the selected Web delegation first");
@@ -260,7 +278,7 @@ export function createDelegatedRetention(input: {
     acknowledge(slot: number, requested: ResultReference, resolveRegistered = false) {
       return serial(async () => {
         const profile = input.profile(slot), scope = hash(profile.scope), k = key(scope, requested.threadId);
-        const record = records.get(k);
+        const record = readRecord(k);
         if (record?.pendingFirstTurnId !== undefined || resolveRegistered && (!record || record.slot !== slot || record.releasedAt != null)) {
           throw Error("Register the selected Web delegation first");
         }

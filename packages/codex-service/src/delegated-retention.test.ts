@@ -291,6 +291,29 @@ test("reconciliation prunes expired settled metadata without restarting the serv
   } finally { await f.close(); }
 });
 
+test("a malformed tracking record preserves its file and leaves other profiles usable", async () => {
+  const f = fixture();
+  let reopened: ReturnType<typeof createDelegatedRetention> | undefined;
+  try {
+    await f.manager.enroll(1, "parent", "child");
+    await f.manager.enroll(2, "parent", "child");
+    await f.manager.close();
+    const corrupt = readdirSync(f.options.directory).map(name => join(f.options.directory, name))
+      .find(file => JSON.parse(readFileSync(file, "utf8")).slot === 1)!;
+    writeFileSync(corrupt, "{");
+    const start = f.calls.length;
+    reopened = createDelegatedRetention(f.options);
+    await expect(reopened.enroll(1, "parent", "child")).rejects.toThrow("Unreadable delegation record");
+    expect(f.calls).toHaveLength(start);
+    expect(await reopened.readResult(2, "parent", "child")).toMatchObject({ outcome: "answer" });
+    await reopened.acknowledge(2, answer);
+    f.advance(12);
+    expect((await reopened.reconcile(2)).outcomes).toMatchObject([{ status: "archived" }]);
+    expect(readFileSync(corrupt, "utf8")).toBe("{");
+    expect(f.calls.slice(start).every(call => call.slot === 2)).toBe(true);
+  } finally { await reopened?.close(); await f.close(); }
+});
+
 test("one automatic next-due wakeup executes a persisted eligible archive", async () => {
   const f = fixture();
   let automatic: ReturnType<typeof createDelegatedRetention> | undefined;

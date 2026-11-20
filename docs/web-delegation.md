@@ -330,6 +330,8 @@ or error bodies. A wait wakeup is not a collection receipt.
   metadata uses total-byte limits without file-count limits. Existing unresolved
   records are preserved when new registration would exceed the storage budget.
   Acknowledgement receipts retain their existing 60-day/4-MiB age/byte policy.
+  An unreadable tracking record is preserved and blocks operations for its exact chat.
+  Other readable records can still be used. Startup reports only a count of unreadable records.
 
 Native context and local service authentication are not cryptographic attestation of
 which model read an answer. Profile changes invalidate the old ownership scope.
