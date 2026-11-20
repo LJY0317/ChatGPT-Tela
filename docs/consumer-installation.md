@@ -63,6 +63,9 @@ chatgpt-tela upgrade --apply --payload <new-package-directory>
 ```
 
 Repair uses the matching package to restore the installed version.
+For a Linux preview with a quoted `WorkingDirectory=` in its Tela services, use the
+keep-data uninstall and install the corrected package. In-place upgrade requires
+the same service definitions and cannot replace the preview's invalid units.
 
 For uninstall, the default keeps configuration, state, browser profiles, and credentials. Add `--remove-data` only when the user explicitly chooses to remove saved Tela data. `uninstall --apply` must run from a separately extracted package copy, not from the installed binary directory; the maintenance window stages the existing external runner for this purpose.
 

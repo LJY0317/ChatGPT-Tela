@@ -187,7 +187,10 @@ function renderLinuxService(input: {
   readonly workingDirectory: string;
 }): string {
   const environmentLines = input.environment.map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`).join("\n");
-  return `[Unit]\nDescription=ChatGPT Tela ${input.service}\n\n[Service]\nType=simple\nWorkingDirectory=${systemdQuote(input.workingDirectory)}\nExecStart=${[input.executable, ...input.arguments_].map(systemdQuote).join(" ")}\n${environmentLines ? `${environmentLines}\n` : ""}\n[Install]\nWantedBy=default.target\n`;
+  // WorkingDirectory is one literal path. Only the command and environment
+  // assignments below use systemd's quoted word syntax.
+  const workingDirectory = oneLine(input.workingDirectory, "systemd working directory").replaceAll("%", "%%");
+  return `[Unit]\nDescription=ChatGPT Tela ${input.service}\n\n[Service]\nType=simple\nWorkingDirectory=${workingDirectory}\nExecStart=${[input.executable, ...input.arguments_].map(systemdQuote).join(" ")}\n${environmentLines ? `${environmentLines}\n` : ""}\n[Install]\nWantedBy=default.target\n`;
 }
 
 function renderServiceDefinition(input: {

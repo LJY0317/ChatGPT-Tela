@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -111,6 +112,29 @@ function fixture(root: string) {
     })),
   };
 }
+
+test("generated Linux units use a literal working directory even with spaces and percent signs", () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-systemd-definition-"));
+  try {
+    const home = join(root, "home % with spaces");
+    const blueprint = createPackagedInstallBlueprint({ spec: fixture(root), home, platform: "linux", environment: {} });
+    const service = blueprint.services[0]!;
+    if (service.definition.platform !== "linux") throw Error("Expected a Linux unit");
+    const directory = blueprint.paths.binaryRoot;
+    expect(service.definition.content.split("\n")).toContain(`WorkingDirectory=${directory.replaceAll("%", "%%")}`);
+    expect(service.definition.content.split("\n").find(line => line.startsWith("ExecStart="))).toStartWith('ExecStart="');
+    const analyzer = process.platform === "linux" ? Bun.which("systemd-analyze") : null;
+    if (analyzer) {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "tela"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const path = join(root, service.resource.registrationId);
+      writeFileSync(path, service.definition.content);
+      const verification = spawnSync(analyzer, ["verify", "--man=no", path], { encoding: "utf8" });
+      expect(verification.stderr).not.toContain("WorkingDirectory");
+      expect(verification.status).toBe(0);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 describe("packaged product install", () => {
   const darwinLifecycleTest = process.platform === "win32" ? test.skip : test;
