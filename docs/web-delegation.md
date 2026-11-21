@@ -123,6 +123,16 @@ stored-history reader runs separately from those live Desktop owners. It can
 collect a registered chat's saved answer through its profile without becoming
 that conversation's live controller.
 
+A later check used the installed official CLI's documented [queue command](https://learn.chatgpt.com/docs/developer-commands#codex-queue).
+With two isolated Codex homes, it returned a queue receipt for an existing
+thread in the correct home and rejected the same ID in the other home. This
+proves admission to the queue, not execution, Web model selection or answer
+delivery for a live Desktop task. The documented [Desktop links](https://learn.chatgpt.com/docs/app/commands#chats)
+can prefill a draft, but have no profile selector and do not submit it. The
+official control socket was absent for both installed Desktop profiles when
+checked. The public app-server methods require a connection to the owning
+server; starting a separate server does not attach it to Desktop's live turn.
+
 The missing contract is either an official thread tool with verified destination
 profile selection or an authenticated endpoint to the existing Desktop owner
 per profile. It must support creation, exact follow-up, interruption, status and
