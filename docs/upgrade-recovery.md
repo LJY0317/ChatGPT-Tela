@@ -293,8 +293,14 @@ the atomic swap forced to return `ENOTSUP`. Sparkle used its real two-move path.
 Killing the driver between moves left no bundle at the installed path. The old
 bundle remained signed in Sparkle's replacement directory and the new bundle
 remained signed in staging. After the second move, the new bundle was present at
-the installed path. Recovery from the missing-app state still needs a supported
-entry point outside the missing app. The test did not exercise automatic recovery.
+the installed path.
+
+An isolated launchd run then restored the exact original bundle after the installer
+exited. The signed bundle matched the recorded source fingerprint. Once back at its
+installed path, the normal lifecycle cancellation resumed Chat once and preserved
+the stopped Gateway and Codex selection, configuration, and install identity.
+A maintenance entry point still needs to guide the user from a missing app to that
+verified source. The experiment did not exercise automatic recovery.
 
 References: [Sparkle setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
