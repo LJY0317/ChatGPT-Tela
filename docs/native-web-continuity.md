@@ -130,7 +130,7 @@ history owner and commits the returned checkpoint through its standard response
 flow.
 
 An oversized inline Web seed can be collapsed and lose its rendered request
-anchor during hydration. A large, tool-enabled fresh turn now attaches the
+anchor during hydration. A tool-enabled fresh turn with a large UTF-8 payload now attaches the
 exact physical context to the execution message itself. The request receipt,
 active revision and tool controls stay inline. The renderer must confirm the
 attachment before Send. One execution message carries both, and the usual

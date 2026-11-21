@@ -16,7 +16,6 @@ import { ChatGptApprovalObservation, approvalPreparationFailureSummary, approval
 import {
   contextAttachmentReference,
   createChatGptContextAttachment,
-  CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS,
   formatChatGptContextAttachmentStage,
   formatInertSourceAttachment,
   type ChatGptContextAttachmentReference,
@@ -265,6 +264,7 @@ function visibleSends(snapshot: ChatGptSurfaceSnapshot, composerKey: string) {
 
 const CHATGPT_READINESS_TIMEOUT_MS = 30_000;
 const CHATGPT_COMPOSER_SETTLE_TIMEOUT_MS = 5_000;
+const CHATGPT_EXECUTION_ATTACHMENT_MIN_BYTES = 200_000;
 function timeoutSignal(caller: AbortSignal | undefined, timeoutMs: number): {
   readonly combined: AbortSignal;
   readonly timeout: AbortSignal;
@@ -501,7 +501,7 @@ export function prepareWebExecutionMessage(context: WebPhysicalContext,
   preloaded?: ChatGptContextAttachmentReference, media: readonly WebTurnMedia[] = [], chatTools?: WebTurnRequest["chatTools"]) {
   const inline = formatWebPhysicalContextParts(context, preloaded, media, chatTools);
   if (preloaded || !chatTools || context.mode === "retained-delta" || !context.activeRequestRevisionId
-    || inline.text.length < CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS) return inline;
+    || inline.composerBytes < CHATGPT_EXECUTION_ATTACHMENT_MIN_BYTES) return inline;
   const attachment = createChatGptContextAttachment(context);
   return {
     ...formatWebPhysicalContextParts(context, contextAttachmentReference(attachment), media, chatTools, true),

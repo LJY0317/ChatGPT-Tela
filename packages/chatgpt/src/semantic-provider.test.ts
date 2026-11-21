@@ -3690,7 +3690,9 @@ test("delivery timeout stays bounded when the final browser observation hangs", 
 }, 7_000);
 
 test("a large tool-enabled turn transmits exact context in the current attachment and keeps its receipt short", async () => {
-  const previous = "Very long historical evidence. ".repeat(8_000);
+  const previous = "이전 작업의 원문 증거. ".repeat(11_000);
+  expect(previous.length).toBeLessThan(200_000);
+  expect(Buffer.byteLength(previous)).toBeGreaterThan(200_000);
   const context = {
     mode: "full" as const, headRevisionId: "active", activeRequestRevisionId: "active", logicalTokens: 60_000,
     transferTokens: 60_000, segments: [
