@@ -60,8 +60,8 @@ async function readResultTurnsPage(rpc: Pick<CodexAppServerRpc, "request">, thre
   return { turns, nextCursor: result.nextCursor as string | undefined | null };
 }
 
-export async function readFirstResultTurn(rpc: Pick<CodexAppServerRpc, "request">, threadId: string) {
-  return (await readResultTurnsPage(rpc, threadId, 1, undefined, undefined, "asc")).turns[0];
+export async function readFirstResultTurn(rpc: Pick<CodexAppServerRpc, "request">, threadId: string, signal?: AbortSignal) {
+  return (await readResultTurnsPage(rpc, threadId, 1, undefined, signal, "asc")).turns[0];
 }
 
 export async function readLatestResultTurn(rpc: Pick<CodexAppServerRpc, "request">,

@@ -134,6 +134,10 @@ export async function startCodexServiceHttpServer(input: {
             return Response.json(await manager.stopTracking(body.trackingId, body.enrolledAt));
           }
           if (!validSlot) return error(400, "Invalid delegation profile");
+          if (body.action === "register-dispatch" && typeof body.coordinatorThreadId === "string"
+            && typeof body.threadId === "string" && typeof body.promptDigest === "string") {
+            return Response.json(await manager.registerDispatch(body.slot, body.coordinatorThreadId, body.threadId, body.promptDigest));
+          }
           if (body.action === "list-tracked") {
             if (typeof body.parentThreadId !== "string") return error(400, "Invalid delegation coordinator");
             return Response.json(await manager.listForParent(body.slot, body.parentThreadId), { headers: { "cache-control": "no-store" } });

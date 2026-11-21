@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +10,7 @@ function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "tela-managed-retention-"));
   let now = 1_000_000_000, scope = "install/profile-one", busy = false, descendant: "active" | "archived" | undefined;
   let turnPersisted = true;
+  let assignment: string | undefined;
   const calls: { method: string; lifecycle: boolean; slot: number }[] = [];
   const thread: any = { id: "child", parentThreadId: "parent", status: { type: "idle" },
     source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } };
@@ -28,7 +30,11 @@ function fixture() {
           thread.name = params.name;
           return {};
         }
-        if (method === "thread/items/list") return { data: [{ turnId: params.turnId ?? "turn", item }], nextCursor: null };
+        if (method === "thread/items/list") {
+          const selected = params.sortDirection === "asc" && assignment !== undefined
+            ? { id: "prompt", type: "userMessage", content: [{ type: "text", text: assignment }] } : item;
+          return { data: [{ turnId: params.turnId ?? "turn", item: selected }], nextCursor: null };
+        }
         if (method === "thread/resume") {
           if (!lifecycle || busy) throw Error("WRITER_BUSY");
           expect(params).toEqual({ threadId: "child", excludeTurns: true });
@@ -43,11 +49,44 @@ function fixture() {
   const manager = createDelegatedRetention(options);
   return { directory, options, manager, thread, turn, item, calls,
     setTurnPersisted(value: boolean) { turnPersisted = value; },
+    setAssignment(value: string) { assignment = value; },
     advance(hours: number) { now += hours * HOUR; }, setBusy(value: boolean) { busy = value; }, changeScope() { scope = "new-install"; }, setDescendant(value: "active" | "archived" | undefined) { descendant = value; },
     receipt() { return JSON.parse(readFileSync(join(options.directory, readdirSync(options.directory)[0]!), "utf8")); },
     async close() { await manager.close(); rmSync(directory, { recursive: true, force: true }); } };
 }
 const answer = { parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer" } as const;
+
+test("a coordinator recovers its exact dispatched answer after restart without submitting again", async () => {
+  const f = fixture();
+  try {
+    Object.assign(f.thread, { source: "cli", parentThreadId: null, modelProvider: "openai", name: "[Tela Agent] Dispatch" });
+    f.setTurnPersisted(false);
+    const assignment = "PRIVATE_ASSIGNMENT";
+    const fingerprint = createHash("sha256").update(assignment).digest("hex");
+    await f.manager.registerDispatch(2, "parent", "child", fingerprint);
+    expect(await f.manager.readResult(2, "parent", "child")).toEqual({ threadId: "child", outcome: "pending" });
+    expect(JSON.stringify(f.receipt())).not.toContain(assignment);
+    await f.manager.close();
+    f.setTurnPersisted(true);
+    const restarted = createDelegatedRetention(f.options);
+    try {
+      expect((await restarted.listForParent(2, "parent")).tracked.map(r => r.threadId)).toEqual(["child"]);
+      await expect(restarted.readResult(2, "other", "child")).rejects.toThrow("Register");
+      await expect(restarted.readResult(1, "parent", "child")).rejects.toThrow("Register");
+      f.setAssignment("A different request");
+      expect(await restarted.readResult(2, "parent", "child")).toEqual({ threadId: "child", outcome: "pending" });
+      await expect(restarted.acknowledge(2, answer)).rejects.toThrow("submitted Web assignment");
+      f.setAssignment(assignment);
+      expect(await restarted.readResult(2, "parent", "child")).toEqual({
+        threadId: "child", turnId: "turn", itemId: "answer", text: "PRIVATE_BODY", outcome: "answer",
+      });
+      expect(f.receipt().acknowledgement).toBeUndefined();
+      await restarted.acknowledge(2, answer);
+      expect(f.receipt().dueAt).toBe(f.receipt().enrolledAt + 12 * HOUR);
+      expect(f.calls.every(({ method }) => method === "thread/read" || method === "thread/turns/list" || method === "thread/items/list")).toBe(true);
+    } finally { await restarted.close(); }
+  } finally { await f.close(); }
+});
 
 test("explicit standalone Web registration uses the existing receipt and archive lifecycle", async () => {
   const f = fixture();

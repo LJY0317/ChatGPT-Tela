@@ -138,8 +138,22 @@ uses the first visible Web model from the destination's official catalog.
 The command is a foreground, read-only assignment runner. Its result includes
 the destination slot, chat and turn IDs, selected model and saved final item.
 When the Native host provides a chat ID, the result also includes that ID for
-correlation. The runner does not retry an ambiguous submission. Use the
-standalone retention commands to enroll a resulting Web chat.
+correlation. Tela registers that destination chat with its Native coordinator
+before submission. If the caller closes or loses the response, use the same
+destination slot from the coordinating Native chat:
+
+```sh
+chatgpt-tela list-delegations --slot 2
+chatgpt-tela read-delegation-result --slot 2 --thread CHAT
+chatgpt-tela acknowledge-result --slot 2 --thread CHAT --turn TURN --item FINAL_ITEM
+```
+
+Recovery reads the saved first turn only after matching the original assignment.
+It sends no model request. A result must be saved in official Codex history to
+be recovered through this command. Viewing an answer leaves the seven-day
+deadline intact until explicit acknowledgement starts the twelve-hour deadline.
+Dispatches from a plain terminal without a Native chat ID can use explicit
+standalone retention registration.
 
 **Already running Desktop chats** remain owned by their Desktop server. The
 tested Desktop instances did not expose a supported profile-bound control

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runOfficialWebDelegation } from "@chatgpt-tela/codex";
@@ -29,6 +30,16 @@ export async function runDelegationCommand(args: readonly string[], input: {
   const all = args.includes("--all");
   if (all && (command !== "reconcile-delegations" || args.includes("--slot"))) throw Error("--all is only for reconciliation without --slot");
   const slot = all ? undefined : profileSlotFromArguments(args.slice(1));
+  const serviceClient = async () => {
+    if (input.client) return input.client;
+    const paths = input.paths ?? resolveProductPaths(), manifest = readOwnershipManifest(paths.installManifest);
+    if (!manifest) throw Error("Install and start Tela before managing delegated chats");
+    const running = await new LocalServiceSupervisor({ installId: manifest.installId }).current({
+      service: "codex", descriptorPath: join(paths.serviceRuntime("codex"), "descriptor.json"),
+    });
+    if (!running) throw Error("Start Tela before managing delegated chats");
+    return new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
+  };
   if (command === "start-web-delegation") {
     if (!args.includes("--slot")) throw Error("Choose the destination with --slot");
     const model = option("--model");
@@ -47,11 +58,16 @@ export async function runDelegationCommand(args: readonly string[], input: {
     }
     const prompt = (await Bun.stdin.text()).trim();
     if (!prompt) throw Error("Pass the assignment on standard input");
+    const sourceThreadId = environment.CODEX_THREAD_ID;
+    const client = sourceThreadId ? await serviceClient() : undefined;
     const result = await runOfficialWebDelegation({
       executable: installation.codexExecutable, codexHome: dirname(configPath),
       cwd: process.cwd(), ...(model ? { model } : {}), title: `[Tela Agent] ${title}`, prompt,
+      ...(client && sourceThreadId ? { beforeSubmit: (threadId: string) => client.manageDelegation({
+        action: "register-dispatch", slot: slot!, coordinatorThreadId: sourceThreadId, threadId,
+        promptDigest: createHash("sha256").update(prompt).digest("hex"),
+      }) } : {}),
     });
-    const sourceThreadId = environment.CODEX_THREAD_ID;
     return { ...(sourceThreadId ? { sourceThreadId } : {}), slot, ...result };
   }
   const standalone = args.includes("--standalone");
@@ -75,12 +91,5 @@ export async function runDelegationCommand(args: readonly string[], input: {
     request = { action: "acknowledge", slot: slot!, ...owner, threadId: required("--thread"), turnId: required("--turn"),
       ...(outcome === "answer" ? { outcome, itemId: required("--item") } : { outcome: outcome as "failed" | "interrupted" }) };
   }
-  if (input.client) return input.client.manageDelegation(request);
-  const paths = input.paths ?? resolveProductPaths(), manifest = readOwnershipManifest(paths.installManifest);
-  if (!manifest) throw Error("Install and start Tela before managing delegated chats");
-  const running = await new LocalServiceSupervisor({ installId: manifest.installId }).current({
-    service: "codex", descriptorPath: join(paths.serviceRuntime("codex"), "descriptor.json"),
-  });
-  if (!running) throw Error("Start Tela before managing delegated chats");
-  return new CodexServiceClient(descriptorForService(running.descriptor, "codex")).manageDelegation(request);
+  return (await serviceClient()).manageDelegation(request);
 }

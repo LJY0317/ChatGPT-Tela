@@ -10,6 +10,7 @@ interface OfficialTurn {
 /** Own a new conversation and one turn through the official process. */
 export async function runOfficialWebDelegation(input: {
   executable: string; codexHome: string; cwd: string; model?: string; title: string; prompt: string;
+  beforeSubmit?: (threadId: string) => Promise<unknown>;
 }) {
   if (input.model && !input.model.startsWith("chatgpt-tela-web/")) throw Error("Choose a Tela Web model");
   const rpc = await connectOfficialStdio({ ...input, clientName: "tela-web-delegation" });
@@ -25,6 +26,7 @@ export async function runOfficialWebDelegation(input: {
       throw Error("Official Codex did not acknowledge the requested Web model");
     }
     await rpc.send("thread/name/set", { threadId, name: input.title });
+    await input.beforeSubmit?.(threadId);
 
     const completion = Promise.withResolvers<OfficialTurn>();
     const earlyCompletions = new Map<string, OfficialTurn>();
