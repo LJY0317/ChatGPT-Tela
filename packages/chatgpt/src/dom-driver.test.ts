@@ -254,6 +254,7 @@ class FixtureElement {
   textContent = "";
   innerText = "";
   get children() { return this.childNodes.filter((node): node is FixtureElement => node instanceof FixtureElement); }
+  get firstElementChild() { return this.children[0] ?? null; }
   childNodes: Array<FixtureElement | { nodeType?: number; textContent: string }> = [];
   disabled = false;
   isConnected = true;
@@ -301,6 +302,24 @@ describe("current ChatGPT DOM surface driver", () => {
       userPayloadProbe: { author_collapsed_count: 2 } };
     expect((await driver.observe()).turns[0]?.foldedRequestDigest).toBe(receipt);
     page.raw.turns[0]!.contentText = `A quote:\n${header}\nFolded author content`;
+    expect((await driver.observe()).turns[0]?.foldedRequestDigest).toBeUndefined();
+  });
+  test("renderer finds the leading receipt after a connector control without relying on textContent line breaks", async () => {
+    const digestValue = digest("folded original request");
+    const receipt = `[Tela request ${digestValue}]`;
+    const connector = Object.assign(new FixtureElement(), { textContent: "Connector",
+      matches: (selector: string) => selector === 'a[data-discover]:not([href])' });
+    const paragraph = new FixtureElement();
+    paragraph.childNodes = [connector];
+    paragraph.textContent = `Connector  ${receipt}`;
+    const author = new FixtureElement({}, { p: [paragraph] });
+    author.textContent = `${paragraph.textContent}<chatgpt_tela_transport_contract>Folded body`;
+    const disclosure = Object.assign(new FixtureElement(), { matches: (selector: string) => selector === '[aria-expanded="false"]' });
+    const bubble = new FixtureElement({}, { '[data-search-result-target]': [author], '[aria-expanded]': [disclosure] });
+    const group = new FixtureElement({ 'data-turn-key': 'owned' }, { '[data-user-message-bubble]': [bubble] });
+    const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
+    expect((await driver.observe()).turns[0]?.foldedRequestDigest).toBe(digestValue);
+    author.textContent = `Earlier text${author.textContent}`;
     expect((await driver.observe()).turns[0]?.foldedRequestDigest).toBeUndefined();
   });
   test.each([false, true])("marker siblings expose only unique public progress, ambiguous=%s", async ambiguous => {

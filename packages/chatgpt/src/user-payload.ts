@@ -1,7 +1,7 @@
 /** Adapter-local author payload, independent of visibility, truncation and action labels.
  * Unknown structures supply no proof; they never fall back to the whole bubble's display text.
  */
-export function userPayload(bubble: HTMLElement): { value?: string; candidates?: string[]; reason: string; rootCount: number; nestedRoots?: boolean; equivalentRoots?: boolean; outerLength?: number; innerLength?: number } {
+export function userPayload(bubble: HTMLElement): { value?: string; leadingHeader?: string; candidates?: string[]; reason: string; rootCount: number; nestedRoots?: boolean; equivalentRoots?: boolean; outerLength?: number; innerLength?: number } {
   const roots = Array.from(bubble.querySelectorAll<HTMLElement>('[data-search-result-target]'));
   const structure: { rootCount: number; nestedRoots?: boolean; equivalentRoots?: boolean; outerLength?: number; innerLength?: number } = {
     rootCount: Math.min(roots.length, 65),
@@ -35,5 +35,13 @@ export function userPayload(bubble: HTMLElement): { value?: string; candidates?:
       candidates: [value, innerValue] };
   }
   if (!value.length) return { reason: 'author_payload_empty', ...structure };
-  return { value, reason: 'author_payload', ...structure };
+  // Renderer textContent flattens paragraph and BR boundaries. Read a leading
+  // receipt from its own paragraph, omitting only the leading connector control.
+  const paragraph = outer.querySelector('p');
+  const paragraphText = paragraph?.textContent ?? '';
+  const control = paragraph?.firstElementChild;
+  const connectorText = control?.matches('a[data-discover]:not([href])') ? control.textContent ?? '' : '';
+  const leadingHeader = paragraphText && value.startsWith(paragraphText) && paragraphText.startsWith(connectorText)
+    ? paragraphText.slice(connectorText.length).trim() : '';
+  return { value, ...(leadingHeader && leadingHeader.length <= 64 ? { leadingHeader } : {}), reason: 'author_payload', ...structure };
 }

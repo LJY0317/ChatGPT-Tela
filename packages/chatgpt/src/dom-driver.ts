@@ -43,6 +43,7 @@ interface RawTurn {
   readonly parentUserTurnKey?: string;
   readonly lineageAnchor?: string;
   readonly contentText?: string;
+  readonly leadingAuthorHeader?: string;
   readonly candidateTexts?: readonly string[];
   readonly userPayloadReason?: string;
   /** Content-free adapter witness, count saturated at 65; never acceptance authority. */
@@ -824,6 +825,7 @@ const OBSERVE_CHATGPT_SURFACE = String.raw`function () {
         role: "user",
         ...(lineageAnchor ? { lineageAnchor } : {}),
         ...(payload.value !== undefined ? { contentText: payload.value } : {}),
+        ...(payload.leadingHeader !== undefined ? { leadingAuthorHeader: payload.leadingHeader } : {}),
         ...(payload.candidates ? { candidateTexts: payload.candidates } : {}),
         userPayloadReason: payload.reason,
         userPayloadStructure: { rootCount: payload.rootCount, ...(payload.nestedRoots !== undefined ? { nestedRoots: payload.nestedRoots } : {}), ...(payload.equivalentRoots !== undefined ? { equivalentRoots: payload.equivalentRoots } : {}), ...(payload.outerLength !== undefined ? { outerLength: payload.outerLength, innerLength: payload.innerLength } : {}) },
@@ -2095,7 +2097,8 @@ function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
   // Several folded controls can belong to the same authored message. Only
   // its leading receipt is eligible; prose quoting a receipt is not proof.
   const foldedRequestDigest = raw.role === "user" && typeof collapsedControls === "number" && collapsedControls > 0
-    ? raw.contentText?.match(/^\[Tela request ([A-Za-z0-9_-]{43})\]\r?\n/)?.[1] : undefined;
+    ? raw.leadingAuthorHeader?.match(/^\[Tela request ([A-Za-z0-9_-]{43})\]$/)?.[1]
+      ?? raw.contentText?.match(/^\[Tela request ([A-Za-z0-9_-]{43})\]\r?\n/)?.[1] : undefined;
   const structure = (() => {
     try {
       const witness = raw.bodyStructure;
