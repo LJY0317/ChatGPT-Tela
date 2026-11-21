@@ -308,8 +308,12 @@ has stopped, the restored launcher's `application-update cancel` can settle the
 handoff. New preparation records also identify their macOS boot session. When a
 verified original bundle is put back after reboot, opening it finishes recovery
 and restores the recorded profiles. The same or an unknown boot session leaves
-the handoff pending for explicit settlement. A graphical way to find and put
-back the verified bundle remains open.
+the handoff pending for explicit settlement. Opening the exact previous app from
+Finder offers **Restore and Open**. The launcher checks the recorded boot session
+again, stages a signed copy, and publishes it with an exclusive rename. Anything
+already at the installed path stays in place. Opening the restored app uses the
+existing startup settlement. Recovery requires a copy of the exact previous app
+and a same-volume system temporary directory.
 
 References: [Sparkle setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),

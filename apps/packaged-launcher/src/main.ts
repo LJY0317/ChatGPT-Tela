@@ -1,6 +1,6 @@
 import { DELEGATION_COMMANDS, runDelegationCommand } from "../../cli/src/delegation-command";
 import { runDesktopAppCommand } from "./desktop-app";
-import { reviewMissingApplicationSource, runApplicationUpdate } from "./application-update";
+import { restoreMissingApplicationSource, reviewMissingApplicationSource, runApplicationUpdate } from "./application-update";
 import { diagnosePublicIngress, SystemTailscaleCommandRunner } from "@chatgpt-tela/tailscale-ingress";
 import { probePublicMcp, probeUnifiedDevelopmentMcp } from "@chatgpt-tela/gateway";
 import { readProductConfig } from "@chatgpt-tela/product-config";
@@ -102,6 +102,13 @@ async function main(): Promise<void> {
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);
     process.exitCode = result.code;
+    return;
+  }
+  if (args[0] === "application-update" && args[1] === "restore-source") {
+    if (args.length !== 4 || args[2] !== "--payload" || !args[3]) {
+      throw Error("usage: application-update restore-source --payload <previous-app>");
+    }
+    process.stdout.write(JSON.stringify(await restoreMissingApplicationSource({ payloadRoot: args[3] })) + "\n");
     return;
   }
   if (args[0] === "application-update") {

@@ -1343,7 +1343,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   }
 
   // All setup mutations use the verified installed launcher; the UI owns no config authority.
-  private nonisolated static func runLauncher(_ launcher: String, arguments: [String], input: Data? = nil,
+  nonisolated static func runLauncher(_ launcher: String, arguments: [String], input: Data? = nil,
                                                capture: Bool = false) -> (Int32, Data) {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: launcher)

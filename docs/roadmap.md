@@ -22,8 +22,9 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   when the driver was killed. A simulated unsupported atomic swap reached the actual
   two-move fallback and reproduced a missing installed app. A separate isolated
   launchd run verified service recovery after the exact signed source was put back.
-  The launcher reviews the original bundle before it is restored. A graphical
-  maintenance entry point and UI/XPC interruption testing remain.
+  Opening the exact previous app offers restoration after reboot. The launcher
+  uses an exclusive publish and existing startup settlement. End-to-end Finder
+  and Sparkle UI/XPC interruption testing remain.
 - **Resources and platform support.** Measure installed disk/cache residue and idle
   CPU/wakeups under representative use, plus restart continuity. The source can build
   Windows and Linux payloads from another OS. The package jobs exercise install, repair

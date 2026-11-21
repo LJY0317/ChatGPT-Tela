@@ -749,6 +749,56 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
   }
 }
 
+private struct TelaMissingAppRecovery: Decodable {
+  let applicationPath: String
+  let status: String
+
+  @MainActor
+  static func presentIfNeeded(in app: NSApplication) -> Bool {
+    let files = FileManager.default
+    let bundle = Bundle.main
+    let installed = files.homeDirectoryForCurrentUser.appendingPathComponent("Applications/ChatGPT Tela.app")
+    guard bundle.bundleIdentifier == "com.openai.chatgpt-tela.menu-bar",
+          !files.fileExists(atPath: installed.path),
+          let launcher = bundle.url(forAuxiliaryExecutable: "chatgpt-tela") else { return false }
+    let source = ["--payload", bundle.bundleURL.path]
+    let (code, data) = TelaControlCenterController.runLauncher(launcher.path,
+        arguments: ["application-update", "review-source"] + source, capture: true)
+    guard code == 0, let recovery = try? JSONDecoder().decode(Self.self, from: data) else { return false }
+
+    app.setActivationPolicy(.regular)
+    app.activate(ignoringOtherApps: true)
+    let alert = NSAlert()
+    alert.messageText = telaText("Restore Tela?")
+    switch recovery.status {
+    case "restart-required":
+      alert.informativeText = telaText("Restart your Mac, then open this copy of Tela again.")
+      alert.addButton(withTitle: telaText("OK"))
+    case "available":
+      alert.informativeText = telaText("Restore the previous app. Your settings and files are kept.")
+      alert.addButton(withTitle: telaText("Restore and Open"))
+      alert.addButton(withTitle: telaText("Cancel"))
+    default:
+      alert.informativeText = telaText("This update needs manual recovery.")
+      alert.addButton(withTitle: telaText("OK"))
+    }
+    guard alert.runModal() == .alertFirstButtonReturn, recovery.status == "available" else { return true }
+    let (result, _) = TelaControlCenterController.runLauncher(launcher.path,
+        arguments: ["application-update", "restore-source"] + source)
+    if result == 0 {
+      let (opened, _) = TelaControlCenterController.runLauncher("/usr/bin/open",
+          arguments: ["-n", "-a", recovery.applicationPath])
+      if opened == 0 { return true }
+      NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: recovery.applicationPath)])
+    }
+    let failed = NSAlert()
+    failed.messageText = result == 0 ? telaText("Open the restored Tela app in Finder.") : telaText("Couldn’t restore Tela.")
+    failed.addButton(withTitle: telaText("OK"))
+    failed.runModal()
+    return true
+  }
+}
+
 @main
 struct ChatGPTTelaMenuBarMain {
   @MainActor
@@ -761,6 +811,8 @@ struct ChatGPTTelaMenuBarMain {
         setenv("CHATGPT_TELA_PACKAGED_LAUNCHER_EXECUTABLE", launcher.path, 0)
       }
     }
+    let app = NSApplication.shared
+    if TelaMissingAppRecovery.presentIfNeeded(in: app) { return }
     let instance = TelaMenuBarInstanceLock()
     do {
       guard try instance.acquire() else {
@@ -772,7 +824,6 @@ struct ChatGPTTelaMenuBarMain {
       fputs("Tela menu bar could not acquire its instance lock.\n", stderr)
       return
     }
-    let app = NSApplication.shared
     let delegate = TelaMenuBarController()
     app.delegate = delegate
     withExtendedLifetime(instance) { app.run() }

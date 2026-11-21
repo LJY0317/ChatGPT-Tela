@@ -13,7 +13,7 @@ import {
 import { LaunchdUpgradeRunner } from "../../../tests/support/launchd-upgrade-runner";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { registerDeviceLocalChatPlugin } from "../../local-mcp/src/main";
-import { reviewMissingApplicationSource, runApplicationUpdate } from "./application-update";
+import { restoreMissingApplicationSource, reviewMissingApplicationSource, runApplicationUpdate } from "./application-update";
 import type { CodexNativeTargetAdapter } from "../../../packages/codex-service/src/native-target";
 import { verifyInstalledPackage } from "./runtime";
 import { readProductConfig, writeProductConfig, writeProductPreferences, resolveProductPreferencesPath } from "@chatgpt-tela/product-config";
@@ -329,18 +329,19 @@ test("missing app recovery reviews only the exact signed source and leaves the h
   const root = mkdtempSync(join(tmpdir(), "tela-missing-app-source-"));
   try {
     const f = await fixture(root);
-    await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" });
+    const readBootSession = () => "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2", readBootSession });
     const journal = macApplicationUpdatePath(f.paths);
     const prepared = readFileSync(journal);
     const previous = join(root, "previous.app");
     renameSync(f.sourceRoot, previous);
     f.runner.calls.length = 0;
-    const review = { ...f.input, payloadRoot: previous };
+    const review = { ...f.input, payloadRoot: previous, readBootSession };
     let signed = false;
     expect(reviewMissingApplicationSource({ ...review, verifySignature(path) {
       expect(path).toBe(realpathSync(previous));
       signed = true;
-    } })).toEqual({ applicationPath: join(realpathSync(dirname(f.sourceRoot)), "ChatGPT Tela.app"), sourceBuild: "1", targetBuild: "2" });
+    } })).toEqual({ applicationPath: join(realpathSync(dirname(f.sourceRoot)), "ChatGPT Tela.app"), sourceBuild: "1", targetBuild: "2", status: "restart-required" });
     expect(signed).toBe(true);
     expect(() => reviewMissingApplicationSource({ ...review, verifySignature() { throw Error("invalid signature"); } }))
       .toThrow("invalid signature");
@@ -351,6 +352,32 @@ test("missing app recovery reviews only the exact signed source and leaves the h
     expect(() => reviewMissingApplicationSource(review)).toThrow("app path is occupied");
     expect(readFileSync(journal)).toEqual(prepared);
     expect(f.runner.calls).toEqual([]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+(process.platform === "darwin" ? test : test.skip)("restoration publishes the signed source exclusively after reboot", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-restore-source-"));
+  try {
+    const f = await fixture(root);
+    const before = () => "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    const after = () => "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+    await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2", readBootSession: before });
+    const previous = join(root, "previous.app");
+    renameSync(f.sourceRoot, previous);
+    const source = { ...f.input, payloadRoot: previous };
+    await expect(restoreMissingApplicationSource({ ...source, readBootSession: before })).rejects.toThrow("restart macOS");
+    expect(existsSync(f.sourceRoot)).toBe(false);
+    await expect(restoreMissingApplicationSource({ ...source, readBootSession: after, verifySignature(path) {
+      if (path !== realpathSync(previous)) mkdirSync(f.sourceRoot);
+    } })).rejects.toThrow("could not be restored");
+    expect(existsSync(join(f.sourceRoot, "Contents"))).toBe(false);
+    rmSync(f.sourceRoot, { recursive: true });
+    expect(await restoreMissingApplicationSource({ ...source, readBootSession: after }))
+      .toEqual({ applicationPath: realpathSync(f.sourceRoot) });
+    expect(existsSync(previous)).toBe(true);
+    expect(readMacApplicationUpdate(f.paths)?.phase).toBe("ready");
+    expect(await runApplicationUpdate("finish", { ...f.input, readBootSession: after }))
+      .toMatchObject({ restored: true, sourceRestoredFor: "2" });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -1,6 +1,8 @@
+import { dlopen, ptr } from "bun:ffi";
+import { tmpdir } from "node:os";
 import { refreshInstalledLocalPluginOwned } from "./local-plugin";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   assertNoActivePackagedTransition, createPackagedInstallBlueprint, FilesystemOwnershipObserver, installPackagedMenuBarRegistration,
@@ -51,12 +53,14 @@ function readMacBootSession(): string | undefined {
   } catch { return undefined; }
 }
 
-/** Review only. Sparkle owns its installer and the app path may appear again after review. */
-export function reviewMissingApplicationSource(input: {
+type RecoverySourceInput = {
   payloadRoot: string; options?: PackagedLifecycleOptions;
   verifySignature?: (path: string) => void;
   readBuild?: (path: string) => string;
-}) {
+  readBootSession?: () => string | undefined;
+};
+
+function inspectMissingApplicationSource(input: RecoverySourceInput) {
   const options = input.options ?? {};
   const paths = resolveProductPaths(options);
   const update = readMacApplicationUpdate(paths);
@@ -89,7 +93,45 @@ export function reviewMissingApplicationSource(input: {
   if ((input.readBuild ?? readApplicationBuild)(source) !== update.sourceBuild) {
     throw Error("use the exact previous Tela app for recovery");
   }
-  return { applicationPath: update.applicationPath, sourceBuild: update.sourceBuild, targetBuild: update.targetBuild };
+  const currentBootSession = (input.readBootSession ?? readMacBootSession)();
+  const status: "manual" | "restart-required" | "available" = !update.sourceBootSession || !currentBootSession ? "manual"
+    : update.sourceBootSession === currentBootSession ? "restart-required" : "available";
+  return { source, update, status };
+}
+
+/** Review only. The original app path may appear again before applying recovery. */
+export function reviewMissingApplicationSource(input: RecoverySourceInput) {
+  const { update, status } = inspectMissingApplicationSource(input);
+  return { applicationPath: update.applicationPath, sourceBuild: update.sourceBuild, targetBuild: update.targetBuild, status };
+}
+
+export async function restoreMissingApplicationSource(input: RecoverySourceInput) {
+  const paths = resolveProductPaths(input.options ?? {});
+  const pending = readMacApplicationUpdate(paths);
+  if (!pending) throw Error("no prepared update for the missing Tela application");
+  return withPackagedTransitionOwner({ paths, installId: pending.installId }, async () => {
+    const { source, update, status } = inspectMissingApplicationSource(input);
+    if (status !== "available") throw Error("restart macOS before restoring Tela");
+    const staging = mkdtempSync(join(tmpdir(), "tela-recovery-"));
+    const staged = join(staging, basename(update.applicationPath));
+    try {
+      execFileSync("/usr/bin/ditto", [source, staged], { stdio: "pipe" });
+      (input.verifySignature ?? verifyApplicationSignature)(staged);
+      if (packagedPayloadFingerprint(staged) !== update.sourceFingerprint) {
+        throw Error("the previous app changed during recovery");
+      }
+      // Darwin's exclusive rename publishes the whole signed bundle or leaves the destination intact.
+      const system = dlopen("/usr/lib/libSystem.B.dylib", { renamex_np: { args: ["ptr", "ptr", "u32"], returns: "i32" } });
+      try {
+        const from = Buffer.from(staged + "\0"), to = Buffer.from(update.applicationPath + "\0");
+        const renameExcl = 0x00000004;
+        if (system.symbols.renamex_np(ptr(from), ptr(to), renameExcl) !== 0) {
+          throw Error("the verified app could not be restored to the installed path");
+        }
+      } finally { system.close(); }
+      return { applicationPath: update.applicationPath };
+    } finally { rmSync(staging, { recursive: true, force: true }); }
+  });
 }
 
 /** Sparkle replaces the app. This command only settles existing Tela service ownership. */
