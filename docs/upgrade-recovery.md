@@ -271,6 +271,13 @@ registrations and processes were removed. A separate synthetic split-payload kee
 removal/install check preserved settings and install identity. These checks do not establish
 existing user-profile restoration or first-run Gatekeeper acceptance of a downloaded app.
 
+A later isolated 2026112104 to 2026112105 check substituted the verified signed bundle
+at the prepared path, then killed the Tela restoration worker after the packaged Chat
+daemon reported ready. A new worker completed the saved transition without restarting
+Chat. Gateway and Codex stayed stopped, and the installation identity and configuration
+were unchanged. The test used real launchd with separate job labels and removed those
+jobs afterward. Sparkle's own replacement step was represented by a directory swap.
+
 References: [Sparkle setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
 [package tradeoffs](https://sparkle-project.org/documentation/package-updates/),

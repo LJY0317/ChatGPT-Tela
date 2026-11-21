@@ -15,10 +15,10 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   host authorization, a harmless file read, actual repair/removal and keep-data reinstall.
   Existing fixtures and installed read-only maintenance do not prove destructive consumer
   acceptance. Keep account-plugin removal separate from local application removal.
-- **Interrupted signed updates.** Exercise interruption during package replacement and
-  service restoration in that controlled environment. Normal update/profile restoration and
-  the disposable UI-exit test do not prove every signed-install recovery case. Reconcile
-  existing transition receipts instead of repeating apply or reusing lost approval.
+- **Interrupted signed updates.** A disposable signed-bundle replacement exercised a
+  killed restoration worker with real launchd and a packaged daemon. Recovery kept the
+  already-ready process and the previous service selection. Interruption inside Sparkle's
+  own package replacement remains to be exercised.
 - **Resources and platform support.** Measure installed disk/cache residue and idle
   CPU/wakeups under representative use, plus restart continuity. The source can build
   Windows and Linux payloads from another OS. The package jobs exercise install, repair
