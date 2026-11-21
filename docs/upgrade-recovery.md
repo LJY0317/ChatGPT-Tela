@@ -278,6 +278,13 @@ Chat. Gateway and Codex stayed stopped, and the installation identity and config
 were unchanged. The test used real launchd with separate job labels and removed those
 jobs afterward. Sparkle's own replacement step was represented by a directory swap.
 
+For the same signed pair, a separate driver compiled the pinned Sparkle 2.10.1 plain
+installer and file manager without source changes. It exited by SIGKILL at the progress
+callbacks immediately before and after the same-volume atomic swap. The first run
+left the original app at the installed path. The second left the target there and
+the original at the staging path. Code signatures and the directory identities proved
+both outcomes. The driver did not exercise the updater's UI or XPC lifecycle.
+
 References: [Sparkle setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
 [package tradeoffs](https://sparkle-project.org/documentation/package-updates/),

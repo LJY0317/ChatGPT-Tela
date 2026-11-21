@@ -17,8 +17,10 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   acceptance. Keep account-plugin removal separate from local application removal.
 - **Interrupted signed updates.** A disposable signed-bundle replacement exercised a
   killed restoration worker with real launchd and a packaged daemon. Recovery kept the
-  already-ready process and the previous service selection. Interruption inside Sparkle's
-  own package replacement remains to be exercised.
+  already-ready process and the previous service selection. Sparkle 2.10.1's actual
+  installer code also preserved valid bundles on both sides of a same-volume atomic swap
+  when the driver was killed. Full UI/XPC interruption recovery and the non-atomic
+  replacement path remain unverified.
 - **Resources and platform support.** Measure installed disk/cache residue and idle
   CPU/wakeups under representative use, plus restart continuity. The source can build
   Windows and Linux payloads from another OS. The package jobs exercise install, repair
