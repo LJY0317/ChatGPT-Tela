@@ -42,7 +42,10 @@ same profile and account binding as the original operation.
 
 Bind an accepted Web operation to its actual send/answer lineage. Reuse compatible retained
 context; preserve canonical current instructions, requests, unresolved effects and source-bound
-checkpoint coverage. Uncertain acknowledgement does not authorize replay. See
+checkpoint coverage. Uncertain acknowledgement does not authorize replay. A
+live provider can withdraw its recorded send only when activation never began.
+The exact client request may try again after durable withdrawal. If activation
+started or the source died without proof, the record continues to deny replay. See
 [context continuity](context-continuity-contract.md) and [token efficiency](token-efficiency.md).
 Human approval waiting, model generation, tool execution and final-result delivery remain
 separate states. Diagnostic or progress visibility is not an execution receipt. Keep account,

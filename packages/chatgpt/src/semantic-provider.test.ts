@@ -3142,6 +3142,28 @@ test.each(['missing-host','unavailable-host','changed-input','unconsumed','missi
   }finally{await surface.host.close();}
 });
 
+test.each(["before activation", "during activation"] as const)("only a proven pre-activation failure withdraws the send intent (%s)", async phase => {
+  const driver = new FixtureDriver(fixture("ready-new-chat"));
+  const surface = await leaseFor(driver);
+  const provider = new ChatGptSemanticProvider();
+  const owner = new AbortController();
+  const failure = Error("fixture send boundary failure");
+  let withdrawals = 0, activations = 0;
+  driver.activateSend = async () => { activations++; throw failure; };
+  try {
+    const operation = provider.submitTurn(surface.lease, {
+      ...request(),
+      async beforeSend() {
+        if (phase === "before activation") owner.abort(failure);
+        return async () => { withdrawals++; };
+      },
+    }, owner.signal);
+    await expect(operation).rejects.toBe(failure);
+    expect(withdrawals).toBe(phase === "before activation" ? 1 : 0);
+    expect(activations).toBe(phase === "before activation" ? 0 : 1);
+  } finally { await surface.host.close(); }
+});
+
 test('post-acceptance input does not cancel an observer; Native cancellation still does',async()=>{
  const driver=new FixtureDriver(fixture('ready-new-chat')),inputAbort=new AbortController();let revision=0;
  const surface=await leaseFor(driver,{current:()=>({revision,available:true,signal:inputAbort.signal})});

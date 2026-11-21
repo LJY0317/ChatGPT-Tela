@@ -1378,6 +1378,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     }
     let cleanupAttempted = false;
     let sendActivationAttempted = false;
+    let withdrawSendIntent: void | (() => Promise<void>) = undefined;
     const cleanupPreparedComposer = async (): Promise<void> => {
       if (cleanupAttempted) return;
       cleanupAttempted = true;
@@ -1638,7 +1639,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         remote_tool_visibility_observed: false,
       });
       if (request.beforeSend) {
-        await request.beforeSend();
+        withdrawSendIntent = await request.beforeSend();
         signal?.throwIfAborted();
         assertCausalInputUnchanged?.();
       }
@@ -1649,6 +1650,12 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       emitDiagnosticEvent("chatgpt_tela_work", "web_send_activation_settled", { phase: "turn", remote_terminal_proven: false });
       this.#temporaryChatSurfaces.add(surface);
     } catch (error) {
+      if (!sendActivationAttempted && withdrawSendIntent) {
+        try { await withdrawSendIntent(); }
+        catch {
+          emitDiagnosticEvent("chatgpt_tela_work", "web_send_intent_withdrawal_failed", { phase: "before_activation" });
+        }
+      }
       if (!sendActivationAttempted && !cleanupAttempted) {
         try {
           await cleanupPreparedComposer();

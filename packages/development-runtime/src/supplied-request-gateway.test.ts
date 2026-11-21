@@ -162,7 +162,7 @@ test("replacing and closing Web operations finish diagnostics without a response
   }
 });
 
-function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure?: Error; planner?: ReturnType<typeof createNativeRequestDevelopmentWebTurnPlanner>;
+function fixture(options: { failBeforeFirstSend?: Error; wait?: Promise<void>; onSubmit?: () => void; failure?: Error; planner?: ReturnType<typeof createNativeRequestDevelopmentWebTurnPlanner>;
   providerBehavior?: Partial<Pick<WebConversationProvider, "armToolContinuation" | "waitForTurnEvent" | "cancelTurn">>;
   onWebChild?: Parameters<typeof createSuppliedRequestGateway>[0]["onWebChild"];
   suppliedHistory?: Parameters<typeof createSuppliedRequestGateway>[0]["suppliedHistory"];
@@ -181,10 +181,17 @@ function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure
     },
     async release(id) { released.push(id); }, async close() { closed = true; },
   };
+  let preSendFailure = options.failBeforeFirstSend;
   const provider: WebConversationProvider = {
     async observeCapabilities() { throw Error("No redundant preflight"); },
     async submitTurn(_surface, turn) {
-      await turn.beforeSend?.();
+      const withdraw = await turn.beforeSend?.();
+      if (preSendFailure) {
+        const failure = preSendFailure;
+        preSendFailure = undefined;
+        if (withdraw) await withdraw();
+        throw failure;
+      }
       submissions.push(turn);
       options.onSubmit?.();
       return { state: "proven", evidence: ["fixture"], value: { nativeTaskId: turn.nativeTaskId,
@@ -310,6 +317,22 @@ test("durably preserved final releases shutdown and replays after gateway restar
       expect(restarted.submissions).toHaveLength(0);
     } finally { await restarted.gateway.close(); }
   } finally { await first.gateway.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the same client request can send once after a proven pre-activation failure", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-confirmed-unsent-"));
+  const failure = Error("fixture failed before activation");
+  const store = new FileNativeVisiblePrefixStageJournal({ directory: join(root, "ledger"),
+    initializationPath: join(root, "receipt") });
+  const f = fixture({ failBeforeFirstSend: failure,
+    completedResults: { profileSlot: 2, accountFingerprint: "a".repeat(64), store } });
+  try {
+    await expect(f.gateway.handle(request())).rejects.toBe(failure);
+    expect(f.submissions).toHaveLength(0);
+    expect(await f.gateway.handle(request())).toMatchObject({ type: "final", answer: "A inspected." });
+    expect(await f.gateway.handle(request())).toMatchObject({ type: "final", answer: "A inspected." });
+    expect(f.submissions).toHaveLength(1);
+  } finally { await f.gateway.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("a recorded Web send without a final cannot submit again after restart", async () => {

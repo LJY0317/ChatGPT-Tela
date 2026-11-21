@@ -75,8 +75,8 @@ export interface WebPhysicalContext {
 }
 
 export interface WebTurnRequest {
-  /** Persist the original operation immediately before activating Send. */
-  readonly beforeSend?: () => Promise<void>;
+  /** Persist the send intent. A returned withdrawal runs only if activation never began. */
+  readonly beforeSend?: () => Promise<void | (() => Promise<void>)>;
   readonly nativeTaskId: string;
   readonly nativeTurnId: string;
   readonly webEpochId: string;

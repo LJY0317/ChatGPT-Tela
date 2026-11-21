@@ -21,7 +21,7 @@ import type { SuppliedCompletedResult, SuppliedResultIdentity } from "./native-v
 
 export interface SuppliedResultStore {
   readSuppliedResult(identity: SuppliedResultIdentity): Promise<SuppliedCompletedResult | undefined>;
-  recordSuppliedSend(identity: SuppliedResultIdentity, previousRequestFingerprint?: string): Promise<void>;
+  recordSuppliedSend(identity: SuppliedResultIdentity, previousRequestFingerprint?: string): Promise<void | (() => Promise<void>)>;
   preserveSuppliedResult(result: SuppliedCompletedResult, previousRequestFingerprint?: string): Promise<boolean>;
 }
 export type SuppliedResultScope = {
@@ -56,6 +56,7 @@ interface Operation {
   armContinuation?: (callId: string) => Promise<void>;
   failed?: true;
   unresolvedRecordedSend?: true;
+  sendIntentWithdrawn?: true;
   preserved?: boolean;
   finishedAt?: number;
   delivered: boolean;
@@ -200,6 +201,12 @@ export function createSuppliedRequestGateway(input: {
         throw Error("Web operation account or profile changed");
       }
       let previousRequestFingerprint: string | undefined;
+      if (operation?.turnId === identity.turnId && operation.fingerprint === hash
+        && operation.failed && operation.sendIntentWithdrawn) {
+        previousRequestFingerprint = operation.previousRequestFingerprint;
+        retireOperation(identity.threadId);
+        operation = undefined;
+      }
       // One Native turn may request another response after consuming a final,
       // e.g. an injected coordinator message. Only a delivered final ends a
       // response operation; an active tool round still requires its exact result.
@@ -345,7 +352,11 @@ export function createSuppliedRequestGateway(input: {
                     if (!sameResultOwner(currentCompletedResults(), resultIdentity)) {
                       throw Error("App-owned Web result storage account binding changed");
                     }
-                    await completedResults.store.recordSuppliedSend(resultIdentity, owned.previousRequestFingerprint);
+                    const withdraw = await completedResults.store.recordSuppliedSend(resultIdentity, owned.previousRequestFingerprint);
+                    if (withdraw) return async () => {
+                      await withdraw();
+                      owned.sendIntentWithdrawn = true;
+                    };
                   } } : {}),
                   onSubmitted: (surface, handle) => {
                     owned.armContinuation = async callId => {

@@ -331,19 +331,33 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
       return Object.freeze(result) as SuppliedCompletedResult;
     });
   }
-  async recordSuppliedSend(identity: SuppliedResultIdentity, previousRequestFingerprint?: string): Promise<void> {
+  async recordSuppliedSend(identity: SuppliedResultIdentity, previousRequestFingerprint?: string): Promise<() => Promise<void>> {
     if (!validSuppliedIdentity(identity)) throw Error("Invalid supplied result identity");
-    await this.#transaction(async state => {
-      const key = suppliedKey(identity);
+    const key = suppliedKey(identity);
+    const marker = { ...identity, answerHash: SUPPLIED_SEND_WITHOUT_FINAL, updatedAt: Date.now() };
+    const predecessor = await this.#transaction(async state => {
       const existing = state.suppliedResults?.find(item => suppliedKey(item) === key);
       if (existing?.answerHash === SUPPLIED_SEND_WITHOUT_FINAL) throw new WebSubmissionUnproven("recorded_send_without_result");
       if (existing && (existing.requestFingerprint === identity.requestFingerprint
         || existing.requestFingerprint !== previousRequestFingerprint)) {
         throw Error("Web request changed within the same response operation");
       }
-      state.suppliedResults = [...(state.suppliedResults ?? []).filter(item => suppliedKey(item) !== key),
-        { ...identity, answerHash: SUPPLIED_SEND_WITHOUT_FINAL, updatedAt: Date.now() }];
+      state.suppliedResults = [...(state.suppliedResults ?? []).filter(item => suppliedKey(item) !== key), marker];
       await this.#write(state);
+      return existing;
+    });
+    // Only the live caller that just recorded this intent can prove Send was never activated.
+    let withdrawn = false;
+    return async () => this.#transaction(async state => {
+      const existing = state.suppliedResults?.find(item => suppliedKey(item) === key);
+      if (withdrawn || existing?.answerHash !== SUPPLIED_SEND_WITHOUT_FINAL
+        || existing.requestFingerprint !== marker.requestFingerprint || existing.updatedAt !== marker.updatedAt) {
+        throw Error("The recorded Web send no longer belongs to this operation");
+      }
+      state.suppliedResults = (state.suppliedResults ?? []).filter(item => suppliedKey(item) !== key);
+      if (predecessor) state.suppliedResults.push(predecessor);
+      await this.#write(state);
+      withdrawn = true;
     });
   }
   /** Called on owned profile readiness; no periodic worker or extra storage. */

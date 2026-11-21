@@ -360,6 +360,24 @@ test("profile readiness retires expired replaced-account results within its owne
 }));
 
 
+test("withdrawing a proven unsent continuation restores its original completed receipt", () => fixture(async options => {
+  const journal = new FileNativeVisiblePrefixStageJournal(options);
+  const first = { profileSlot: 2, accountFingerprint: hash("account"), threadId: "thread", turnId: "turn",
+    requestFingerprint: hash("first"), answer: "First completed answer" };
+  const { answer: _answer, ...identity } = first;
+  const next = { ...identity, requestFingerprint: hash("next") };
+  await journal.preserveSuppliedResult(first);
+  const withdraw = await journal.recordSuppliedSend(next, first.requestFingerprint);
+  const reopened = new FileNativeVisiblePrefixStageJournal(options);
+  await expect(reopened.readSuppliedResult(next)).rejects.toMatchObject({ reason: "recorded_send_without_result" });
+  await withdraw();
+  expect(await reopened.readSuppliedResult(first)).toEqual(first);
+  await expect(reopened.readSuppliedResult(next)).rejects.toThrow("changed");
+  await reopened.recordSuppliedSend(next, first.requestFingerprint);
+  await expect(withdraw()).rejects.toThrow("no longer belongs");
+  await expect(reopened.readSuppliedResult(next)).rejects.toMatchObject({ reason: "recorded_send_without_result" });
+}));
+
 test("same-turn completion advances only from its exact delivered predecessor and retains one replay receipt", () => fixture(async options => {
   const journal = new FileNativeVisiblePrefixStageJournal(options);
   const first = { profileSlot: 2, accountFingerprint: hash("account"), threadId: "thread", turnId: "turn",
