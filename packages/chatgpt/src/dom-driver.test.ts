@@ -307,8 +307,10 @@ describe("current ChatGPT DOM surface driver", () => {
   test("renderer finds the leading receipt after a connector control without relying on textContent line breaks", async () => {
     const digestValue = digest("folded original request");
     const receipt = `[Tela request ${digestValue}]`;
-    const connector = Object.assign(new FixtureElement(), { textContent: "Connector",
-      matches: (selector: string) => selector === 'a[data-discover]:not([href])' });
+    const connector = Object.assign(new FixtureElement({ "data-discover": "true", href: "/connector" }), {
+      textContent: "Connector",
+      matches: (selector: string) => selector === 'a[data-discover]',
+    });
     const paragraph = new FixtureElement();
     paragraph.childNodes = [connector];
     paragraph.textContent = `Connector  ${receipt}`;

@@ -5,7 +5,7 @@ function bubble(roots: object[]) {
   return { querySelectorAll: () => roots } as unknown as HTMLElement;
 }
 function chain(texts: string[]) {
-  const roots = texts.map(textContent => ({ textContent, contains: (_node: unknown): boolean => false }));
+  const roots = texts.map(textContent => ({ textContent, querySelector: () => null, contains: (_node: unknown): boolean => false }));
   roots.forEach((root, index) => { root.contains = node => roots.indexOf(node as typeof root) > index; });
   return roots;
 }
