@@ -14,6 +14,7 @@ export * from "./web-model-catalog";
 
 export * from "./native-history-items";
 
-export * from "./stored-history-rpc";
+export { connectStoredHistoryRpc, connectDormantThreadRpc, connectDelegatedTitleRpc, readStoredThreadTitles } from "./stored-history-rpc";
+export { runOfficialWebDelegation } from "./official-web-delegation";
 
 export * from "./thread-title";

@@ -114,32 +114,30 @@ registration.
 
 ### Cross-profile dispatch
 
-The 2026-11-17 review found no official way for Tela to target a different
-Desktop profile for conversation creation or live turn control. Plura's target
-contract v2 exposes profile identity and app lifecycle. The official Codex
-app-server can create and steer turns on a connected instance, but the tested
-Desktop instances did not expose a supported profile-bound endpoint. Tela's local
-stored-history reader runs separately from those live Desktop owners. It can
-collect a registered chat's saved answer through its profile without becoming
-that conversation's live controller.
+For a **new** Web assignment, a short-lived official [Codex App Server](https://learn.chatgpt.com/docs/app-server)
+can own the chat from creation through the saved answer. Tela uses the bundled
+Codex executable and the destination profile's existing Tela Web route under
+the OpenAI provider. It waits for the submitted turn to finish and reads the
+final item from that same turn. In a live test from profile 1, profile 2
+received one Web request and returned the saved answer through the official API.
 
-A later check used the installed official CLI's documented [queue command](https://learn.chatgpt.com/docs/developer-commands#codex-queue).
-With two isolated Codex homes, it returned a queue receipt for an existing
-thread in the correct home and rejected the same ID in the other home. This
-proves admission to the queue, not execution, Web model selection or answer
-delivery for a live Desktop task. The documented [Desktop links](https://learn.chatgpt.com/docs/app/commands#chats)
-can prefill a draft, but have no profile selector and do not submit it. The
-official control socket was absent for both installed Desktop profiles when
-checked. The public app-server methods require a connection to the owning
-server; starting a separate server does not attach it to Desktop's live turn.
+```sh
+chatgpt-tela start-web-delegation --slot 2 --model <web-model-id> --title "Review" < assignment.txt
+```
 
-The missing contract is either an official thread tool with verified destination
-profile selection or an authenticated endpoint to the existing Desktop owner
-per profile. It must support creation, exact follow-up, interruption, status and
-final-result readback. Acceptance requires disposable tasks in both directions,
-with confirmed destination/turn IDs, wrong-profile rejection, and an outcome
-receipt that prevents duplicate submission after disconnect. Keep existing
-profile identity and transport code when that contract becomes available.
+The command is a foreground, read-only assignment runner. It returns the
+destination slot, chat and turn IDs, and the saved final item on success. It
+neither retries an ambiguous submission nor claims the new chat as a Native
+child. To start in the other direction, specify the other registered slot.
+Use the standalone retention commands for a chat you want to enroll.
+
+**Already running Desktop chats** remain owned by their Desktop server. The
+tested Desktop instances did not expose a supported profile-bound control
+socket. The separate process cannot steer or interrupt those live turns. The
+official [queue command](https://learn.chatgpt.com/docs/developer-commands#codex-queue)
+accepted an existing thread only in its owning profile during an isolated
+test, and [Desktop links](https://learn.chatgpt.com/docs/app/commands#chats)
+can prefill a draft without selecting a profile or submitting a turn.
 
 ### Web answer delivery in standalone chats
 

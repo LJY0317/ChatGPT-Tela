@@ -3,13 +3,11 @@ import { capturePrivateDiagnosticValue, emitDiagnosticEvent } from "@chatgpt-tel
 import { spawn } from "node:child_process";
 import type { CodexAppServerRpc } from "./app-server";
 
-/** Shared transport; each exported client below has an independent, exact-thread method scope. */
-async function connectScopedRpc(input: {
-  executable: string; codexHome: string; threadId?: string; signal?: AbortSignal; lifecycle?: boolean;
-  delegatedTitle?: boolean; metadataThreadIds?: readonly string[];
-}): Promise<CodexAppServerRpc> {
+export async function connectOfficialStdio(input: {
+  executable: string; codexHome: string; threadId?: string; signal?: AbortSignal; clientName: string;
+}) {
   input.signal?.throwIfAborted();
-  const metadataIds = input.metadataThreadIds ? new Set(input.metadataThreadIds) : undefined;
+  const listeners = new Set<(method: string, params: unknown) => void>();
   const child = spawn(input.executable, ["app-server", "--stdio"], {
     env: { ...process.env, CODEX_HOME: input.codexHome }, stdio: ["pipe", "pipe", "ignore"], windowsHide: true,
   });
@@ -36,7 +34,10 @@ async function connectScopedRpc(input: {
       if (!line) continue;
       try {
         const message = JSON.parse(line);
-        if (typeof message.method === "string") continue;
+        if (typeof message.method === "string") {
+          for (const notify of listeners) notify(message.method, message.params);
+          continue;
+        }
         const p = pending.get(message.id);
         if (!p) continue;
         pending.delete(message.id);
@@ -62,9 +63,25 @@ async function connectScopedRpc(input: {
   };
   const close = async () => { child.stdin.end(); await exited; };
   try {
-    await send("initialize", { clientInfo: { name: "tela-stored-history", version: "1" }, capabilities: { experimentalApi: true } }, input.signal);
+    await send("initialize", { clientInfo: { name: input.clientName, version: "1" }, capabilities: { experimentalApi: true } }, input.signal);
     child.stdin.write(JSON.stringify({ method: "initialized" }) + "\n");
   } catch (error) { await close(); throw error; }
+  return {
+    send, close, exited,
+    subscribe(notify: (method: string, params: unknown) => void) {
+      listeners.add(notify);
+      return () => { listeners.delete(notify); };
+    },
+  };
+}
+
+/** Each exported history client has an independent, exact-thread method scope. */
+async function connectScopedRpc(input: {
+  executable: string; codexHome: string; threadId?: string; signal?: AbortSignal; lifecycle?: boolean;
+  delegatedTitle?: boolean; metadataThreadIds?: readonly string[];
+}): Promise<CodexAppServerRpc> {
+  const { send, close } = await connectOfficialStdio({ ...input, clientName: "tela-stored-history" });
+  const metadataIds = input.metadataThreadIds ? new Set(input.metadataThreadIds) : undefined;
   let leased = false;
   return { close, request(method, params, signal) {
     const p = (params ?? {}) as Record<string, unknown>;
