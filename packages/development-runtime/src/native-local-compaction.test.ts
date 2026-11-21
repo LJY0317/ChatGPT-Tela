@@ -27,6 +27,53 @@ test('local compaction retains full source, returns an ordinary summary and coal
  const out=await router(request(body()));expect((await out?.json()).output[0]).toMatchObject({type:'message',role:'assistant',content:[{type:'output_text',text:'Readable Native summary',annotations:[]}]});
 });
 
+test("the app-owned profile answers an official compaction through its stored head and one bounded summary", async () => {
+  let head = "turn";
+  let reads = 0;
+  let summaries = 0;
+  const router = createNativeLocalCompactionRouter({
+    suppliedHistory: {
+      async verifyHead(id) {
+        expect(id.threadId).toBe("thread");
+        if (id.turnId !== head) throw Error("Stored head changed");
+      },
+      async readSeed(id, bytes) {
+        reads++;
+        expect(bytes).toBeLessThan(100_000);
+        return { kind: "native-visible-prefix", threadId: id.threadId, currentTurnId: id.turnId,
+          digest: "fixture-digest", contentDigest: "fixture-content", sourceItemCount: 0,
+          content: JSON.stringify({ type: "tela_native_visible_prefix_v1", deferredHistory: { scope: "prior-native-history" }, items: [] }),
+          inlineAssets: [], references: [], localImageCandidates: [] };
+      },
+      async readPage() { throw Error("A bounded compaction needs no extra originals"); },
+    },
+    async summarize(source) {
+      summaries++;
+      expect(source.physicalContext.segments.map(item => item.content).join(" "))
+        .toContain("do not execute tools.");
+      expect(source.physicalContext.segments.map(item => item.content).join(" "))
+        .not.toContain("first-party-opaque");
+      return "The handoff is ready.";
+    },
+  });
+  const wire = body({ input: [
+    { type: "compaction", encrypted_content: "first-party-opaque" },
+    { type: "message", role: "user", content: "Keep the exact next request." },
+    { type: "compaction_trigger" },
+  ] });
+  expect(await router(request(body()))).toBeUndefined();
+  const [first, retry] = await Promise.all([router(request(wire)), router(request(wire))]);
+  expect(first?.status).toBe(200);
+  const encoded = await first!.json() as { output: { encrypted_content: string }[] };
+  expect(decodeTelaCompactionSummary(encoded.output[0]!.encrypted_content)).toContain("The handoff is ready.");
+  expect(await retry!.json()).toEqual(encoded);
+  expect(summaries).toBe(1);
+  expect(reads).toBe(1);
+  head = "another-turn";
+  expect((await router(request(wire)))?.status).toBe(400);
+  expect(summaries).toBe(1);
+});
+
 test('local compaction accepts a durable Native reasoning configuration update in source order',async()=>{
  const update={type:'configuration_update',reasoning:{effort:'high'}};
  const router=createNativeLocalCompactionRouter({source:{currentTurn:async()=>canonical},summarize:async source=>{

@@ -1,3 +1,4 @@
+import { prepareWebExecutionMessage } from "./semantic-provider";
 import { formatWebPhysicalContext } from "./semantic-provider";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -3687,3 +3688,37 @@ test("delivery timeout stays bounded when the final browser observation hangs", 
     expect(driver.activated).toHaveLength(1);
   } finally { await surface.host.close(); }
 }, 7_000);
+
+test("a large tool-enabled turn transmits exact context in the current attachment and keeps its receipt short", async () => {
+  const previous = "Very long historical evidence. ".repeat(8_000);
+  const context = {
+    mode: "full" as const, headRevisionId: "active", activeRequestRevisionId: "active", logicalTokens: 60_000,
+    transferTokens: 60_000, segments: [
+      { type: "revision" as const, revisionId: "past", kind: "assistant" as const, content: previous },
+      { type: "revision" as const, revisionId: "active", kind: "user" as const, content: "Look up the original fact." },
+    ],
+  };
+  const message = prepareWebExecutionMessage(context, undefined, [], { nativeHistoryControl: "scoped-reader" });
+  expect(message.text.length).toBeLessThan(8_000);
+  expect(message.text).toMatch(/^\[Tela request [A-Za-z0-9_-]{43}\]\n/);
+  expect(message.text).toContain('"delivery":"with-request"');
+  expect(message.text).toContain('"history_control":"scoped-reader"');
+  expect(message.text).toContain("Look up the original fact.");
+  expect(message.text).not.toContain(previous);
+  if (!("contextFile" in message)) throw Error("Expected one context attachment");
+  expect(JSON.parse(message.contextFile.bytes.toString("utf8")).segments).toEqual(context.segments);
+  const driver = new FixtureDriver(fixture("ready-new-chat"));
+  const surface = await leaseFor(driver);
+  try {
+    const provider = new ChatGptSemanticProvider({ connectorName: "ChatGPT Tela" });
+    const pending = provider.submitTurn(surface.lease, { ...request(), physicalContext: context,
+      chatTools: { nativeHistoryControl: "scoped-reader" } });
+    while (driver.activated.length === 0) await Promise.resolve();
+    driver.queued.push(acceptedSnapshot(driver));
+    expect((await pending).state).toBe("proven");
+    expect(driver.connectorSelections).toEqual(["ChatGPT Tela"]);
+    expect(driver.appendedTexts.map(text => text.trimStart())).toEqual([message.text]);
+    expect(driver.attachedFiles).toEqual([message.contextFile.name]);
+    expect(driver.activated).toHaveLength(1);
+  } finally { await surface.host.close(); }
+});

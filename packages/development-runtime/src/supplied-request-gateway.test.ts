@@ -46,6 +46,7 @@ test("explicit update interruption drains owned Web work without resubmitting or
 test("a current-turn attributed host result continues the exact retained page without becoming a user message", async () => {
   let reads = 0;
   const f = fixture({ suppliedHistory: {
+    async verifyHead() {},
     async readSeed(id) {
       reads++;
       return { kind: "native-visible-prefix", threadId: id.threadId, currentTurnId: id.turnId,
@@ -829,6 +830,7 @@ test("supplied opaque bootstrap exposes only scoped history, retires its control
   const wait = new Promise<void>(r => { release = r; });
   const accepted = new Promise<void>(r => { submitted = r; });
   const source: NonNullable<Parameters<typeof createSuppliedRequestGateway>[0]["suppliedHistory"]> = {
+    async verifyHead() {},
     async readSeed(id) {
       reads++;
       return { kind: "native-visible-prefix", threadId: id.threadId, currentTurnId: id.turnId,

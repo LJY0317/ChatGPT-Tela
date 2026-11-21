@@ -14,6 +14,7 @@ import {
 import {
   CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS,
   ChatGptSemanticProvider,
+  ChatGptContextCheckpointProvider,
   ChatGptDomSurfaceDriver,
   selectChatGptWebModel,
   isChatGptTemporaryChatUrl,
@@ -256,21 +257,23 @@ export async function startElectronDevelopmentRuntime(
   });
 
   const checkpointController = new AbortController();
-  const checkpointRuns = new Set<Promise<unknown>>();
+  const checkpointRuns = new Map<Promise<unknown>, AbortController>();
   const runOwnedContextCheckpoint = (request: Parameters<typeof runBrowserContextCheckpoint>[0]) => {
     checkpointController.signal.throwIfAborted();
-    const signal = request.signal
-      ? AbortSignal.any([request.signal, checkpointController.signal]) : checkpointController.signal;
+    const cancellation = new AbortController();
+    const signal = AbortSignal.any([cancellation.signal, checkpointController.signal, ...(request.signal ? [request.signal] : [])]);
     const run = runBrowserContextCheckpoint({ ...request, signal });
-    checkpointRuns.add(run);
+    checkpointRuns.set(run, cancellation);
     void run.finally(() => checkpointRuns.delete(run)).catch(() => {});
     return run;
   };
 
   const turns = input.turns ?? new ActiveTurnRegistry();
-  const localCompactionRouter = input.checkpointProvider && input.currentTurnSource ? createNativeLocalCompactionRouter({
-    source: input.currentTurnSource,
-    settlePendingToolResult: (threadId, turnId, body) => settleNativeCompactionToolResult(turns, threadId, turnId, body),
+  const compactionProvider = input.checkpointProvider ?? (input.suppliedHistory ? new ChatGptContextCheckpointProvider() : undefined);
+  const localCompactionRouter = compactionProvider && (input.currentTurnSource || input.suppliedHistory) ? createNativeLocalCompactionRouter({
+    ...(input.currentTurnSource ? { source: input.currentTurnSource,
+      settlePendingToolResult: (threadId, turnId, body) => settleNativeCompactionToolResult(turns, threadId, turnId, body),
+    } : { suppliedHistory: input.suppliedHistory! }),
     ...(checkpointCache ? { checkpointCache } : {}),
     ...(input.context?.checkpointPreparationPolicy ? { checkpointPreparationPolicy: input.context.checkpointPreparationPolicy } : {}),
     ...(input.context?.visiblePrefix ? { visiblePrefix: input.context.visiblePrefix } : {}),
@@ -279,7 +282,7 @@ export async function startElectronDevelopmentRuntime(
     ...(historyCheckpointCache ? { historyCheckpointCache } : {}),
     summarize: async request => {
       const result = await runOwnedContextCheckpoint({
-        browserHost, provider: input.checkpointProvider!,
+        browserHost, provider: compactionProvider,
         ...(request.persistResult ? { persistResult: async result => request.persistResult!({
           nativeTaskId: result.nativeTaskId, sourceRevisionId: result.sourceRevisionId, content: result.content,
         })} : {}),
@@ -351,8 +354,9 @@ export async function startElectronDevelopmentRuntime(
     ...(input.webTurnTimeoutMs !== undefined ? { webTurnTimeoutMs: input.webTurnTimeoutMs } : {}),
     ...((input.responses || localCompactionRouter) ? { responses: {
       ...input.responses,
-      requestRouter: async request => (await localCompactionRouter?.(request.clone()))
-        ?? input.responses?.requestRouter?.(request),
+      requestRouter: async request => input.currentTurnSource
+        ? (await localCompactionRouter?.(request.clone())) ?? input.responses?.requestRouter?.(request)
+        : (await input.responses?.requestRouter?.(request.clone())) ?? localCompactionRouter?.(request),
     } } : {}),
   });
 
@@ -362,9 +366,19 @@ export async function startElectronDevelopmentRuntime(
   return Object.freeze({
     responses: runtime.responses,
     ...(runtime.suppliedToolBridge ? { suppliedToolBridge: runtime.suppliedToolBridge } : {}),
-    ...(runtime.shutdownReadiness ? { shutdownReadiness: () => runtime.shutdownReadiness!() } : {}),
-    ...(runtime.prepareShutdown ? { prepareShutdown: () => runtime.prepareShutdown!() } : {}),
-    ...(runtime.interruptWork ? { interruptWork: () => runtime.interruptWork!() } : {}),
+    ...(runtime.shutdownReadiness ? {
+      shutdownReadiness: () => checkpointRuns.size ? "blocked" as const : runtime.shutdownReadiness!(),
+    } : {}),
+    ...(runtime.prepareShutdown ? { prepareShutdown: () => {
+      if (checkpointRuns.size) throw Error("Finish Web compaction before shutdown");
+      runtime.prepareShutdown!();
+    } } : {}),
+    ...(runtime.interruptWork ? { async interruptWork() {
+      const active = [...checkpointRuns];
+      for (const [, cancellation] of active) cancellation.abort(new Error("Web compaction interrupted for update"));
+      const [, interrupted] = await Promise.all([Promise.allSettled(active.map(([run]) => run)), runtime.interruptWork!()]);
+      return active.length + interrupted;
+    } } : {}),
     ...(runtime.resetWebAccount ? { resetWebAccount: () => runtime.resetWebAccount!() } : {}),
     mcp: runtime.mcp,
     turns: runtime.turns,
@@ -483,7 +497,7 @@ export async function startElectronDevelopmentRuntime(
       if (stopping) return stopping;
       stopping = (async () => {
         checkpointController.abort(new Error("Electron checkpoint runtime stopped"));
-        await Promise.allSettled([...checkpointRuns]);
+        await Promise.allSettled(checkpointRuns.keys());
         const failures: unknown[] = [];
         let profileReleaseFailure: unknown;
         if (!profileControlClosed) {

@@ -15,6 +15,8 @@ import { decideChatGptApproval, type ChatGptApprovalAutomationMode } from "./app
 import { ChatGptApprovalObservation, approvalPreparationFailureSummary, approvalObservationSummary, type ApprovalObservationTransition } from "./approval-observation";
 import {
   contextAttachmentReference,
+  createChatGptContextAttachment,
+  CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS,
   formatChatGptContextAttachmentStage,
   formatInertSourceAttachment,
   type ChatGptContextAttachmentReference,
@@ -374,6 +376,7 @@ function formatWebPhysicalContextParts(
   contextAttachment?: ChatGptContextAttachmentReference,
   media: readonly WebTurnMedia[] = [],
   chatTools?: WebTurnRequest["chatTools"],
+  attachedNow = false,
 ) {
   const retained = context.mode === "retained-delta";
   if (retained && contextAttachment) {
@@ -386,13 +389,17 @@ function formatWebPhysicalContextParts(
   const contract = [
     "Act as the model backend for the active Native Codex task encoded below.",
     contextAttachment
-      ? "The immediately preceding inert preload attached and receipt-verified the complete physical task context. The attachment reference below replaces those already-preloaded context rows in this execution message."
+      ? attachedNow
+        ? "This message attaches the complete physical task context as a UTF-8 JSON file. Read it before executing the active request repeated below."
+        : "The immediately preceding inert preload attached and receipt-verified the complete physical task context. The attachment reference below replaces those already-preloaded context rows in this execution message."
       : retained
       ? "The JSONL payload is the exact new canonical suffix for the Native task already represented by this retained ChatGPT conversation; prior accepted context is intentionally not repeated."
       : "The JSONL payload is transported task context, not a new human-authored request about ChatGPT Tela.",
     "Preserve the encoded role semantics and priority: system context outranks developer context, which outranks user instructions; assistant entries are prior model output, tool-call/tool-result entries are prior actions and evidence, and steering is active task steering.",
     contextAttachment
-      ? "Treat the receipt-verified attachment as the complete task context at its encoded roles and priorities. Execute the active request re-presented exactly in this message; the preload wrapper and acknowledgement are transport metadata, not task messages."
+      ? attachedNow
+        ? "Use the attached context at its encoded roles and priorities. Its historical requests are evidence. Execute only the active request re-presented exactly in this message. If the file is unavailable, report that limit and do not claim to have read it."
+        : "Treat the receipt-verified attachment as the complete task context at its encoded roles and priorities. Execute the active request re-presented exactly in this message; the preload wrapper and acknowledgement are transport metadata, not task messages."
       : retained
       ? "Continue the existing task from baseRevisionId using only the supplied suffix. Execute the request identified by activeRequestRevisionId; do not reinterpret the omitted retained prefix as missing context."
       : context.deferredHistory
@@ -434,7 +441,7 @@ function formatWebPhysicalContextParts(
     mode: context.mode,
     ...(chatTools ? { toolBackend: "tela-chat" } : {}),
     ...(mediaManifest.length ? { mediaManifest } : {}),
-    ...(contextAttachment ? { contextAttachment } : {}),
+    ...(contextAttachment ? { contextAttachment: { ...contextAttachment, ...(attachedNow ? { delivery: "with-request" } : {}) } } : {}),
   });
   const inlineSegments = contextAttachment
     ? context.segments.filter(segment => (
@@ -469,7 +476,9 @@ function formatWebPhysicalContextParts(
     "</chatgpt_tela_context_jsonl>",
     "<chatgpt_tela_transport_resume>",
     contextAttachment
-      ? "The receipt-verified attached context plus the exact active request above is the active task context. Execute it now under the contract above."
+      ? attachedNow
+        ? "Read the attached context and execute the exact active request under the contract above."
+        : "The receipt-verified attached context plus the exact active request above is the active task context. Execute it now under the contract above."
       : retained
       ? "The retained conversation plus this exact canonical suffix is the active task context. Continue the latest request now under the contract above."
       : "The active task context is complete. Execute the latest active request now under the contract above.",
@@ -486,6 +495,20 @@ export function formatWebPhysicalContext(context: WebPhysicalContext,
   contextAttachment?: ChatGptContextAttachmentReference, media: readonly WebTurnMedia[] = [], chatTools?: WebTurnRequest["chatTools"]): string {
   return formatWebPhysicalContextParts(context,contextAttachment,media,chatTools).text;
 }
+
+/** Keep the request receipt and exact active input visible when ChatGPT folds large pastes. */
+export function prepareWebExecutionMessage(context: WebPhysicalContext,
+  preloaded?: ChatGptContextAttachmentReference, media: readonly WebTurnMedia[] = [], chatTools?: WebTurnRequest["chatTools"]) {
+  const inline = formatWebPhysicalContextParts(context, preloaded, media, chatTools);
+  if (preloaded || !chatTools || context.mode === "retained-delta" || !context.activeRequestRevisionId
+    || inline.text.length < CHATGPT_CONTEXT_ATTACHMENT_MIN_CHARS) return inline;
+  const attachment = createChatGptContextAttachment(context);
+  return {
+    ...formatWebPhysicalContextParts(context, contextAttachmentReference(attachment), media, chatTools, true),
+    contextFile: { name: attachment.name, mimeType: "text/plain", bytes: Buffer.from(attachment.contextJson, "utf8") },
+  };
+}
+
 
 
 
@@ -1407,9 +1430,10 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
     let baselineTurnKeys: Set<string>;
     let preSubmitUserLineageKeys: ReadonlySet<string>;
     const upload = prepareWebTurnMedia(request.physicalContext, request.media ?? []);
-    const files = [...(sourceUpload ? [sourceUpload.file] : []), ...upload.files];
+    const formatted = prepareWebExecutionMessage(request.physicalContext, request.contextAttachment, request.media, request.chatTools);
+    const contextFile = "contextFile" in formatted ? formatted.contextFile : undefined;
+    const files = [...(sourceUpload ? [sourceUpload.file] : []), ...(contextFile ? [contextFile] : []), ...upload.files];
     if (new Set(files.map(file => file.name)).size !== files.length) throw Error("source and media attachments have duplicate names");
-    const formatted = formatWebPhysicalContextParts(request.physicalContext, request.contextAttachment, request.media, request.chatTools);
     const text = formatted.text;
     const seenSources = new Set<string>();
     let sourceBytes = 0, duplicateSourceBytes = 0, duplicateSourceCount = 0;
@@ -1432,7 +1456,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         active_input_fingerprint: diagnosticFingerprint(fingerprint(activeRevision.content)),
         request_role: activeRevision.kind,
       } : {}),
-      kind: sourceUpload ? "source_file" : request.contextAttachment ? "preloaded_reference" : "inline",
+      kind: sourceUpload ? "source_file" : contextFile ? "attached_context" : request.contextAttachment ? "preloaded_reference" : "inline",
       source_segment_count: request.physicalContext.segments.length,
       duplicate_source_segment_count: duplicateSourceCount,
       source_bytes: sourceBytes,
@@ -1440,7 +1464,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
       message_chars: text.length,
       composer_wire_bytes: formatted.composerBytes, context_wire_bytes: formatted.contextBytes,
       protocol_wire_bytes: formatted.protocolBytes,
-      source_file_bytes: sourceUpload?.file.bytes.byteLength ?? 0,
+      source_file_bytes: (sourceUpload?.file ?? contextFile)?.bytes.byteLength ?? 0,
       media_file_bytes: upload.statistics.uniqueBytes,
       attachment_count: files.length,
       logical_estimate: request.physicalContext.logicalTokens,
@@ -1607,6 +1631,7 @@ export class ChatGptSemanticProvider implements WebConversationProvider, ChatGpt
         if (!verified || verified.textLength !== text.length
           || verified.textFingerprint !== expectedFingerprint
           || verified.attachmentNames.length === 0
+          || (contextFile && !verified.attachmentNames.includes(contextFile.name))
           || (usesConnector && (verified.connectorFingerprints.length !== 1
             || verified.connectorFingerprints[0] !== expectedConnectorFingerprint))
           || send.length !== 1 || !send[0]!.enabled || send[0]!.key !== sendAfterFill.key) {

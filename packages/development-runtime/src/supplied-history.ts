@@ -4,6 +4,7 @@ import { boundedNativeHistoryReadback, projectNativeHistoryIndex, type HistoryRe
 
 export interface SuppliedHistoryIdentity { readonly threadId: string; readonly turnId: string }
 export interface SuppliedHistorySource {
+  verifyHead(identity: SuppliedHistoryIdentity, signal: AbortSignal): Promise<void>;
   readSeed(identity: SuppliedHistoryIdentity, bodyBytes: number, signal: AbortSignal): Promise<NativeVisibleHistorySnapshot>;
   readPage(identity: SuppliedHistoryIdentity, selection: HistoryReadSelection, signal: AbortSignal): Promise<HistoryReadResult>;
 }
@@ -14,10 +15,18 @@ export function createSuppliedHistorySource(connect: (threadId: string, signal: 
     const { thread } = await rpc.request("thread/read", { threadId: id.threadId, includeTurns: false }, signal) as any;
     if (thread?.id !== id.threadId || thread.historyMode !== "paginated") throw new NativeHistoryBootstrapRequired();
     const page = await rpc.request("thread/turns/list", { threadId: id.threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" }, signal) as any;
-    if (page.data?.[0]?.id !== id.turnId) throw Error("Stored history head no longer matches the supplied request");
+    const head = Array.isArray(page.data) && page.data.length === 1 ? page.data[0] : undefined;
+    if (head?.id !== id.turnId || head.itemsView !== "notLoaded" || !Array.isArray(head.items) || head.items.length) {
+      throw Error("Stored history head no longer matches the supplied request");
+    }
     return JSON.stringify([thread.id, thread.updatedAt, thread.cwd, thread.environments, thread.source, thread.parentThreadId]);
   };
   return {
+    async verifyHead(id, signal) {
+      const rpc = await connect(id.threadId, signal);
+      try { await verify(rpc, id, signal); }
+      finally { await rpc.close(); }
+    },
     async readSeed(id, bytes, signal) {
       try {
         return await readStoredNativeHistory(s => connect(id.threadId, s ?? signal), id.threadId, id.turnId, signal, bytes);

@@ -1,7 +1,7 @@
 import { capturePrivateDiagnosticValue, diagnosticDurationMs, diagnosticFingerprint, diagnosticFailureClass, emitDiagnosticEvent, withDiagnosticContext } from "@chatgpt-tela/core";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  bindNativeCompactionRequest, historicalTurnAuthority,
+  bindNativeCompactionRequest, historicalTurnAuthority, parseNativeCompactionClaim,
   MAX_TELA_COMPACTION_SUMMARY_BYTES,
   NativeHistoryBootstrapRequired, NativeBindingError, type NativeBindingReason, type CanonicalCurrentTurnSource,
 } from "@chatgpt-tela/codex";
@@ -19,6 +19,7 @@ import { nativeRequestPrefixSnapshot, nativeCompactionPhysicalContext, selectNat
 import { webWorkingContextPolicy } from "./web-working-context-policy";
 import type { ContextCheckpointCache } from "./context-cache";
 import { prepareDeferredNativeHistory } from "./native-history-seed";
+import type { SuppliedHistorySource } from "./supplied-history";
 
 type RecordValue = Record<string, unknown>;
 function record(value: unknown): RecordValue | undefined {
@@ -51,7 +52,8 @@ function digest(value: unknown): string {
 /** Shared summarization for Native text and standard Responses compaction-v2 transports. */
 export function createNativeLocalCompactionRouter(input: NativeContinuitySources & {
   readonly checkpointCache?: ContextCheckpointCache;
-  readonly source: CanonicalCurrentTurnSource;
+  readonly source?: CanonicalCurrentTurnSource;
+  readonly suppliedHistory?: SuppliedHistorySource;
   /** Settle only an exact pending Native tool result before local history replacement. */
   readonly settlePendingToolResult?: (threadId: string, turnId: string, body: unknown) => void;
   readonly summarize: (request: {
@@ -80,6 +82,10 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
     catch { return undefined; }
     if (metadata?.request_kind !== "compaction") return undefined;
     const remote = Array.isArray(body.input) && record(body.input.at(-1))?.type === "compaction_trigger";
+    const liveSource = input.source;
+    const storedSource = liveSource ? undefined : input.suppliedHistory;
+    // The app-owned route supports only the official tool-free summary exchange.
+    if (!liveSource && (!storedSource || !remote)) return undefined;
     if (remote) {
       // Standard Codex v2 includes its tool declarations. They are not execution
       // authority for a summary operation; the existing inert compaction binder
@@ -100,7 +106,14 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
       const browserModel = nativeRequestBrowserModelRoute(body);
       if (!browserModel) return undefined;
       phase = "binding";
-      const { claim, evidence: activeOwner } = await bindNativeCompactionRequest(body, input.source);
+      const binding = liveSource ? await bindNativeCompactionRequest(body, liveSource) : undefined;
+      const claim = binding?.claim ?? parseNativeCompactionClaim(body);
+      const activeOwner = binding?.evidence;
+      const verifyOwner = async () => {
+        if (liveSource) await bindNativeCompactionRequest(body, liveSource);
+        else await storedSource!.verifyHead(claim, AbortSignal.timeout(30_000));
+      };
+      if (storedSource) await verifyOwner();
       scope = diagnosticFingerprint(claim.threadId);
       turn = diagnosticFingerprint(claim.turnId);
       phase = "identity";
@@ -108,9 +121,9 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
       const sourceDigest = digest({ source: nativeRequestContentSource(body), browserModel,
         lineage: { threadId: claim.threadId, turnId: claim.turnId, parentThreadId: claim.parentThreadId,
           agentName: claim.agentName, subagentKind: claim.subagentKind },
-        environment: { cwd: activeOwner.cwd, workspaceRoots: activeOwner.workspaceRoots, sandbox: activeOwner.sandbox,
+        ...(activeOwner ? { environment: { cwd: activeOwner.cwd, workspaceRoots: activeOwner.workspaceRoots, sandbox: activeOwner.sandbox,
           environmentSourceTurnId: activeOwner.environmentSourceTurnId, ingressMedia: activeOwner.ingressMedia,
-          nativeGoal: activeOwner.nativeGoal, nativeGoalState: activeOwner.nativeGoalState } });
+          nativeGoal: activeOwner.nativeGoal, nativeGoalState: activeOwner.nativeGoalState } } : {}) });
       const wireDigest = digest(body);
       let operation = operations.get(key);
       if (operation) {
@@ -135,11 +148,11 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
           input.checkpointPreparationPolicy);
         const result = withDiagnosticContext({ operation_fingerprint: diagnosticFingerprint(id), scope_fingerprint: scope, turn_fingerprint: turn }, async () => {
           let operationPhase: CompactionPhase = "watch";
-          let watch: Awaited<ReturnType<NonNullable<typeof input.source.watchTurn>>>;
+          let watch: Awaited<ReturnType<NonNullable<CanonicalCurrentTurnSource["watchTurn"]>>>;
           let primaryFailure = false;
           let summary: string;
           try {
-            watch = await input.source.watchTurn?.(claim.threadId, claim.turnId);
+            watch = await liveSource?.watchTurn?.(claim.threadId, claim.turnId);
             if (watch?.signal.aborted) throw new CompactionFailure(operationPhase, "owner_cancelled");
             operationPhase = "continuity";
             const policy = webWorkingContextPolicy(browserModel.effort, input.checkpointPreparationPolicy);
@@ -149,8 +162,8 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
                 ...(preparation ? { signal: preparation.signal } : {}) }),
             });
             const opaque = nativeOpaqueCompaction(body);
-            const hasHistoryReadback = !!(input.source.readHistoryPage && input.source.readHistoryIndex);
-            const continuity = await resolveNativeContextContinuity({
+            const hasHistoryReadback = !!storedSource || !!(liveSource?.readHistoryPage && liveSource?.readHistoryIndex);
+            const continuity = activeOwner ? await resolveNativeContextContinuity({
               threadId: claim.threadId, currentTurnId: claim.turnId,
               authority: historicalTurnAuthority(activeOwner),
               ...(hasHistoryReadback ? { historyBodyBudgetBytes: policy.firstMessageTargetTokens * 4 } : {}),
@@ -161,14 +174,22 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               ...(watch ? { preparation: {
                 signal: watch.signal, onProgress: (_summary: string) => {},
               } } : {}),
-            });
-            if (activeOwner.ingressMedia && activeOwner.ingressMedia.turnId !== claim.turnId) {
+            }) : undefined;
+            const stored = storedSource && opaque.count > 0
+              ? await storedSource.readSeed(claim, policy.firstMessageTargetTokens * 4, AbortSignal.timeout(30_000))
+              : undefined;
+            if (stored && (stored.threadId !== claim.threadId || stored.currentTurnId !== claim.turnId)) {
+              throw new CompactionFailure("continuity", "owner_changed");
+            }
+            if (activeOwner?.ingressMedia && activeOwner.ingressMedia.turnId !== claim.turnId) {
               throw new Error("Native ingress media belongs to a different current turn");
             }
             operationPhase = "projection";
-            let projection = projectNativeRequestContext(claim.threadId, body, continuity.visibleHistory,
-              continuity.inlineHistoryAssets, continuity.historyReferences, activeOwner.ingressMedia,
-              activeOwner.nativeGoal, activeOwner.nativeGoalState);
+            const project = (readable?: ReadonlySet<string>) => projectNativeRequestContext(claim.threadId, body,
+              continuity?.visibleHistory ?? stored?.content, continuity?.inlineHistoryAssets ?? stored?.inlineAssets,
+              continuity?.historyReferences ?? stored?.references, activeOwner?.ingressMedia, activeOwner?.nativeGoal,
+              activeOwner?.nativeGoalState, readable, claim.turnId);
+            let projection = project();
             if (projection.deferredHistory && !hasHistoryReadback) throw new NativeHistoryBootstrapRequired();
             const tokens = projection.revisions.reduce((sum, item) => sum + item.revision.estimatedTokens, 0);
             emitDiagnosticEvent("chatgpt_tela_work", "compaction_started", { logical_estimate: tokens, revision_count: projection.revisions.length });
@@ -197,21 +218,28 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
               const readable = new Set<string>();
               indexRequested = wanted.size;
               let cursor: string | undefined;
+              const indexSignal = watch?.signal ?? AbortSignal.timeout(30_000);
               while (wanted.size) {
-                const page = await input.source.readHistoryIndex!(activeOwner, { ...(cursor ? { cursor } : {}) },
-                  watch?.signal ?? new AbortController().signal);
-                indexPages++;
-                for (const item of page.data) {
-                  if (wanted.delete(item.turnId) && ["completed", "failed", "interrupted"].includes(item.status)
-                    && item.turnId !== claim.turnId) readable.add(item.turnId);
+                const selection = cursor === undefined ? {} : { cursor };
+                let data: readonly { turnId: string; status: string }[];
+                let next: string | null | undefined;
+                if (storedSource) {
+                  const page = await storedSource.readPage(claim, selection, indexSignal);
+                  if (page.type !== "native_history_index") throw new NativeHistoryBootstrapRequired();
+                  data = page.data; next = page.continuation?.cursor;
+                } else {
+                  const page = await liveSource!.readHistoryIndex!(activeOwner!, selection, indexSignal);
+                  data = page.data; next = page.nextCursor;
                 }
-                if (!page.nextCursor) break;
-                cursor = page.nextCursor;
+                indexPages++;
+                for (const item of data) {
+                  if (wanted.delete(item.turnId) && ["completed", "failed", "interrupted"].includes(item.status)) readable.add(item.turnId);
+                }
+                if (!next || next === cursor) break;
+                cursor = next;
               }
               indexReadable = readable.size;
-              projection = projectNativeRequestContext(claim.threadId, body, continuity.visibleHistory,
-                continuity.inlineHistoryAssets, continuity.historyReferences, activeOwner.ingressMedia,
-                activeOwner.nativeGoal, activeOwner.nativeGoalState, readable);
+              projection = project(readable);
               const seed = prepareDeferredNativeHistory(projection, policy, policy.checkpointSourceTokens);
               if (seed) {
                 physicalContext = bindNativePhysicalEvidence(projection, seed.physicalContext);
@@ -287,7 +315,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
                 producer, effort: browserModel.effort, browserModel, preparationBudget,
                 confirmSource: async () => {
                   if (watch?.signal.aborted) throw new CompactionFailure("summary", "owner_cancelled");
-                  await bindNativeCompactionRequest(body, input.source);
+                  await verifyOwner();
                   return source;
                 },
                 ...(watch ? { signal: watch.signal, preparation: {
@@ -335,7 +363,7 @@ export function createNativeLocalCompactionRouter(input: NativeContinuitySources
       const summary = await operation.result;
       phase = "delivery";
       // Every waiter proves ownership at delivery, including coalesced and cached retries.
-      await bindNativeCompactionRequest(body, input.source);
+      await verifyOwner();
       return nativeCompactionSummaryResponse({
         summary, operationId: operation.id, model: body.model as string,
         stream: body.stream === true,

@@ -3,7 +3,7 @@ import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-hos
 import { capturePrivateDiagnosticValue, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
   contextAttachmentReference,
-  formatWebPhysicalContext,
+  prepareWebExecutionMessage,
   requireProven,
   type ChatGptContextAttachment,
   type ChatGptWebPhysicalLimits,
@@ -55,12 +55,12 @@ export interface BrowserTurnSurfaceRunInput extends Omit<BrowserTurnRunInput, "b
 export function assertWebMessageFitsComposer(input: Pick<BrowserTurnRunInput,
   "physicalContext" | "physicalLimits" | "contextAttachment" | "media" | "chatTools">): void {
   if (!input.physicalLimits) return;
-  const messageChars = formatWebPhysicalContext(
+  const messageChars = prepareWebExecutionMessage(
     input.physicalContext,
     input.contextAttachment ? contextAttachmentReference(input.contextAttachment) : undefined,
     input.media,
     input.chatTools,
-  ).length;
+  ).text.length;
   if (messageChars > input.physicalLimits.composerCharLimit) {
     emitDiagnosticEvent("chatgpt_tela_codex", "native_context_fit_rejected", {
       reason_class: "composer_window_exceeded", phase: "composer_preflight",

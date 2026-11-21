@@ -119,6 +119,23 @@ and any preparation cost separately. Retired private-provider conversations are
 a different compatibility issue: preserve useful results and continue unfinished
 work in a supported conversation without rewriting the old provider record.
 
+## Large first-turn transport
+
+After the official engine's first Native compaction, it can request another
+compaction using the selected Web model. Tela handles the standard
+`compaction_trigger` exchange using the existing bounded, tool-free checkpoint
+path. The profile's stored reader verifies the current head before the request
+runs and before the summary is delivered. The official engine remains the
+history owner and commits the returned checkpoint through its standard response
+flow.
+
+An oversized inline Web seed can be collapsed and lose its rendered request
+anchor during hydration. A large, tool-enabled fresh turn now attaches the
+exact physical context to the execution message itself. The request receipt,
+active revision and tool controls stay inline. The renderer must confirm the
+attachment before Send. One execution message carries both, and the usual
+answer-ownership checks still apply.
+
 ## Host-delivered follow-ups
 
 The installed diagnostic trial identified a retained-context miss for an input
