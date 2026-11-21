@@ -2091,8 +2091,11 @@ function composer(raw: RawComposer): ChatGptComposerObservation {
 
 function turn(raw: RawTurn, privateCapture = false): ChatGptTurnObservation {
   const anchor = raw.lineageAnchor ? fingerprint(raw.lineageAnchor) : undefined;
-  const foldedRequestDigest = raw.role === "user" && raw.userPayloadProbe?.author_collapsed_count === 1
-    ? raw.contentText?.slice(0, 180).match(/\[Tela request ([A-Za-z0-9_-]{43})\]/)?.[1] : undefined;
+  const collapsedControls = raw.userPayloadProbe?.author_collapsed_count;
+  // Several folded controls can belong to the same authored message. Only
+  // its leading receipt is eligible; prose quoting a receipt is not proof.
+  const foldedRequestDigest = raw.role === "user" && typeof collapsedControls === "number" && collapsedControls > 0
+    ? raw.contentText?.match(/^\[Tela request ([A-Za-z0-9_-]{43})\]\r?\n/)?.[1] : undefined;
   const structure = (() => {
     try {
       const witness = raw.bodyStructure;

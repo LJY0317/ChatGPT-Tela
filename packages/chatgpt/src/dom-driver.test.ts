@@ -292,6 +292,17 @@ class RendererFixturePage extends FakePage {
 }
 
 describe("current ChatGPT DOM surface driver", () => {
+  test("one folded author can expose its leading request receipt with multiple collapsed controls", async () => {
+    const page = new FakePage();
+    const driver = new ChatGptDomSurfaceDriver(page);
+    const receipt = digest("original request");
+    const header = `[Tela request ${receipt}]`;
+    page.raw.turns[0] = { ...page.raw.turns[0], contentText: `${header}\nFolded author content`,
+      userPayloadProbe: { author_collapsed_count: 2 } };
+    expect((await driver.observe()).turns[0]?.foldedRequestDigest).toBe(receipt);
+    page.raw.turns[0]!.contentText = `A quote:\n${header}\nFolded author content`;
+    expect((await driver.observe()).turns[0]?.foldedRequestDigest).toBeUndefined();
+  });
   test.each([false, true])("marker siblings expose only unique public progress, ambiguous=%s", async ambiguous => {
     const label=new FixtureElement({id:'public-label'}); label.innerText='Reviewing changes';
     const button=new FixtureElement({'aria-expanded':'true','aria-labelledby':'public-label'});
