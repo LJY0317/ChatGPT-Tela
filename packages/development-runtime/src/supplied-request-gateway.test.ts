@@ -19,7 +19,13 @@ const firstInput = [{ type: "message", role: "user", content: "Inspect A." }];
 test("explicit update interruption drains owned Web work without resubmitting or closing its browser", async () => {
   let started!: () => void;
   const entered = new Promise<void>(resolve => { started = resolve; });
-  const f = fixture({ wait: new Promise<void>(() => {}), onSubmit: started });
+  let stops = 0;
+  const f = fixture({ wait: new Promise<void>(() => {}), onSubmit: started, providerBehavior: {
+    async cancelTurn(_surface, handle) {
+      expect(handle.nativeTurnId).toBe("turn-1");
+      stops++;
+    },
+  } });
   const run = f.gateway.handle(request()).then(() => "completed", () => "interrupted");
   try {
     await entered;
@@ -30,6 +36,7 @@ test("explicit update interruption drains owned Web work without resubmitting or
     expect(f.submissions).toHaveLength(1);
     expect(f.closed).toBe(false);
     expect(await f.gateway.interruptWork()).toBe(0);
+    expect(stops).toBe(1);
     f.gateway.prepareShutdown();
   } finally { await f.gateway.close(); }
 });
@@ -156,7 +163,7 @@ test("replacing and closing Web operations finish diagnostics without a response
 });
 
 function fixture(options: { wait?: Promise<void>; onSubmit?: () => void; failure?: Error; planner?: ReturnType<typeof createNativeRequestDevelopmentWebTurnPlanner>;
-  providerBehavior?: Partial<Pick<WebConversationProvider, "armToolContinuation" | "waitForTurnEvent">>;
+  providerBehavior?: Partial<Pick<WebConversationProvider, "armToolContinuation" | "waitForTurnEvent" | "cancelTurn">>;
   onWebChild?: Parameters<typeof createSuppliedRequestGateway>[0]["onWebChild"];
   suppliedHistory?: Parameters<typeof createSuppliedRequestGateway>[0]["suppliedHistory"];
   completedResults?: Parameters<typeof createSuppliedRequestGateway>[0]["completedResults"] } = {}) {
@@ -335,12 +342,13 @@ test("a recorded Web send without a final cannot submit again after restart", as
 });
 
 test("unproven Goal result handoff settles the Web operation and rejects an exact replay", async () => {
-  let handoffs = 0;
+  let handoffs = 0, stops = 0;
   let toolResult: Promise<unknown> | undefined;
   let capability = "";
   const f = fixture({
     onSubmit() { capability = f.submissions[0]!.chatTools!.nativeGoalControl!; },
     providerBehavior: {
+      async cancelTurn() { stops++; },
       async armToolContinuation() {
         handoffs++;
         return { state: "ambiguous", candidates: [], evidence: ["surface changed before the handoff"] };
@@ -382,6 +390,7 @@ test("unproven Goal result handoff settles the Web operation and rejects an exac
     expect(replay.status).toBe(400);
     expect(await replay.json()).toEqual(failure);
     expect(handoffs).toBe(1);
+    expect(stops).toBe(0);
     expect(f.submissions).toHaveLength(1);
     expect(f.released).toEqual([]);
   } finally { await f.gateway.close(); }

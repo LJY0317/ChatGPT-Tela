@@ -34,7 +34,10 @@ advertised `get_goal` / `update_goal` functions may cross the authenticated supp
 bridge. Their actual result determines Goal status; a final answer alone does not complete it.
 Synthetic Goal fixtures do not prove an account-backed same-turn Goal workflow.
 Original history readback requires its owner-bound source. HTTP disconnect alone neither
-cancels accepted work nor proves the current Native turn is idle.
+cancels accepted work nor proves the current Native turn is idle. A provider
+observation failure, local deadline or unproven tool handoff ends local delivery
+without pressing Web Stop. Only the owner interrupt path attempts Stop against
+the exact accepted Web turn.
 
 Bind an accepted Web operation to its actual send/answer lineage. Reuse compatible retained
 context; preserve canonical current instructions, requests, unresolved effects and source-bound

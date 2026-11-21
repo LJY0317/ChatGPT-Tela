@@ -186,10 +186,11 @@ describe("browser turn runner", () => {
     try {
       const fixture = provider(new EventQueue()); const channel = new RuntimeTurnChannel(binding());
       const released: string[] = [];
-      let secondaryObservations = 0;
+      let secondaryObservations = 0, remoteStops = 0;
       const wrapped: WebConversationProvider = { ...fixture,
         async waitForTurnEvent() { throw failure; },
         async observeTurn() { secondaryObservations++; throw new Error("redundant observation"); },
+        async cancelTurn() { remoteStops++; },
       };
       await expect(runBrowserTurn({ browserHost: browserHost(released), provider: wrapped, channel,
         nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext })).rejects.toBe(failure);
@@ -201,6 +202,7 @@ describe("browser turn runner", () => {
         reason_class: "unclassified", owner_aborted: false, tool_round_count: 0 });
       expect(text).not.toContain(failure.message);
       expect(secondaryObservations).toBe(0);
+      expect(remoteStops).toBe(0);
       expect(released).toEqual(["surface-1"]);
       expect(String(channel.phase)).toBe("indeterminate-after-acceptance");
     } finally {
@@ -525,7 +527,8 @@ describe("browser turn runner", () => {
       },
     };
     const run = runBrowserTurn({ browserHost: browserHost(released), provider: wrapped, channel,
-      nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext, signal: owner.signal });
+      nativeTaskId: "task-1", webEpochId: "epoch-1", physicalContext, signal: owner.signal,
+      canStopOwnedTurn: () => owner.signal.aborted });
     while (channel.phase !== "accepted") await Promise.resolve();
     owner.abort(failure);
     await expect(run).rejects.toBe(failure);

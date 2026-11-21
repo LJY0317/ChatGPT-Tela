@@ -326,6 +326,8 @@ export function createSuppliedRequestGateway(input: {
                   surface: page.surface, provider: input.provider, nativeTaskId: webPlan.nativeTaskId,
                   nativeTurnId: identity.turnId, webEpochId: webPlan.webEpochId,
                   physicalContext: webPlan.physicalContext, chatTools, signal: bound.signal, onProgress: publish,
+                  canStopOwnedTurn: () => owned.cancellation.signal.aborted
+                    && !(owned.cancellation.signal.reason instanceof NativeWebHandoffUnproven),
                   isToolExecutionPending: () => owned.round.pending !== undefined,
                   ...(resultIdentity && completedResults ? { beforeSend: async () => {
                     if (typeof input.completedResults === "function"

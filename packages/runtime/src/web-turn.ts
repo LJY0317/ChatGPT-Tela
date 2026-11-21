@@ -1,4 +1,4 @@
-import { WebProviderResponseFailed, WebContextFitFailed, NativeWebHandoffUnproven, webObservationFailureReason } from "@chatgpt-tela/core";
+import { WebProviderResponseFailed, WebContextFitFailed, NativeWebHandoffUnproven } from "@chatgpt-tela/core";
 import type { BrowserHost, BrowserSurfaceLease } from "@chatgpt-tela/browser-host";
 import { capturePrivateDiagnosticValue, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import {
@@ -41,6 +41,8 @@ export interface BrowserTurnRunInput {
     surface: BrowserSurfaceLease,
     signal?: AbortSignal,
   ) => Promise<void>;
+  /** True only when the owner has revoked work, independently of observation failure. */
+  readonly canStopOwnedTurn?: () => boolean;
   readonly signal?: AbortSignal;
 }
 
@@ -324,7 +326,7 @@ export async function runBrowserTurnOnSurface(input: BrowserTurnSurfaceRunInput)
     if (input.channel && acceptedPhase(input.channel.phase)) {
       try { input.channel.markIndeterminate(error); } catch { /* Preserve the first failure. */ }
     }
-    if (acceptedHandle && input.provider.cancelTurn && webObservationFailureReason(error) !== "response_wait_timeout") {
+    if (acceptedHandle && input.provider.cancelTurn && input.canStopOwnedTurn?.()) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         // Provider cancellation owns fresh surface/turn proof and a bounded stop

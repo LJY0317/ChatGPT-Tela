@@ -403,6 +403,7 @@ export async function startDevelopmentRuntime(input: DevelopmentRuntimeOptions):
               ),
             } : {}),
             signal: executionSignal,
+            canStopOwnedTurn: () => nativeSignal.aborted,
           });
           executionSignal.throwIfAborted();
           const surfaceLeaseId = acquired.surface.leaseId;
