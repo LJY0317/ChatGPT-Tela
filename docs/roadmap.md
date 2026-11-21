@@ -19,8 +19,9 @@ different scopes. See [compatibility boundaries](web-native-compatibility-gates.
   killed restoration worker with real launchd and a packaged daemon. Recovery kept the
   already-ready process and the previous service selection. Sparkle 2.10.1's actual
   installer code also preserved valid bundles on both sides of a same-volume atomic swap
-  when the driver was killed. Full UI/XPC interruption recovery and the non-atomic
-  replacement path remain unverified.
+  when the driver was killed. A simulated unsupported atomic swap reached the actual
+  two-move fallback and reproduced a missing installed app between moves. Recovering
+  from that state through a supported entry point and testing UI/XPC interruption remain.
 - **Resources and platform support.** Measure installed disk/cache residue and idle
   CPU/wakeups under representative use, plus restart continuity. The source can build
   Windows and Linux payloads from another OS. The package jobs exercise install, repair

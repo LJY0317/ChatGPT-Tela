@@ -288,6 +288,14 @@ left the original app at the installed path. The second left the target there an
 the original at the staging path. Code signatures and the directory identities proved
 both outcomes. The driver did not exercise the updater's UI or XPC lifecycle.
 
+A second isolated driver tested signed builds 2026112105 and 2026112106 with only
+the atomic swap forced to return `ENOTSUP`. Sparkle used its real two-move path.
+Killing the driver between moves left no bundle at the installed path. The old
+bundle remained signed in Sparkle's replacement directory and the new bundle
+remained signed in staging. After the second move, the new bundle was present at
+the installed path. Recovery from the missing-app state still needs a supported
+entry point outside the missing app. The test did not exercise automatic recovery.
+
 References: [Sparkle setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
 [package tradeoffs](https://sparkle-project.org/documentation/package-updates/),
