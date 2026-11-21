@@ -114,6 +114,7 @@ Unrelated model choices and custom providers remain untouched. Uninstall reuses
 this same restoration path after activity/ownership admission, before removing
 services and catalogs. User-modified settings are preserved; an unresolved active
 reference to this installation prevents removing its required resources.
+Registration and restoration preserve the existing config file's POSIX permissions.
 
 Registration and restore remove an exact owned registration from the retired
 `chatgpt_tela_local` path and normalize its config selections to `openai`. This is

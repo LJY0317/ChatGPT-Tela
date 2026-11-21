@@ -43,7 +43,8 @@ import { spawnSync } from "node:child_process";
   let data=try! JSONSerialization.data(withJSONObject:result);print(String(data:data,encoding:.utf8)!)
  }
 }`);
-    const compiled = spawnSync("/usr/bin/xcrun", ["swiftc", "-parse-as-library", helper, harness, "-framework", "AppKit", "-o", binary], { encoding: "utf8" });
+    const localization = resolve("apps/menu-bar-macos/localization.swift");
+    const compiled = spawnSync("/usr/bin/xcrun", ["swiftc", "-parse-as-library", helper, localization, harness, "-framework", "AppKit", "-o", binary], { encoding: "utf8" });
     expect(compiled.status, compiled.stderr).toBe(0);
     const run = spawnSync(binary, [...apps, domain], { encoding: "utf8", timeout: 30_000 });
     expect(run.status, run.stderr).toBe(0);

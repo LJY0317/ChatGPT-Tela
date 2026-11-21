@@ -425,7 +425,7 @@ test.each(["current request", "single historical exchange"])("irreducible %s ref
         : [{ role: "user", content: "First request" },
           { role: "assistant", content: "X".repeat(550_000) },
           { role: "user", content: "Continue" }],
-    })).rejects.toThrow("requires a verified checkpoint");
+    })).rejects.toMatchObject({ code: "native_history_bootstrap_required", recoveryReason: "source_budget" });
     expect(calls).toBe(0);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
@@ -653,7 +653,7 @@ test("a past edit cannot inherit the old derived branch; losing the entire stage
     };
     await expect(createNativeRequestDevelopmentWebTurnPlanner(zeroBudget)(
       registered("edited"), { model, reasoning: { effort: "high" }, input: edited }))
-      .rejects.toThrow("requires a verified checkpoint");
+      .rejects.toMatchObject({ code: "native_history_bootstrap_required", recoveryReason: "source_budget" });
     expect(calls).toBe(count);
 
     // A disposable cache may disappear while completed model stages and the
@@ -708,7 +708,7 @@ test("unresolved historical media is never silently folded into a text-only chec
         { type: "message", role: "assistant", content: "A".repeat(100_000) },
         { type: "message", role: "user", content: "Use original image in the next step" },
       ],
-    })).rejects.toThrow("requires a verified checkpoint");
+    })).rejects.toMatchObject({ code: "native_history_bootstrap_required", recoveryReason: "source_budget" });
     expect(calls).toBe(0);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

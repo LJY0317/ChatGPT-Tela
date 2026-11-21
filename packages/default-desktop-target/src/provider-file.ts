@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { editAppOwnedDesktopProviderConfig, type AppOwnedProviderRegistration, type CatalogRegistrationStatus } from "./provider-configuration";
@@ -36,6 +36,7 @@ export function editOfficialCodexProviderFile(input: ProviderFileEdit & { readon
     const temporary = join(configHome, `.chatgpt-tela-config-${randomUUID()}.tmp`);
     try {
       writeFileSync(temporary, result.content, { flag: "wx", mode: stat.mode & 0o777 });
+      if (process.platform !== "win32") chmodSync(temporary, stat.mode & 0o777);
       renameSync(temporary, input.configPath);
     } finally {
       if (existsSync(temporary)) unlinkSync(temporary);

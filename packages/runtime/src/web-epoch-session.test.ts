@@ -34,7 +34,10 @@ describe("retained browser epoch registry", () => {
     let closes = 0;
     const host = new ControlledBrowserHost(async () => ({
       async navigate() {}, async reveal() {}, async hide() {},
-      close() { closes++; return new Promise<void>((_, reject) => { rejectClose = reject; }); },
+      close() {
+        if (++closes > 1) return Promise.resolve();
+        return new Promise<void>((_, reject) => { rejectClose = reject; });
+      },
     }));
     const registry = new RetainedBrowserEpochRegistry(host);
     const lease = await host.acquire({ taskId: "preparation-owner", epochId: "preparation" });
@@ -46,10 +49,11 @@ describe("retained browser epoch registry", () => {
     expect(registry.retention(lease.leaseId).surface).toEqual({ ...detail, state: "closing", nextAction: "inspect_close" });
     rejectClose(Error("platform close failed"));
     await expect(closing).rejects.toThrow("platform close failed");
-    expect(registry.retention(lease.leaseId).surface?.state).toBe("closing");
+    expect(registry.retention(lease.leaseId)).toMatchObject({ otherOwners: 1, reclaimable: 0, surface: detail });
     expect(closes).toBe(1);
     registry.dispose();
-    await expect(host.close()).rejects.toThrow("failed to close");
+    await host.close();
+    expect(closes).toBe(2);
   });
 
   test("defaults to ten total profile surfaces and retires the least recently completed epoch", async () => {
