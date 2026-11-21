@@ -60,7 +60,9 @@ public final class SPUUserUpdateState {}
 </dict></plist>`);
       writeFileSync(join(mac, "chatgpt-tela"), `#!/bin/sh
 case "$2" in
-finish) printf '{"ready":false,"prepared":true}\\n' ;;
+finish) if [ -f "$TELA_SPARKLE_ABORT_EFFECTS.restored" ]; then
+  printf '{"ready":true,"restored":true,"sourceRestoredFor":"2"}'
+  else printf '{"ready":false,"prepared":true}'; fi ;;
 cancel) printf 'cancel\\n' >> "$TELA_SPARKLE_ABORT_EFFECTS"; printf '{"ready":true,"restored":true}\\n' ;;
 *) exit 3 ;;
 esac
@@ -155,6 +157,19 @@ import Sparkle
     try? await Task.sleep(nanoseconds: 500_000_000)
     precondition(prior.recoveredPendingUpdate, "an update selected before preparation consumed the prior handoff")
     precondition(!FileManager.default.fileExists(atPath: path), "selection without preparation invoked cancel")
+
+    let restored = TelaSparkleUpdater()
+    restored.runningDesktopProfiles = { [first, second] }
+    restored.preserveDesktopApps(targetBuild: "2")
+    restored.runningDesktopProfiles = { [second] }
+    opened.removeAll()
+    restored.reopenDesktop = { profile, completion in opened.append(profile); completion(nil) }
+    try! Data().write(to: URL(fileURLWithPath: path + ".restored"))
+    let startAfterRestoration = await restored.start()
+    precondition(!startAfterRestoration, "normal service startup would override the restored selection")
+    precondition(opened == [first], "a restored source must reopen the aborted target's saved profiles")
+    await Task.yield()
+    precondition(!restored.needsDesktopRestore, "successful recovery must clear the saved profiles")
   }
 }
 `);

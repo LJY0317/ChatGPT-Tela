@@ -260,7 +260,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
 
   /// Resume ordinary startup only when no update restoration already chose the running services.
   func start() async -> Bool {
-    let result: (ready: Bool, restored: Bool, prepared: Bool)
+    let result: (ready: Bool, restored: Bool, prepared: Bool, sourceRestoredFor: String?)
     do {
       result = try await lifecycle(["finish"])
     } catch {
@@ -268,7 +268,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       changed?()
       return false
     }
-    if result.ready { restoreDesktopApps() }
+    if result.ready { restoreDesktopApps(forBuild: result.sourceRestoredFor) }
     recoveredPendingUpdate = !result.ready && result.prepared
     problem = recoveredPendingUpdate ? telaText("An update is pending.") : nil
     do {
@@ -364,7 +364,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     }
   }
 
-  private nonisolated func lifecycle(_ arguments: [String], observation: UpdateIdleObservation? = nil) async throws -> (ready: Bool, restored: Bool, prepared: Bool) {
+  private nonisolated func lifecycle(_ arguments: [String], observation: UpdateIdleObservation? = nil) async throws -> (ready: Bool, restored: Bool, prepared: Bool, sourceRestoredFor: String?) {
     guard let launcher = Bundle.main.url(forAuxiliaryExecutable: "chatgpt-tela") else {
       throw NSError(domain: "TelaUpdate", code: 1)
     }
@@ -397,7 +397,8 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
       throw NSError(domain: "TelaUpdate", code: 2,
         userInfo: [NSLocalizedDescriptionKey: telaText("Tela could not prepare its services for updating. Check service status and try again. Your conversations are kept.")])
     }
-    return (value["ready"] as? Bool == true, value["restored"] as? Bool == true, value["prepared"] as? Bool == true)
+    return (value["ready"] as? Bool == true, value["restored"] as? Bool == true,
+            value["prepared"] as? Bool == true, value["sourceRestoredFor"] as? String)
   }
 
   func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {

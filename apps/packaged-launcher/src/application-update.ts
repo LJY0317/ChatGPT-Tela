@@ -42,6 +42,15 @@ function readApplicationBuild(path: string) {
     join(path, "Contents/Info.plist")], { encoding: "utf8" }).trim();
 }
 
+function readMacBootSession(): string | undefined {
+  if (process.platform !== "darwin") return undefined;
+  try {
+    const value = execFileSync("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim().toLowerCase();
+    return /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value) ? value : undefined;
+  } catch { return undefined; }
+}
+
 /** Review only. Sparkle owns its installer and the app path may appear again after review. */
 export function reviewMissingApplicationSource(input: {
   payloadRoot: string; options?: PackagedLifecycleOptions;
@@ -90,6 +99,7 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
   readBuild?: (path: string) => string;
   waitForShutdownService?: (service: TelaServiceId, signal?: AbortSignal) => Promise<void>;
   waitSignal?: AbortSignal;
+  readBootSession?: () => string | undefined;
   multiProfileTargetAdapter?: Pick<CodexNativeTargetAdapter, "profiles" | "resolve">;
 }) {
   const options = input.options ?? {}, paths = resolveProductPaths(options);
@@ -226,7 +236,8 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
       if (state.pendingStop) throw Error(`application update is postponed: ${state.pendingStop} shutdown has not been settled; acknowledged peers were restored`);
       if (fingerprint !== state.sourceFingerprint) await step("menu_registration", () => installPackagedMenuBarRegistration({ blueprint, manifest, ...(options.runner ? { runner: options.runner } : {}) }));
       rmSync(path);
-      return { ready: true, restored: true, productVersion: spec.productVersion, buildVersion: build, localPlugin };
+      return { ready: true, restored: true, productVersion: spec.productVersion, buildVersion: build, localPlugin,
+        ...(fingerprint === state.sourceFingerprint ? { sourceRestoredFor: state.targetBuild } : {}) };
     };
     if (action === "cancel" && previous) {
       if (fingerprint !== previous.sourceFingerprint) throw Error("a replaced application cannot be cancelled back to source");
@@ -234,7 +245,11 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
     }
     if (action === "finish") {
       if (previous?.phase === "ready" && fingerprint === previous.sourceFingerprint) {
-        // Source bytes alone do not prove Sparkle aborted. Leave its prepared handoff intact.
+        const currentBootSession = (input.readBootSession ?? readMacBootSession)();
+        // Sparkle's submitted installer is a non-persistent launchd job.
+        if (previous.sourceBootSession && currentBootSession && previous.sourceBootSession !== currentBootSession) {
+          return finish(previous);
+        }
         return { ready: false, prepared: true, targetBuild: previous.targetBuild };
       }
       if (previous) return finish(previous);
@@ -251,8 +266,9 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
     if (workAction) await step(workAction === "interrupt-work" ? "work_interruption" : "desktop_close",
       () => settleOwnedUpdateWork(owner.installId, paths, running, workAction));
     await step("services_prepare", () => controller.prepare(stopOrder));
+    const sourceBootSession = (input.readBootSession ?? readMacBootSession)();
     let state = save({ version: 1, installId: owner.installId, sourceVersion: owner.productVersion, sourceBuild: build,
-      targetBuild: input.targetBuild, applicationPath: root, sourceFingerprint: fingerprint, phase: "quiescing",
+      ...(sourceBootSession ? { sourceBootSession } : {}), targetBuild: input.targetBuild, applicationPath: root, sourceFingerprint: fingerprint, phase: "quiescing",
       runningServices: running, stoppedServices: [], resumedServices: [] });
     try {
       for (const service of running) {

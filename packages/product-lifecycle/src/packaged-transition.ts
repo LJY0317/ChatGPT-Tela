@@ -68,6 +68,7 @@ export interface MacApplicationUpdate {
   readonly installId: string;
   readonly sourceVersion: string;
   readonly sourceBuild: string;
+  readonly sourceBootSession?: string;
   readonly targetBuild: string;
   readonly applicationPath: string;
   readonly sourceFingerprint: string;
@@ -92,6 +93,7 @@ export function readMacApplicationUpdate(paths: ProductPaths): MacApplicationUpd
   const list = (value: unknown) => Array.isArray(value) && value.every(id => ids.includes(id)) && new Set(value).size === value.length;
   if (!raw || raw.version !== 1 || !["quiescing", "ready", "resuming"].includes(raw.phase as string)
     || !["installId", "sourceVersion", "sourceBuild", "targetBuild", "applicationPath"].every(key => typeof raw[key] === "string" && (raw[key] as string).length > 0)
+    || (raw.sourceBootSession !== undefined && (typeof raw.sourceBootSession !== "string" || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(raw.sourceBootSession)))
     || typeof raw.sourceFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(raw.sourceFingerprint)
     || !list(raw.runningServices) || !list(raw.stoppedServices) || !list(raw.resumedServices)
     || (raw.pendingStop !== undefined && !ids.includes(raw.pendingStop as string))

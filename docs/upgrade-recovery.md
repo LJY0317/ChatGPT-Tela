@@ -304,9 +304,12 @@ app is missing. Run `chatgpt-tela application-update review-source --payload <pr
 It checks the original signature and exact receipt/journal fingerprint and returns
 the installed location and both build numbers without changing anything. Review
 does not determine whether Sparkle's installer is still running. Once the installer
-has stopped, restoring the verified bundle to the reported location allows the
-restored launcher's `application-update cancel` to settle the existing handoff.
-A graphical maintenance entry point remains open.
+has stopped, the restored launcher's `application-update cancel` can settle the
+handoff. New preparation records also identify their macOS boot session. When a
+verified original bundle is put back after reboot, opening it finishes recovery
+and restores the recorded profiles. The same or an unknown boot session leaves
+the handoff pending for explicit settlement. A graphical way to find and put
+back the verified bundle remains open.
 
 References: [Sparkle setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),

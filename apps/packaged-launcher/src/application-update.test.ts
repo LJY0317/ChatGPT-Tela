@@ -376,6 +376,29 @@ test("UI process loss after preparation leaves a handoff for explicit restart se
 });
 
 
+test("an exact prepared source resumes after a different boot, without repeating shutdown", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-sparkle-prior-boot-"));
+  try {
+    const f = await fixture(root);
+    const before = () => "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
+    const after = () => "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+    await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2", readBootSession: before });
+    expect(readMacApplicationUpdate(f.paths)?.sourceBootSession).toBe(before());
+    f.runner.calls.length = 0;
+    for (const readBootSession of [before, () => undefined]) {
+      expect(await runApplicationUpdate("finish", { ...f.input, readBootSession }))
+        .toMatchObject({ ready: false, prepared: true, targetBuild: "2" });
+      expect(f.runner.calls).toEqual([]);
+    }
+    expect(await runApplicationUpdate("finish", { ...f.input, readBootSession: after }))
+      .toMatchObject({ ready: true, restored: true, sourceRestoredFor: "2" });
+    expect(f.runner.calls.some(call => call.startsWith("bootout"))).toBe(false);
+    expect(f.runner.jobs.get("com.openai.chatgpt-tela.chat")?.running).toBe(true);
+    expect(f.runner.jobs.get("com.openai.chatgpt-tela.codex")?.running).toBe(false);
+    expect(readMacApplicationUpdate(f.paths)).toBeUndefined();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("killing the deferred wait worker leaves no install authority for the recreated process", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-wait-exit-"));
   const entered = join(root, "wait-entered"), effects = join(root, "effects");
