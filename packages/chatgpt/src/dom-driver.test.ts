@@ -319,6 +319,8 @@ describe("current ChatGPT DOM surface driver", () => {
     const group = new FixtureElement({ 'data-turn-key': 'owned' }, { '[data-user-message-bubble]': [bubble] });
     const driver = new ChatGptDomSurfaceDriver(new RendererFixturePage(new FixtureElement({}, { '[data-turn-key]': [group] })));
     expect((await driver.observe()).turns[0]?.foldedRequestDigest).toBe(digestValue);
+    paragraph.textContent = author.textContent;
+    expect((await driver.observe()).turns[0]?.foldedRequestDigest).toBe(digestValue);
     author.textContent = `Earlier text${author.textContent}`;
     expect((await driver.observe()).turns[0]?.foldedRequestDigest).toBeUndefined();
   });

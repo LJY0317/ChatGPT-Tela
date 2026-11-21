@@ -41,7 +41,8 @@ export function userPayload(bubble: HTMLElement): { value?: string; leadingHeade
   const paragraphText = paragraph?.textContent ?? '';
   const control = paragraph?.firstElementChild;
   const connectorText = control?.matches('a[data-discover]:not([href])') ? control.textContent ?? '' : '';
-  const leadingHeader = paragraphText && value.startsWith(paragraphText) && paragraphText.startsWith(connectorText)
-    ? paragraphText.slice(connectorText.length).trim() : '';
-  return { value, ...(leadingHeader && leadingHeader.length <= 64 ? { leadingHeader } : {}), reason: 'author_payload', ...structure };
+  const paragraphAuthor = paragraphText && value.startsWith(paragraphText) && paragraphText.startsWith(connectorText)
+    ? paragraphText.slice(connectorText.length).trimStart() : '';
+  const leadingHeader = paragraphAuthor.match(/^\[Tela request [A-Za-z0-9_-]{43}\](?=\s*(?:$|<chatgpt_tela_transport_contract>))/)?.[0];
+  return { value, ...(leadingHeader ? { leadingHeader } : {}), reason: 'author_payload', ...structure };
 }
