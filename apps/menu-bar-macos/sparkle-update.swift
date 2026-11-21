@@ -260,20 +260,26 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
 
   /// Resume ordinary startup only when no update restoration already chose the running services.
   func start() async -> Bool {
+    let result: (ready: Bool, restored: Bool, prepared: Bool)
     do {
-      let result = try await lifecycle(["finish"])
-      try controller.updater.start()
-      if result.ready { restoreDesktopApps() }
-      recoveredPendingUpdate = !result.ready && result.prepared
-      problem = recoveredPendingUpdate ? telaText("An update is prepared. Review it in Sparkle to see whether it can continue.") : result.ready ? nil : telaText("Finish the pending update to restart Tela.")
-      if recoveredPendingUpdate { NSLog("Tela update startup found a prepared Sparkle handoff; awaiting a new user-initiated update session") }
-      changed?()
-      return result.ready && !result.restored
+      result = try await lifecycle(["finish"])
     } catch {
       problem = telaText("Tela recovery needs attention before updating.")
       changed?()
       return false
     }
+    if result.ready { restoreDesktopApps() }
+    recoveredPendingUpdate = !result.ready && result.prepared
+    problem = recoveredPendingUpdate ? telaText("An update is pending.") : nil
+    do {
+      try controller.updater.start()
+    } catch {
+      let reason = error as NSError
+      NSLog("Tela updater startup failed: %@ (%ld)", reason.domain, reason.code)
+      problem = recoveredPendingUpdate ? telaText("Can’t open the pending update.") : telaText("Updates are unavailable.")
+    }
+    changed?()
+    return result.ready && !result.restored
   }
 
   /// This is the ordinary AppKit termination veto; optional relaunch callbacks are not the work guard.

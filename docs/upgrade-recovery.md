@@ -236,8 +236,9 @@ mutation owner and authenticated shutdown/readiness contracts:
 - `finish` verifies the installed app signature and prepared build, updates only
   external ownership/receipt metadata, reinstalls service registrations and restores
   the previously running services. Interrupted readiness resumes without another
-  stop or duplicate start. Ordinary startup runs after settlement and does not
-  override the restored service selection.
+  stop or duplicate start. The settlement result decides ordinary service startup.
+  If Sparkle cannot start, Tela reports update availability separately and preserves
+  both that service decision and any pending handoff.
 - `cancel` restores services only while the signed source app is still present.
   After a Sparkle abort, Tela cancels only a handoff acknowledged by that install
   attempt. If preparation is still running, Tela settles its result first.

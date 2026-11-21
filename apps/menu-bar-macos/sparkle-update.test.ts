@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
-(process.platform === "darwin" ? test : test.skip)("Sparkle postponement completes once and loses its install callback when the UI exits", async () => {
+(process.platform === "darwin" ? test : test.skip)("Sparkle handles deferred termination and preserves Tela startup when the updater is unavailable", async () => {
   const bundleId = `org.chatgpt-tela.disposable.${crypto.randomUUID()}`;
   const root = mkdtempSync(join(tmpdir(), "tela-sparkle-delegate-"));
   const app = join(root, "Probe.app"), mac = join(app, "Contents/MacOS");
@@ -24,6 +24,7 @@ import { spawnSync } from "node:child_process";
 <key>CFBundleIdentifier</key><string>${bundleId}</string>
 <key>CFBundleName</key><string>Tela update test</string><key>CFBundleExecutable</key><string>probe</string>
 <key>CFBundleVersion</key><string>1</string><key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/>
+<key>SUPublicEDKey</key><string>invalid-fixture-key</string>
 </dict></plist>`);
     writeFileSync(join(mac, "chatgpt-tela"), `#!/bin/sh
 case "$2" in
@@ -34,6 +35,9 @@ wait) printf entered > "$TELA_IDLE_FIXTURE/wait-entered"
   printf '{"ready":true}\\n' ;;
 prepare) printf prepared > "$TELA_IDLE_FIXTURE/prepared"; printf '{"prepared":true}\\n' ;;
 cancel) printf cancelled > "$TELA_IDLE_FIXTURE/cancelled"; printf '{"ready":true,"restored":true}\\n' ;;
+finish) if [ "$TELA_STARTUP_RECOVERY" = pending ]; then
+  printf '{"ready":false,"prepared":true}'
+  else printf '{"ready":true}'; fi ;;
 *) printf '{"ready":true}\\n' ;;
 esac
 `, { mode: 0o755 });
@@ -46,6 +50,18 @@ import Sparkle
   func applicationDidFinishLaunching(_ note: Notification) {
     let root = ProcessInfo.processInfo.environment["TELA_IDLE_FIXTURE"]!
     tela = TelaSparkleUpdater()
+    if let startup = ProcessInfo.processInfo.environment["TELA_STARTUP_RECOVERY"] {
+      Task {
+        let mayStart = await tela.start()
+        precondition(mayStart == (startup == "ordinary"), "unavailable Sparkle must not change the service startup decision")
+        precondition(tela.recoveredPendingUpdate == (startup == "pending"), "unavailable Sparkle must not hide a pending handoff")
+        precondition(!tela.canCheck, "invalid updater configuration must disable update actions")
+        let status = startup == "pending" ? "Can’t open the pending update." : "Updates are unavailable."
+        precondition(tela.problem == telaText(status), "show an update problem without claiming service recovery failed")
+        NSApp.terminate(nil)
+      }
+      return
+    }
     if ProcessInfo.processInfo.environment["TELA_IDLE_FIXTURE_RECOVERED"] == "1" {
       precondition(tela.preparationStatus == nil)
       precondition(tela.applicationShouldTerminate(NSApp) == .terminateNow)
@@ -133,6 +149,12 @@ import Sparkle
     expect(existsSync(join(root, "recovered"))).toBe(true);
     expect(existsSync(join(root, "resumed"))).toBe(false);
     expect(existsSync(join(root, "prepared"))).toBe(false);
+
+    for (const startup of ["ordinary", "pending"]) {
+      child = Bun.spawn([join(mac, "probe")], { env: { ...env, TELA_STARTUP_RECOVERY: startup }, stdout: "ignore", stderr: "pipe" });
+      const stderr = new Response(child.stderr).text();
+      expect(await Promise.race([child.exited, timeout]), await stderr).toBe(0);
+    }
 
     rmSync(join(root, "prepared"), { force: true });
     const cancelled = whenCreated("cancelled");

@@ -246,7 +246,7 @@ final class TelaMenuBarController: NSObject, NSApplicationDelegate, NSMenuDelega
       await controlCenter.showFirstUseIfNeeded()
       await refreshNow()
     }
-    // The installed app acknowledges both LaunchServices and Sparkle startup.
+    // Acknowledge menu launch. Service recovery and updater readiness settle separately.
     if let url = startupReceiptURL,
        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
       do {

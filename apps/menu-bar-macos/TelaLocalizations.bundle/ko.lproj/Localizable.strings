@@ -17,7 +17,7 @@
 "Also remove Tela settings, saved logins, and credentials" = "Tela 설정, 저장된 로그인 및 자격 증명도 제거";
 "An earlier installation is unfinished. Use its original installer to finish recovery." = "이전 설치가 완료되지 않았습니다. 기존 설치 프로그램으로 복구를 마치세요.";
 "An earlier removal is unfinished. Select Remove Tela and review the remaining changes to continue." = "이전 삭제가 완료되지 않았습니다. Tela 제거를 선택하고 남은 변경 사항을 검토하세요.";
-"An update is prepared. Review it in Sparkle to see whether it can continue." = "업데이트가 준비되었습니다. Sparkle에서 계속할 수 있는지 확인하세요.";
+"An update is pending." = "대기 중인 업데이트가 있습니다.";
 "Appearance" = "화면 표시";
 "Apply Chat folder access?" = "Chat 폴더 접근 권한을 적용할까요?";
 "Apply Chat settings to remove access. Parent-folder permissions still apply." = "접근 권한을 제거하려면 Chat 설정을 적용하세요. 상위 폴더 권한은 유지됩니다.";
@@ -44,6 +44,7 @@
 "Changes only the Tela app interface." = "Tela 앱 화면 언어만 변경합니다.";
 "Changes to review" = "검토할 변경 사항";
 "Changes verified. Tela control center refresh completed." = "변경 사항을 확인했습니다. Tela 컨트롤 센터를 새로고쳤습니다.";
+"Can’t open the pending update." = "대기 중인 업데이트를 열 수 없습니다.";
 "Chat folder access is active." = "Chat 폴더 접근 권한이 활성화되었습니다.";
 "Chat on This Mac" = "이 Mac의 Chat";
 "Chat tracking stopped." = "대화 추적을 중단했습니다.";
@@ -111,7 +112,6 @@
 "Finish in the browser" = "브라우저에서 마치기";
 "Finish sign-in, then close the login window." = "로그인을 마친 후 로그인 창을 닫으세요.";
 "Finish the pending update in Tela before maintenance." = "유지보수 전에 Tela에서 대기 중인 업데이트를 완료하세요.";
-"Finish the pending update to restart Tela." = "대기 중인 업데이트를 마쳐 Tela를 재시작하세요.";
 "Finishing up…" = "마무리 중…";
 "Folder settings unavailable. Try refreshing." = "폴더 설정을 확인할 수 없습니다. 새로고침하세요.";
 "Follow system language" = "시스템 언어 사용";
@@ -343,6 +343,7 @@
 
 "Manage Web tasks…" = "Web 작업 관리…";
 "Tracked Web tasks" = "관리 중인 Web 작업";
+"Updates are unavailable." = "업데이트를 사용할 수 없습니다.";
 "Use a task link…" = "작업 링크 사용…";
 "Manage a Web task" = "Web 작업 관리";
 "Tracked tasks are archived after 7 days, or 12 hours after you confirm the answer." = "등록한 작업은 7일 뒤, 답변 회수를 확인하면 12시간 뒤 보관됩니다.";
