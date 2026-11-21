@@ -33,6 +33,7 @@ wait) printf entered > "$TELA_IDLE_FIXTURE/wait-entered"
   else IFS= read -r release < "$TELA_IDLE_FIXTURE/release.fifo"; fi
   printf '{"ready":true}\\n' ;;
 prepare) printf prepared > "$TELA_IDLE_FIXTURE/prepared"; printf '{"prepared":true}\\n' ;;
+cancel) printf cancelled > "$TELA_IDLE_FIXTURE/cancelled"; printf '{"ready":true,"restored":true}\\n' ;;
 *) printf '{"ready":true}\\n' ;;
 esac
 `, { mode: 0o755 });
@@ -55,6 +56,11 @@ import Sparkle
     source = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
     // Only a synthetic version is needed; no feed, archive or update is fetched.
     let item = SUAppcastItem(dictionary: ["enclosure": ["sparkle:version": "2", "url": "http://127.0.0.1/unused.zip", "length": "1", "type": "application/octet-stream"]])!
+    if ProcessInfo.processInfo.environment["TELA_IDLE_FIXTURE_ABORT_PREPARE"] == "1" {
+      tela.updater(source.updater, willInstallUpdate: item)
+      DispatchQueue.main.async { NSApp.terminate(nil) }
+      return
+    }
     precondition(tela.updater(source.updater, shouldPostponeRelaunchForUpdate: item) {
       try! Data("resumed".utf8).write(to: URL(fileURLWithPath: root + "/resumed"))
       DispatchQueue.main.async { NSApp.terminate(nil) }
@@ -63,7 +69,14 @@ import Sparkle
     precondition(tela.applicationShouldTerminate(NSApp) == .terminateCancel)
     try! Data("started".utf8).write(to: URL(fileURLWithPath: root + "/started"))
   }
-  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { tela.applicationShouldTerminate(sender) }
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    let reply = tela.applicationShouldTerminate(sender)
+    if ProcessInfo.processInfo.environment["TELA_IDLE_FIXTURE_ABORT_PREPARE"] == "1" {
+      precondition(reply == .terminateLater)
+      tela.updater(source.updater, didAbortWithError: NSError(domain: "SparkleFixture", code: 1))
+    }
+    return reply
+  }
 }
 @main struct Entry {
   @MainActor static func main() {
@@ -120,6 +133,13 @@ import Sparkle
     expect(existsSync(join(root, "recovered"))).toBe(true);
     expect(existsSync(join(root, "resumed"))).toBe(false);
     expect(existsSync(join(root, "prepared"))).toBe(false);
+
+    rmSync(join(root, "prepared"), { force: true });
+    const cancelled = whenCreated("cancelled");
+    child = Bun.spawn([join(mac, "probe")], { env: { ...env, TELA_IDLE_FIXTURE_ABORT_PREPARE: "1" }, stdout: "ignore", stderr: "ignore" });
+    await Promise.race([cancelled, timeout, child.exited.then(code => { throw Error(`UI exited during aborted preparation (${code})`); })]);
+    expect(existsSync(join(root, "prepared"))).toBe(true);
+    expect(child.exitCode).toBeNull();
   } finally {
     clearTimeout(deadline); observer?.close();
     if (child && child.exitCode === null) { child.kill(); await child.exited; }

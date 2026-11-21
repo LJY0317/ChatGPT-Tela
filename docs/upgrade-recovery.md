@@ -239,6 +239,8 @@ mutation owner and authenticated shutdown/readiness contracts:
   stop or duplicate start. Ordinary startup runs after settlement and does not
   override the restored service selection.
 - `cancel` restores services only while the signed source app is still present.
+  After a Sparkle abort, Tela cancels only a handoff acknowledged by that install
+  attempt. If preparation is still running, Tela settles its result first.
   Unknown shutdown effects remain pending rather than authorizing replacement.
 
 A disposable Sparkle experiment replaced and relaunched a host from build 1 to 2

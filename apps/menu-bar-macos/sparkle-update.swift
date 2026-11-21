@@ -208,6 +208,7 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     }
   }
   private var pendingBuild: String?
+  private var preparedBuild: String?
   private var preparingTermination = false
   private var idleObservation: UpdateIdleObservation?
   private var preparationWindow: NSPanel?
@@ -290,11 +291,11 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
     changed?()
     let started = ProcessInfo.processInfo.systemUptime
     NSLog("Tela update preparation started for build %@", build)
-    prepareTermination(["prepare", "--target-build", build], app: app, started: started)
+    prepareTermination(["prepare", "--target-build", build], build: build, app: app, started: started)
     return .terminateLater
   }
 
-  private func prepareTermination(_ arguments: [String], app: NSApplication, started: TimeInterval) {
+  private func prepareTermination(_ arguments: [String], build: String, app: NSApplication, started: TimeInterval) {
     // terminateLater runs a modal loop; Swift's main-actor task queue is not
     // serviced there. Run IPC off-main and return through that exact run loop.
     Task.detached {
@@ -305,6 +306,16 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
         MainActor.assumeIsolated {
           var failure: Error?
           if case .failure(let error) = result { failure = error }
+          // Sparkle can abort while AppKit is waiting for the prepare reply.
+          // Settle the reply before releasing termination or restoring services.
+          guard self.pendingBuild == build else {
+            self.preparingTermination = false
+            app.reply(toApplicationShouldTerminate: false)
+            if failure == nil { self.cancelPreparedUpdate(build: build) }
+            else { self.restoreDesktopApps(forBuild: build) }
+            self.changed?()
+            return
+          }
           if let blocked = failure as? TelaUpdateBlocked,
              !arguments.contains("--close-chatgpt"), !arguments.contains("--interrupt-work") {
             self.preparationWindow?.orderOut(nil)
@@ -314,9 +325,9 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
             alert.informativeText = blocked.localizedDescription
             alert.addButton(withTitle: closeOnly ? telaText("Close and Update") : telaText("Stop and Update"))
             alert.addButton(withTitle: telaText("Later"))
-            if alert.runModal() == .alertFirstButtonReturn {
+            if alert.runModal() == .alertFirstButtonReturn, self.pendingBuild == build {
               self.preparationWindow?.makeKeyAndOrderFront(nil)
-              self.prepareTermination(arguments + [closeOnly ? "--close-chatgpt" : "--interrupt-work"], app: app, started: started)
+              self.prepareTermination(arguments + [closeOnly ? "--close-chatgpt" : "--interrupt-work"], build: build, app: app, started: started)
               return
             }
             failure = CancellationError()
@@ -326,7 +337,12 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
           NSLog("Tela update preparation ended after %.3f seconds", ProcessInfo.processInfo.systemUptime - started)
           self.preparingTermination = failure == nil
           self.problem = failure is CancellationError ? nil : failure?.localizedDescription
-          if failure != nil, let build = self.pendingBuild { self.restoreDesktopApps(forBuild: build) }
+          if failure == nil {
+            self.preparedBuild = build
+            self.recoveredPendingUpdate = false
+          } else {
+            self.restoreDesktopApps(forBuild: build)
+          }
           app.reply(toApplicationShouldTerminate: failure == nil)
           self.changed?()
           if let error = failure, !(error is CancellationError) {
@@ -400,7 +416,6 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,
                untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
     let observation = UpdateIdleObservation()
-    recoveredPendingUpdate = false
     idleObservation = observation
     pendingBuild = item.versionString
     preparationWindow = Self.makePreparationWindow(waiting: true)
@@ -429,21 +444,25 @@ final class TelaSparkleUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDri
   func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
     // A newly created UI can encounter an unrelated Sparkle check failure.
     // It does not own a previous process's prepared service handoff.
-    let ownedInstallation = pendingBuild != nil || preparingTermination
-    let abortedBuild = pendingBuild
+    let abortedBuild = preparedBuild
+    preparedBuild = nil
     idleObservation?.cancel()
     idleObservation = nil
     pendingBuild = nil
-    preparingTermination = false
+    if abortedBuild != nil { preparingTermination = false }
     preparationWindow?.close()
     preparationWindow = nil
     problem = error.localizedDescription
     changed?()
-    guard ownedInstallation else { return }
+    if let abortedBuild { cancelPreparedUpdate(build: abortedBuild) }
+  }
+
+  private func cancelPreparedUpdate(build: String) {
     Task {
       do {
-        _ = try await lifecycle(["cancel"]); recoveredPendingUpdate = false
-        if let build = abortedBuild { restoreDesktopApps(forBuild: build) }
+        _ = try await lifecycle(["cancel"])
+        recoveredPendingUpdate = false
+        restoreDesktopApps(forBuild: build)
       }
       catch { problem = telaText("Tela recovery needs attention before updating.") }
       changed?()

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -150,15 +150,11 @@ import Sparkle
     precondition(prior.recoveredPendingUpdate, "unrelated new-session abort consumed the prior handoff")
     precondition(!FileManager.default.fileExists(atPath: path), "unrelated abort invoked cancel")
 
-    let current = TelaSparkleUpdater()
-    current.updater(driver, willInstallUpdate: SUAppcastItem(versionString: "2"))
-    current.updater(driver, didAbortWithError: error)
-    for _ in 0..<50 {
-      if FileManager.default.fileExists(atPath: path) { break }
-      try? await Task.sleep(nanoseconds: 20_000_000)
-    }
-    let calls = try? String(contentsOfFile: path, encoding: .utf8)
-    precondition(calls == "cancel\\n", "current-process cancellation did not retain its existing settlement")
+    prior.updater(driver, willInstallUpdate: SUAppcastItem(versionString: "3"))
+    prior.updater(driver, didAbortWithError: error)
+    try? await Task.sleep(nanoseconds: 500_000_000)
+    precondition(prior.recoveredPendingUpdate, "an update selected before preparation consumed the prior handoff")
+    precondition(!FileManager.default.fileExists(atPath: path), "selection without preparation invoked cancel")
   }
 }
 `);
@@ -174,8 +170,7 @@ import Sparkle
         encoding: "utf8", timeout: 10_000,
       });
       expect(run.status, run.stderr).toBe(0);
-      expect(existsSync(effects)).toBe(true);
-      expect(readFileSync(effects, "utf8")).toBe("cancel\n");
+      expect(existsSync(effects)).toBe(false);
     } finally {
       spawnSync("/usr/bin/defaults", ["delete", "org.chatgpt-tela.disposable.recovered-abort", "TelaUpdateDesktopProfiles"]);
       rmSync(root, { recursive: true, force: true });
