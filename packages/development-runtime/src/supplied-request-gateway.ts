@@ -330,7 +330,9 @@ export function createSuppliedRequestGateway(input: {
               });
               plan = webPlan;
               responseContext = { ...correlation, operation_fingerprint: diagnosticFingerprint([identity.threadId, identity.turnId, webPlan.webEpochId].join("\n")) };
-              owned.historyEnabled = !!input.suppliedHistory && !!webPlan.physicalContext.deferredHistory;
+              // A checkpoint or retained page can also omit originals. Readback
+              // belongs to the active request and its stored reader, not the seed format.
+              owned.historyEnabled = !!input.suppliedHistory;
               const chatTools = {
                 ...(owned.historyEnabled ? { nativeHistoryControl: capability } : {}),
                 ...(owned.advertisedGoals.length ? { nativeGoalControl: capability } : {}) };

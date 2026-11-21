@@ -12,6 +12,8 @@ import { handleNativeResponsesHttp } from "@chatgpt-tela/responses";
 import { createProfileTurnBridge, createSuppliedRequestGateway } from "./supplied-request-gateway";
 import { createNativeRequestDevelopmentWebTurnPlanner } from "./native-request-planner";
 import { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";
+import { FileContextCheckpointCache } from "./context-cache";
+import { createSuppliedHistorySource } from "./supplied-history";
 
 const model = chatGptWebModelId(chatGptWebFamilyKey("Supplied request fixture"));
 const firstInput = [{ type: "message", role: "user", content: "Inspect A." }];
@@ -863,6 +865,76 @@ test("supplied opaque bootstrap exposes only scoped history, retires its control
   } finally { release(); await client.close(); await server.stop(); await f.gateway.close(); }
 });
 
+
+test("one Web checkpoint preserves on-demand Native originals through the retained continuation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-supplied-checkpoint-"));
+  const original = "Original verification code: ARCHIVE-6731. " + "Historical evidence. ".repeat(1_000);
+  let activeTurn = "turn-1", modelCalls = 0, connections = 0;
+  const suppliedHistory = createSuppliedHistorySource(async (threadId) => {
+    expect(threadId).toBe("thread-1");
+    connections++;
+    return { async close() {}, async request(method, params) {
+      expect(params).toMatchObject({ threadId: "thread-1" });
+      if (method === "thread/read") return { thread: { id: threadId, historyMode: "paginated" } };
+      if (method === "thread/turns/list") return { data: [{ id: activeTurn, items: [], itemsView: "notLoaded" }] };
+      expect(method).toBe("thread/items/list");
+      expect(params).toMatchObject({ turnId: "prior" });
+      return { data: [{ turnId: "prior", item: { type: "agentMessage", id: "prior-answer", text: original } }] };
+    } };
+  });
+  const planner = createNativeRequestDevelopmentWebTurnPlanner({
+    suppliedHistory,
+    budgetTokens: 2_000,
+    checkpointCache: new FileContextCheckpointCache({ directory: root }),
+    async checkpointProducer(input) {
+      modelCalls++;
+      return { nativeTaskId: input.nativeTaskId, sourceRevisionId: input.sourceRevisionId,
+        content: "Prior verification completed. Consult the original for its exact code." };
+    },
+  });
+  let f: ReturnType<typeof fixture>;
+  let previousControl: string | undefined;
+  f = fixture({ planner, suppliedHistory, providerBehavior: {
+    async waitForTurnEvent(_surface, handle) {
+      const submission = f.submissions.at(-1)!;
+      const control = submission.chatTools?.nativeHistoryControl;
+      expect(control).toBeString();
+      if (previousControl) {
+        expect(control).not.toBe(previousControl);
+        expect(() => f.gateway.toolBridge.invoke(previousControl!, { callId: "retired", mode: "structured",
+          wireName: "tela_context_history_page", arguments: { turn_id: "prior" } })).toThrow();
+      } else expect(connections).toBe(0);
+      const page = await f.gateway.toolBridge.invoke(control!, { callId: "original", mode: "structured",
+        wireName: "tela_context_history_page", arguments: { turn_id: "prior" } });
+      if (typeof page.content !== "string") throw Error("Expected original history page text");
+      const answer = JSON.parse(JSON.parse(page.content).text).data[0].item.text.split(".")[0];
+      previousControl = control;
+      return { state: "proven", evidence: ["fixture"], value: { kind: "completed",
+        providerTurnId: handle.providerTurnId, answer } };
+    },
+  } });
+  const canonical = [{ role: "user", content: "Verify the record." }, { role: "assistant", content: original }, ...firstInput];
+  const answer = "Original verification code: ARCHIVE-6731";
+  try {
+    expect(await f.gateway.handle(request("turn-1", canonical))).toMatchObject({ type: "final", answer });
+    const seed = f.submissions[0]!.physicalContext;
+    expect(seed.mode).toBe("checkpoint-delta");
+    expect(seed.segments.map(segment => segment.content)).toEqual(expect.arrayContaining([
+      "Prior verification completed. Consult the original for its exact code.", firstInput[0]!.content,
+    ]));
+    expect(seed.segments.some(segment => segment.content.includes("ARCHIVE-6731"))).toBe(false);
+    activeTurn = "turn-2";
+    expect(await f.gateway.handle(request(activeTurn, [...canonical, { role: "assistant", content: answer },
+      { role: "user", content: "Check its original again." }]))).toMatchObject({ type: "final", answer });
+    expect(f.submissions[1]!.physicalContext.mode).toBe("retained-delta");
+    expect(f.acquisitions).toBe(1);
+    expect(modelCalls).toBe(1);
+    expect(connections).toBe(2);
+  } finally {
+    await f.gateway.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("only newly executed Web child operations notify retention; duplicates join and ordinary chats do not enroll", async () => {
   const children: unknown[] = [];

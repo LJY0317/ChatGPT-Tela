@@ -48,12 +48,12 @@ execution, mutates history, or exposes Native work tools. Only scoped indexed
 
 For an opaque first request, the existing visible-prefix projection keeps recent
 complete exchanges and marks older originals as unsupplied. The existing Tela Chat
-`read_context_history` capability reads those originals through the current Web
-operation, with the existing bounded UTF-8 range format. Current instructions and
-pending tool exchanges stay exact. The history control expires with that operation;
-a warm retained page reuses its admitted context without another stored-history
-read. No second compression pipeline, permanent history copy or retired handoff
-helper is added.
+`read_context_history` capability is available whenever the active Web operation
+has a scoped stored reader, including after a checkpoint or on a retained page.
+It retrieves originals on demand in bounded UTF-8 ranges. Current instructions
+and pending tool exchanges stay exact. Each operation gets its own history
+control, which expires when it ends. A warm retained page reuses its admitted
+context without reading the archive again unless the model asks for an original.
 
 Both profiles passed stored-source/readback probes without model calls. The
 HTTP/MCP fixture proves scoped readback, control retirement and warm reuse.

@@ -80,9 +80,10 @@ first Web request when switching to a smaller context window. This is separate f
 Tela's Web checkpoint preparation; zero Web preparation calls does not prove zero
 Native model calls. A completed Web answer does not establish a preparation-free switch.
 
-An isolated probe of engine `0.167.0-alpha.3.2` confirms that this compaction carries the
-current thread/turn identity and `model_downshift` / `pre_turn` metadata, but not the
-selected destination model. The published [app-server contract](https://learn.chatgpt.com/docs/app-server)
+Isolated probes of engines `0.167.0-alpha.3.2` and `0.171.0-alpha.13` show this
+compaction before the selected Web request. It carries the current thread/turn
+identity and `model_downshift` / `pre_turn` metadata, while the request model is
+still the previous Native model. The published [app-server contract](https://learn.chatgpt.com/docs/app-server)
 provides a turn model override and manual thread compaction, without establishing a
 separate pre-turn compaction-model override. Exact identity alone does not authorize
 rewriting a Native model request or manufacturing its opaque compaction result.
