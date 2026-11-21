@@ -437,7 +437,7 @@ await preview.close();lifecycle.dispose();
 // Opt-in: use the unmodified official Desktop-bundled engine against only isolated
 // configuration and the same production app-owned Responses router as the child.
 const officialEngine = process.env.TELA_OFFICIAL_ENGINE;
-test.skipIf(!officialEngine)("official engine selects Web then original Native tools in one thread through app-owned assembly", async () => {
+test.skipIf(!officialEngine)("official engine selects Web and Native tools and settles an original Goal through app-owned assembly", async () => {
   const root = mkdtempSync(join(tmpdir(), "tela-official-app-owned-"));
   const home = join(root, "codex-home");
   const family = chatGptWebFamilyKey("Official assembly");
@@ -479,19 +479,45 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
   const webRequests: any[] = [], nativeRequests: any[] = [];
   let nativeCatalogReads = 0;
   let nativeCatalogUnavailable = false;
+  let goalTurn = false;
+  const heldWebTurns = new Map<string, () => void>();
+  const stoppedWebTurns: string[] = [];
+  const releaseHeldWebTurns = Promise.withResolvers<void>();
+  let gateway: ReturnType<typeof createSuppliedRequestGateway>;
   const provider = {
     async submitTurn(_surface: unknown, turn: any) {
+      await turn.beforeSend?.();
       webRequests.push({ turnId: turn.nativeTurnId, tools: turn.chatTools });
       return { state: "proven", evidence: ["fixture"], value: { nativeTaskId: turn.nativeTaskId,
-        nativeTurnId: turn.nativeTurnId, webEpochId: turn.webEpochId, providerTurnId: "web-fixture" } };
+        nativeTurnId: turn.nativeTurnId, webEpochId: turn.webEpochId, providerTurnId: turn.nativeTurnId } };
     },
     async waitForTurnEvent(_surface: unknown, handle: any) {
+      const started = heldWebTurns.get(handle.nativeTaskId);
+      if (started) {
+        started();
+        await releaseHeldWebTurns.promise;
+      }
+      if (goalTurn) {
+        const control = webRequests.at(-1)?.tools?.nativeGoalControl;
+        expect(control).toBeString();
+        const goalResult = await gateway.toolBridge.invoke(control, {
+          callId: "official-complete-goal", wireName: "update_goal", mode: "structured",
+          arguments: { status: "complete" },
+        });
+        expect(goalResult).toMatchObject({ callId: "official-complete-goal", isError: false });
+        expect(goalResult.content).toContain('"complete"');
+      }
       return { state: "proven", evidence: ["fixture"], value: {
-        kind: "completed", providerTurnId: handle.providerTurnId, answer: "Web selection completed." } };
+        kind: "completed", providerTurnId: handle.providerTurnId,
+        answer: goalTurn ? "Official Goal completed." : "Web selection completed." } };
     },
+    async armToolContinuation(_surface: unknown, handle: any, callId: string) {
+      return { state: "proven", value: { providerTurnId: handle.providerTurnId, callId } };
+    },
+    async cancelTurn(_surface: unknown, handle: any) { stoppedWebTurns.push(handle.nativeTurnId); },
   } as any;
   const host = { async acquire({ taskId, epochId }: any) {
-    return { taskId, epochId, leaseId: "official-assembly", async navigate() {},
+    return { taskId, epochId, leaseId: `official-assembly-${epochId}`, async navigate() {},
       async reveal() {}, async hide() {}, capability() {} };
   }, async release() {}, async close() {} } as any;
   const nativeFetch = async (request: Request): Promise<Response> => {
@@ -523,7 +549,7 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       { headers: { "content-type": "text/event-stream" } });
   };
   const starter = (async (options: any) => {
-    const gateway = createSuppliedRequestGateway({ browserHost: host, provider,
+    gateway = createSuppliedRequestGateway({ browserHost: host, provider,
       routeId: options.routeId, profileSlot: options.profileSlot,
       completedResults: options.completedResults, async prepareForSubmit() {} });
     const responses = await startLocalResponsesServer({ ...options.responses, gateway });
@@ -706,6 +732,53 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       const resumed = await rpc("thread/read", { threadId, includeTurns: true });
       expect(resumed.thread.id).toBe(threadId);
       expect(resumed.thread.turns).toHaveLength(2);
+      // Set up the disposable Goal without starting an automatic continuation.
+      // The explicit Web turn must settle it through the official engine's tool.
+      const goalThread = await rpc("thread/start", { model: webModel, modelProvider: TELA_DEFAULT_DESKTOP_PROVIDER_ID,
+        cwd: root, historyMode: "paginated", ephemeral: false });
+      const goalThreadId = goalThread.thread.id;
+      await rpc("thread/goal/set", { threadId: goalThreadId, objective: "Complete the isolated fixture", status: "paused" });
+      goalTurn = true;
+      await rpc("turn/start", { threadId: goalThreadId, model: webModel, effort: "medium",
+        input: [{ type: "text", text: "Complete the isolated Goal and return the fixture answer." }] });
+      const goalCompletion = await notification("turn/completed");
+      expect(goalCompletion.params).toMatchObject({ threadId: goalThreadId, turn: { status: "completed" } });
+      expect(await rpc("thread/goal/get", { threadId: goalThreadId })).toMatchObject({
+        goal: { threadId: goalThreadId, status: "complete" },
+      });
+      expect(await rpc("thread/goal/get", { threadId })).toMatchObject({ goal: null });
+      const settledThread = await rpc("thread/read", { threadId: goalThreadId, includeTurns: true });
+      expect(settledThread.thread.turns).toHaveLength(1);
+      expect(settledThread.thread.turns[0].items.filter((item: any) =>
+        item.type === "agentMessage" && item.text === "Official Goal completed.")).toHaveLength(1);
+      expect(webRequests).toHaveLength(2);
+      goalTurn = false;
+
+      async function startHeldWebTurn() {
+        const { thread: current } = await rpc("thread/start", { model: webModel,
+          modelProvider: TELA_DEFAULT_DESKTOP_PROVIDER_ID, cwd: root, historyMode: "paginated" });
+        const started = Promise.withResolvers<void>();
+        heldWebTurns.set(current.id, started.resolve);
+        const { turn } = await rpc("turn/start", { threadId: current.id, model: webModel, effort: "medium",
+          input: [{ type: "text", text: "Wait for the isolated Web fixture." }] });
+        await started.promise;
+        return { threadId: current.id, turnId: turn.id };
+      }
+      const interrupted = await startHeldWebTurn();
+      const unaffected = await startHeldWebTurn();
+      await rpc("turn/interrupt", interrupted);
+      expect((await notification("turn/completed")).params).toMatchObject({
+        threadId: interrupted.threadId, turn: { id: interrupted.turnId, status: "interrupted" },
+      });
+      // Only the engine owner sees the interrupt. Loss of the Responses
+      // observer does not grant the provider permission to stop Web.
+      expect(stoppedWebTurns).toEqual([]);
+      releaseHeldWebTurns.resolve();
+      expect((await notification("turn/completed")).params).toMatchObject({
+        threadId: unaffected.threadId, turn: { id: unaffected.turnId, status: "completed" },
+      });
+      expect(stoppedWebTurns).toEqual([]);
+      expect(webRequests).toHaveLength(4);
       nativeCatalogUnavailable = true;
       const inaccessibleCatalog = await fetch(new URL("models", owned.responses.baseUrl), {
         headers: { authorization: "Bearer isolated-fixture-only" },
@@ -716,6 +789,7 @@ test.skipIf(!officialEngine)("official engine selects Web then original Native t
       const available = await rpc("model/list", { includeHidden: true });
       expect(available.data.map((entry: any) => entry.model)).toContain(nativeModel);
     } finally {
+      releaseHeldWebTurns.resolve();
       engine.stdin.end();
       await engine.exited;
       await reading;

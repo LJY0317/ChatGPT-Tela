@@ -146,6 +146,13 @@ and competing authors continue to require independent proof.
 Build `2026111807` returned both expected final answers to profile 2's official
 Desktop chat, one from each supported Web model.
 
+The bundled Codex engine also completed the original thread's Goal and saved one
+final answer through Tela's Responses route in an isolated test with a simulated
+Web browser. With two Web turns open, the engine's `turn/interrupt` interrupted
+only the requested Native turn while the other completed. The Responses provider
+had no authenticated stop instruction for the underlying Web operation. Exact Web
+cancellation still needs a signal from the app that owns the turn.
+
 ### Concurrent delegation setting: pending host support
 
 The requested policy is **three simultaneous Web-delegated child tasks per profile
