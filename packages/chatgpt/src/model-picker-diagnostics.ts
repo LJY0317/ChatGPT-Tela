@@ -21,23 +21,22 @@ export function modelPickerFailureReason(error: unknown): string {
       "ChatGPT model discovery could not restore the original effort": "original_effort_unrestored",
       "ChatGPT model discovery original effort is unsupported": "original_effort_unsupported",
       "ChatGPT model family label must be non-empty": "family_label_empty",
-      "selected ChatGPT Web model family disappeared before trusted-pointer fallback": "family_disappeared",
       "Web model discovery is incomplete": "catalog_empty",
       "ChatGPT model picker has no current family/effort selection": "current_selection_missing",
       "ChatGPT model picker current effort is outside the supported semantic range": "current_effort_unsupported",
       "ChatGPT model family/effort readback did not converge on the requested Web route": "selection_readback_mismatch",
       "ChatGPT model selection canary restoration readback did not match the original mode": "canary_restoration_mismatch",
       "ChatGPT model selection canary could not prove the original family/effort in the live catalog": "canary_original_unproven",
-      "ChatGPT model picker effort tick is missing": "effort_tick_missing",
       "browser surface does not expose page automation for ChatGPT model selection": "page_automation_missing",
     };
     if (Object.hasOwn(exact, message)) return exact[message]!;
     if (/^ChatGPT model picker activation failed \([a-z-]+(?::\d+)?\)$/.test(message)) return "activation_rejected";
     if (/^ChatGPT model picker timed out waiting for [a-z-]+$/.test(message)) return "picker_wait_timeout";
-    if (/^ChatGPT model family does not (?:expose|allow) effort (?:low|medium|high|xhigh|max)$/.test(message)) return "effort_unavailable";
     if (/^ChatGPT effort slider did not move exactly one step toward (?:low|medium|high|xhigh|max)$/.test(message)) return "effort_step_uncommitted";
     const code = (error as Error & { code?: unknown }).code;
-    if (code === "tela_web_model_unavailable") return "family_unavailable";
+    if (code === "tela_web_model_unavailable") {
+      return (error as { unavailable?: unknown }).unavailable === "effort" ? "effort_unavailable" : "family_unavailable";
+    }
     if (code === "tela_web_model_picker_control_unavailable") return "model_picker_control_unavailable";
     return diagnosticFailureFields(error).reason_class;
   } catch { return "unknown"; }

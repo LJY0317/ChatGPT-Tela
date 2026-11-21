@@ -19,8 +19,8 @@ export interface ChatGptWebModelFamily {
 /** A proven picker inventory mismatch, not an unknown UI/transport failure. */
 export class ChatGptWebModelUnavailableError extends Error {
   readonly code = "tela_web_model_unavailable";
-  constructor() {
-    super("Selected ChatGPT Web model is no longer present. Reconnect Web to refresh its models; Native remains available.");
+  constructor(readonly unavailable: "family" | "effort" = "family") {
+    super("The requested Web model or reasoning level is unavailable. Choose another option.");
     this.name = "ChatGptWebModelUnavailableError";
   }
 }
@@ -612,7 +612,7 @@ async function selectFamily(
 
   snapshot = await advancedPicker(page, signal);
   target = families(snapshot).find(row => row.key === familyKey);
-  if (!target) throw new Error("selected ChatGPT Web model family disappeared before trusted-pointer fallback");
+  if (!target) throw new ChatGptWebModelUnavailableError();
   if (target.checked) return snapshot;
   if (target.point) {
     emitDiagnosticEvent("chatgpt_tela_work", "web_model_family_selection_start", {
@@ -642,13 +642,8 @@ async function setEffort(
   const slider = snapshot.slider;
   if (!slider) throw new Error("ChatGPT model picker exposes no effort slider");
   const targetIndex = CHATGPT_WEB_EFFORTS.indexOf(effort);
-  const count = slider.max - slider.min + 1;
-  if (targetIndex < 0 || targetIndex >= count) throw new Error(`ChatGPT model family does not expose effort ${effort}`);
-  const tick = slider.ticks[targetIndex];
-  if (!tick) throw new Error("ChatGPT model picker effort tick is missing");
-  if (tick.locked === true || (tick.locked === null && !slider.power)) {
-    throw new Error(`ChatGPT model family does not allow effort ${effort}`);
-  }
+  if (!effortAvailability(snapshot).includes(effort)) throw new ChatGptWebModelUnavailableError("effort");
+  const tick = slider.ticks[targetIndex]!;
   const targetValue = slider.min + targetIndex;
   if (slider.value !== targetValue) {
     emitDiagnosticEvent("chatgpt_tela_work", "web_model_effort_selection_start", {
@@ -794,7 +789,11 @@ export async function selectChatGptWebModel(
       const verifiedFamilies = families(verified);
       const family = verifiedFamilies.find(row => row.key === input.familyKey);
       const slider = verified.slider;
-      const familyReady = family?.checked === true;
+      if (!family) throw new ChatGptWebModelUnavailableError();
+      const familyReady = family.checked;
+      if (familyReady && slider && !effortAvailability(verified).includes(input.effort)) {
+        throw new ChatGptWebModelUnavailableError("effort");
+      }
       const effortReady = Boolean(slider && slider.value === slider.min + effortIndex);
       if (familyReady && effortReady) {
         await page.action("key_escape", () => page.page.pressKey("Escape", signal));
@@ -808,8 +807,8 @@ export async function selectChatGptWebModel(
       }
       emitDiagnosticEvent("chatgpt_tela_work", "web_model_selection_readback_mismatch", {
         attempt,
-        requested_family_present: Boolean(family),
-        requested_family_checked: family?.checked ?? false,
+        requested_family_present: true,
+        requested_family_checked: family.checked,
         checked_family_count: verifiedFamilies.filter(row => row.checked).length,
         slider_present: Boolean(slider),
         slider_min: slider?.min ?? -1,

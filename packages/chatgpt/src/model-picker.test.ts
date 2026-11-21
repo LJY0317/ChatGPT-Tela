@@ -116,6 +116,26 @@ describe("ChatGPT Web model route identity", () => {
       .rejects.toMatchObject({ code: "tela_web_model_unavailable" });
     expect(activations).toBe(0);
   });
+  test("the selected effort can become locked before final model readback", async () => {
+    let locked = false;
+    let modelActivations = 0;
+    const page: BrowserPageAutomation = {
+      async evaluate(source) {
+        if (source.includes("chatgpt-tela-model-picker-activate-v1")) modelActivations++;
+        return { controlCount: 1, controlOpen: true, menuCount: 1, view: "advanced",
+          families: [{ label: "Fixture", checked: true, disabled: false }],
+          slider: { min: 0, max: 0, value: 0, power: true, ticks: [{ locked, selected: true }] } } as never;
+      },
+      async pressKey(key) { if (key === "Escape") locked = true; },
+      async pointerClick() { throw new Error("unexpected selection"); },
+      async typeFocusedEditable() {}, async clearFocusedEditable() {},
+      async mutationRevision() { return 0; }, async waitForDomMutation() { return 1; },
+    };
+    await expect(selectChatGptWebModel(pickerSurface(page), {
+      familyKey: chatGptWebFamilyKey("Fixture"), effort: "low",
+    })).rejects.toMatchObject({ code: "tela_web_model_unavailable" });
+    expect(modelActivations).toBe(0);
+  });
   test("reads back a committed advanced view after the picker dismisses during transition", async () => {
     let opened = true;
     let advanced = false;

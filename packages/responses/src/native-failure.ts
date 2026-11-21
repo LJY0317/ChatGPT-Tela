@@ -6,6 +6,9 @@ import { webContinuityRecovery } from "./web-continuity-recovery";
 import { nativeProjectionRecovery } from "./native-projection-recovery";
 
 const TERMINAL_FAILURES = {
+  tela_web_model_unavailable: {
+    message: "The requested Web model or reasoning level is unavailable. Choose another option.",
+  },
   tela_native_turn_already_retired: {
     message: "This Native turn is already retired. Repeating it cannot resume the interrupted operation. Continue with a new, explicitly authorized Native turn, reusing verified context and reconciling any uncertain operation first.",
     recovery: { kind: "authorized_native_continuation", requires_user_action: true,
@@ -46,7 +49,6 @@ export function nativeFailure(error: unknown, hideUnknownDetails = false) {
         ...(error.reasonClass === "unusual_activity" ? { message: "ChatGPT에서 활동 제한 안내와 함께 응답이 중단됐습니다. 원래 요청은 아직 완료되지 않았습니다." } : {}) } : {}) },
   };
   return { error: { type: "invalid_request_error", retryable: false, diagnostics,
-    ...(code === "tela_web_model_unavailable" ? { code } : {}),
     message: hideUnknownDetails ? "Supplied Web response failed"
       : error instanceof Error ? error.message : String(error) } };
 }

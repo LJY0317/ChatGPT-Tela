@@ -495,7 +495,10 @@ describe("Native Responses HTTP transport", () => {
       const response = await handleNativeResponsesHttp(post(body()), gateway);
       expect(response.status).toBe(400);
       const failure = await response.json() as { error: { code?: string } };
-      expect(failure).toMatchObject({ error: { type: "invalid_request_error", retryable: false, message: "fixture failure" } });
+      expect(failure).toMatchObject({ error: { type: "invalid_request_error", retryable: false,
+        message: code === "tela_web_model_unavailable"
+          ? "The requested Web model or reasoning level is unavailable. Choose another option."
+          : "fixture failure" } });
       expect(failure.error.code).toBe(code === "tela_web_model_unavailable" ? code : undefined);
       const replay = await handleNativeResponsesHttp(post(body()), gateway);
       expect(replay.status).toBe(400);
