@@ -30,12 +30,19 @@ export type SuppliedResultScope = {
   readonly store: SuppliedResultStore;
 };
 
+type ResultOwner = Pick<SuppliedResultScope, "profileSlot" | "accountFingerprint">;
+
+function sameResultOwner(left: ResultOwner | undefined, right: ResultOwner | undefined): boolean {
+  return left?.profileSlot === right?.profileSlot && left?.accountFingerprint === right?.accountFingerprint;
+}
+
 interface Operation {
   readonly cancellation: AbortController;
   readonly threadId: string;
   historyEnabled?: boolean;
   historyReleasedBytes?: number;
   readonly turnId: string;
+  readonly resultOwner?: ResultOwner;
   fingerprint: string;
   readonly initialFingerprint: string;
   readonly previousRequestFingerprint?: string;
@@ -96,6 +103,8 @@ export function createSuppliedRequestGateway(input: {
 } {
   const planner = input.planner ?? createNativeRequestDevelopmentWebTurnPlanner({ ...(input.suppliedHistory ? { suppliedHistory: input.suppliedHistory } : {}) });
   const controller = new AbortController();
+  const currentCompletedResults = () => typeof input.completedResults === "function"
+    ? input.completedResults() : input.completedResults;
   const operations = new Map<string, Operation>();
   const retireOperation = (task: string) => {
     operations.get(task)?.diagnostics?.finish();
@@ -173,8 +182,7 @@ export function createSuppliedRequestGateway(input: {
       // Metadata is correlation scoped by this local ingress, never canonical Native authority.
       const identity = parseNativeTurnReplayIdentity(body);
       const hash = fingerprint(body);
-      const completedResults = typeof input.completedResults === "function"
-        ? input.completedResults() : input.completedResults;
+      const completedResults = currentCompletedResults();
       const resultIdentity = completedResults ? {
         profileSlot: completedResults.profileSlot, accountFingerprint: completedResults.accountFingerprint,
         threadId: identity.threadId, turnId: identity.turnId, requestFingerprint: hash,
@@ -188,6 +196,9 @@ export function createSuppliedRequestGateway(input: {
         if (op.finishedAt !== undefined && Date.now() - op.finishedAt >= WEB_EPOCH_IDLE_RETENTION_MS) retireOperation(task);
       }
       let operation = operations.get(identity.threadId);
+      if (operation && !sameResultOwner(operation.resultOwner, resultIdentity)) {
+        throw Error("Web operation account or profile changed");
+      }
       let previousRequestFingerprint: string | undefined;
       // One Native turn may request another response after consuming a final,
       // e.g. an injected coordinator message. Only a delivered final ends a
@@ -270,6 +281,7 @@ export function createSuppliedRequestGateway(input: {
         const owned: Operation = {
           cancellation: new AbortController(), threadId: identity.threadId, turnId: identity.turnId,
           fingerprint: hash, initialFingerprint: hash, capability, listeners, delivered: false,
+          ...(resultIdentity ? { resultOwner: resultIdentity } : {}),
           ...(previousRequestFingerprint ? { previousRequestFingerprint } : {}),
           round: new ExactToolRound(), advertisedGoals, offer,
           outcome: Promise.resolve().then(async () => {
@@ -330,8 +342,7 @@ export function createSuppliedRequestGateway(input: {
                     && !(owned.cancellation.signal.reason instanceof NativeWebHandoffUnproven),
                   isToolExecutionPending: () => owned.round.pending !== undefined,
                   ...(resultIdentity && completedResults ? { beforeSend: async () => {
-                    if (typeof input.completedResults === "function"
-                      && input.completedResults()?.accountFingerprint !== resultIdentity.accountFingerprint) {
+                    if (!sameResultOwner(currentCompletedResults(), resultIdentity)) {
                       throw Error("App-owned Web result storage account binding changed");
                     }
                     await completedResults.store.recordSuppliedSend(resultIdentity, owned.previousRequestFingerprint);
@@ -364,8 +375,7 @@ export function createSuppliedRequestGateway(input: {
               }));
               if (resultIdentity) {
                 try {
-                  if (typeof input.completedResults === "function"
-                    && input.completedResults()?.accountFingerprint !== resultIdentity.accountFingerprint) {
+                  if (!sameResultOwner(currentCompletedResults(), resultIdentity)) {
                     throw Error("App-owned Web result storage account binding changed");
                   }
                   // Continuations replace the host request body for the same

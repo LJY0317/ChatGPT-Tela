@@ -503,12 +503,12 @@ test("exact host rejoin preserves a completed final after a transient storage fa
   } finally { await f.gateway.close(); }
 });
 
-test("account changes during Web execution do not persist a final, while HTTP still returns success", async () => {
-  let release!: () => void, started!: () => void, account = "a".repeat(64), preserved = 0;
+test("a final cannot rejoin under a different account or profile while the original HTTP response can finish", async () => {
+  let release!: () => void, started!: () => void, account = "a".repeat(64), profileSlot = 2, preserved = 0;
   const wait = new Promise<void>(resolve => { release = resolve; });
   const submitted = new Promise<void>(resolve => { started = resolve; });
   const f = fixture({ wait, onSubmit: started, completedResults: () => ({
-    profileSlot: 2, accountFingerprint: account,
+    profileSlot, accountFingerprint: account,
     store: {
       async readSuppliedResult() { return undefined; },
       async recordSuppliedSend() {},
@@ -527,9 +527,18 @@ test("account changes during Web execution do not persist a final, while HTTP st
     const response = await pending;
     expect(response.status).toBe(200);
     expect(f.gateway.shutdownReadiness()).toBe("blocked");
+    await expect(f.gateway.handle(request())).rejects.toThrow("Web operation account or profile changed");
+    expect(preserved).toBe(0);
     expect(JSON.stringify(await response.json())).toContain("A inspected.");
     expect(preserved).toBe(0);
     expect(f.gateway.shutdownReadiness()).toBe("ready");
+    await expect(f.gateway.handle(request())).rejects.toThrow("Web operation account or profile changed");
+    account = "a".repeat(64);
+    profileSlot = 1;
+    await expect(f.gateway.handle(request())).rejects.toThrow("Web operation account or profile changed");
+    profileSlot = 2;
+    expect(await f.gateway.handle(request())).toMatchObject({ type: "final", answer: "A inspected." });
+    expect(preserved).toBe(0);
     expect(f.submissions).toHaveLength(1);
   } finally { release(); await f.gateway.close(); }
 });
