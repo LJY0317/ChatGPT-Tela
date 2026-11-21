@@ -39,6 +39,7 @@ Usage:
   chatgpt-tela services restart chat
   chatgpt-tela chat roots
   chatgpt-tela local-mcp [package <destination>|register|status]
+  chatgpt-tela start-web-delegation --slot N --title <title> [--model <id>] < assignment.txt
   chatgpt-tela retain-delegation --thread <child-id> [--slot N]
   chatgpt-tela retain-delegation --standalone --thread <web-chat-id> --slot N
   chatgpt-tela list-delegations [--slot N]

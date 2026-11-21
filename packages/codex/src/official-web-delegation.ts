@@ -1,5 +1,6 @@
 import { readIndexedNativeItemsPage } from "./native-history-items";
 import { connectOfficialStdio } from "./stored-history-rpc";
+import { readDynamicWebModelCatalog } from "./web-model-catalog";
 
 interface OfficialTurn {
   id: string;
@@ -8,18 +9,19 @@ interface OfficialTurn {
 
 /** Own a new conversation and one turn through the official process. */
 export async function runOfficialWebDelegation(input: {
-  executable: string; codexHome: string; cwd: string; model: string; title: string; prompt: string;
+  executable: string; codexHome: string; cwd: string; model?: string; title: string; prompt: string;
 }) {
-  if (!input.model.startsWith("chatgpt-tela-web/")) throw Error("Choose a Tela Web model");
+  if (input.model && !input.model.startsWith("chatgpt-tela-web/")) throw Error("Choose a Tela Web model");
   const rpc = await connectOfficialStdio({ ...input, clientName: "tela-web-delegation" });
   let threadId: string | undefined;
   let turnId: string | undefined;
   try {
+    const model = input.model ?? (await readDynamicWebModelCatalog({ request: rpc.send }))[0]!;
     const created = await rpc.send("thread/start", {
-      cwd: input.cwd, model: input.model, modelProvider: "openai", approvalPolicy: "never", sandbox: "read-only",
+      cwd: input.cwd, model, modelProvider: "openai", approvalPolicy: "never", sandbox: "read-only",
     }) as { model?: string; thread?: { id: string; modelProvider: string } };
     threadId = created.thread?.id;
-    if (!threadId || created.model !== input.model || created.thread?.modelProvider !== "openai") {
+    if (!threadId || created.model !== model || created.thread?.modelProvider !== "openai") {
       throw Error("Official Codex did not acknowledge the requested Web model");
     }
     await rpc.send("thread/name/set", { threadId, name: input.title });
@@ -35,13 +37,13 @@ export async function runOfficialWebDelegation(input: {
     });
     try {
       const started = await rpc.send("turn/start", {
-        threadId, model: input.model, input: [{ type: "text", text: input.prompt }],
+        threadId, model, input: [{ type: "text", text: input.prompt }],
       }) as { turn?: OfficialTurn };
       turnId = started.turn?.id;
       if (!turnId) throw Error("Official Codex did not return the turn ID");
       const turn = earlyCompletions.get(turnId) ?? await Promise.race([completion.promise, rpc.exited.then(() => undefined)]);
       if (!turn || turn.id !== turnId) throw Error("The submitted turn's completion could not be confirmed");
-      if (turn.status !== "completed") return { threadId, turnId, status: turn.status };
+      if (turn.status !== "completed") return { threadId, turnId, model, status: turn.status };
     } finally {
       unsubscribe();
     }
@@ -53,7 +55,7 @@ export async function runOfficialWebDelegation(input: {
       });
       const final = page.data.find(({ item }) => item.type === "agentMessage" && item.phase === "final_answer")?.item;
       if (final && typeof final.text === "string" && final.text.trim()) {
-        return { threadId, turnId, status: "completed" as const, itemId: final.id, answer: final.text };
+        return { threadId, turnId, model, status: "completed" as const, itemId: final.id, answer: final.text };
       }
       cursor = typeof page.nextCursor === "string" && page.nextCursor !== cursor ? page.nextCursor : undefined;
     } while (cursor);

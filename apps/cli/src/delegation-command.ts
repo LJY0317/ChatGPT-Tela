@@ -15,6 +15,7 @@ export async function runDelegationCommand(args: readonly string[], input: {
   paths?: ProductPaths; environment?: NodeJS.ProcessEnv;
   client?: Pick<CodexServiceClient, "manageDelegation">;
 } = {}): Promise<unknown> {
+  const environment = input.environment ?? process.env;
   const command = args[0];
   if (!command || !DELEGATION_COMMANDS.includes(command)) throw Error("Unknown delegation command");
   const option = (name: string) => {
@@ -30,13 +31,13 @@ export async function runDelegationCommand(args: readonly string[], input: {
   const slot = all ? undefined : profileSlotFromArguments(args.slice(1));
   if (command === "start-web-delegation") {
     if (!args.includes("--slot")) throw Error("Choose the destination with --slot");
-    const model = required("--model");
+    const model = option("--model");
     const title = required("--title").trim();
     if (!title || title.length > 187) throw Error("Choose a title from 1 to 187 characters");
     const paths = input.paths ?? resolveProductPaths();
     if (!readOwnershipManifest(paths.installManifest)) throw Error("Install Tela before starting a Web delegation");
     const route = readProductConfig(join(paths.configRoot, "product-v1.json")).appOwnedResponses?.find(route => route.slot === slot);
-    const installation = resolveDefaultDesktopInstallation({ environment: input.environment ?? process.env });
+    const installation = resolveDefaultDesktopInstallation({ environment });
     const configPath = route?.desktopConfigPath ?? (slot === 1 ? join(installation.codexHome, "config.toml") : undefined);
     if (!route || !configPath) throw Error("The destination has no registered Tela Web route");
     const config = Bun.TOML.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
@@ -48,13 +49,14 @@ export async function runDelegationCommand(args: readonly string[], input: {
     if (!prompt) throw Error("Pass the assignment on standard input");
     const result = await runOfficialWebDelegation({
       executable: installation.codexExecutable, codexHome: dirname(configPath),
-      cwd: process.cwd(), model, title: `[Tela Agent] ${title}`, prompt,
+      cwd: process.cwd(), ...(model ? { model } : {}), title: `[Tela Agent] ${title}`, prompt,
     });
-    return { slot, ...result };
+    const sourceThreadId = environment.CODEX_THREAD_ID;
+    return { ...(sourceThreadId ? { sourceThreadId } : {}), slot, ...result };
   }
   const standalone = args.includes("--standalone");
   if (standalone && (command === "reconcile-delegations" || command === "list-delegations" || !args.includes("--slot"))) throw Error("--standalone requires an explicit --slot and a chat");
-  const parentThreadId = standalone ? undefined : (input.environment ?? process.env).CODEX_THREAD_ID;
+  const parentThreadId = standalone ? undefined : environment.CODEX_THREAD_ID;
   if (command !== "reconcile-delegations" && !standalone && !parentThreadId) throw Error(`Run ${command} from the coordinating Native chat`);
   const owner = standalone ? { standalone: true as const } : { parentThreadId: parentThreadId! };
   let request: Parameters<CodexServiceClient["manageDelegation"]>[0];

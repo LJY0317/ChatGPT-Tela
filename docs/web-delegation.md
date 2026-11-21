@@ -121,15 +121,25 @@ the OpenAI provider. It waits for the submitted turn to finish and reads the
 final item from that same turn. In a live test from profile 1, profile 2
 received one Web request and returned the saved answer through the official API.
 
+From a Native chat, ask the agent to use its Native execution tool to send a
+new Web assignment to the other profile and return the answer. It runs the
+local Tela command and reads the result in the same Native turn. For example,
+from profile 1 choose slot 2, and from profile 2 choose slot 1.
+
 ```sh
-chatgpt-tela start-web-delegation --slot 2 --model <web-model-id> --title "Review" < assignment.txt
+chatgpt-tela start-web-delegation --slot 2 --title "Review" < assignment.txt
 ```
 
-The command is a foreground, read-only assignment runner. It returns the
-destination slot, chat and turn IDs, and the saved final item on success. It
-neither retries an ambiguous submission nor claims the new chat as a Native
-child. To start in the other direction, specify the other registered slot.
-Use the standalone retention commands for a chat you want to enroll.
+Use the launcher inside the installed Tela application if it is not on
+`PATH`. On macOS the executable is `Contents/MacOS/chatgpt-tela` inside
+`ChatGPT Tela.app`. Pass `--model` to pick a specific Web model. Otherwise Tela
+uses the first visible Web model from the destination's official catalog.
+
+The command is a foreground, read-only assignment runner. Its result includes
+the destination slot, chat and turn IDs, selected model and saved final item.
+When the Native host provides a chat ID, the result also includes that ID for
+correlation. The runner does not retry an ambiguous submission. Use the
+standalone retention commands to enroll a resulting Web chat.
 
 **Already running Desktop chats** remain owned by their Desktop server. The
 tested Desktop instances did not expose a supported profile-bound control

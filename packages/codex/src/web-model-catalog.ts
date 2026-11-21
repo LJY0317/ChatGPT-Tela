@@ -5,7 +5,7 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 /** Read the engine-owned dynamic list without requiring a Tela startup file. */
-export async function readDynamicWebModelCatalog(rpc: Pick<CodexAppServerRpc, "request">, signal: AbortSignal): Promise<readonly string[]> {
+export async function readDynamicWebModelCatalog(rpc: Pick<CodexAppServerRpc, "request">, signal?: AbortSignal): Promise<readonly string[]> {
   return visibleWebModels(await rpc.request("model/list", { includeHidden: true }, signal));
 }
 

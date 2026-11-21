@@ -8,8 +8,12 @@ export async function connectOfficialStdio(input: {
 }) {
   input.signal?.throwIfAborted();
   const listeners = new Set<(method: string, params: unknown) => void>();
+  // This server owns its own conversations. A shell without an owning turn
+  // must not inherit the Native caller's thread identity.
+  const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: input.codexHome };
+  delete env.CODEX_THREAD_ID;
   const child = spawn(input.executable, ["app-server", "--stdio"], {
-    env: { ...process.env, CODEX_HOME: input.codexHome }, stdio: ["pipe", "pipe", "ignore"], windowsHide: true,
+    env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true,
   });
   let sequence = 0, buffer = "", broken = false;
   const pending = new Map<number, { method: string; resolve(value: unknown): void; reject(error: unknown): void }>();
