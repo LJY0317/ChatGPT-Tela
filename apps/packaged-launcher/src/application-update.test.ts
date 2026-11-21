@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { observeDiagnosticEvents, type StructuralDiagnosticEvent } from "@chatgpt-tela/core";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -13,7 +13,7 @@ import {
 import { LaunchdUpgradeRunner } from "../../../tests/support/launchd-upgrade-runner";
 import { runProductUninstall } from "@chatgpt-tela/product-uninstall";
 import { registerDeviceLocalChatPlugin } from "../../local-mcp/src/main";
-import { runApplicationUpdate } from "./application-update";
+import { reviewMissingApplicationSource, runApplicationUpdate } from "./application-update";
 import type { CodexNativeTargetAdapter } from "../../../packages/codex-service/src/native-target";
 import { verifyInstalledPackage } from "./runtime";
 import { readProductConfig, writeProductConfig, writeProductPreferences, resolveProductPreferencesPath } from "@chatgpt-tela/product-config";
@@ -321,6 +321,35 @@ test("an aborted Sparkle install restores the unchanged source without another s
       verifySignature() { throw Error("no pending update must not reverify the app"); },
       readBuild() { throw Error("no pending update must not read the build"); },
     })).toMatchObject({ ready: true });
+    expect(f.runner.calls).toEqual([]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("missing app recovery reviews only the exact signed source and leaves the handoff intact", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tela-missing-app-source-"));
+  try {
+    const f = await fixture(root);
+    await runApplicationUpdate("prepare", { ...f.input, targetBuild: "2" });
+    const journal = macApplicationUpdatePath(f.paths);
+    const prepared = readFileSync(journal);
+    const previous = join(root, "previous.app");
+    renameSync(f.sourceRoot, previous);
+    f.runner.calls.length = 0;
+    const review = { ...f.input, payloadRoot: previous };
+    let signed = false;
+    expect(reviewMissingApplicationSource({ ...review, verifySignature(path) {
+      expect(path).toBe(realpathSync(previous));
+      signed = true;
+    } })).toEqual({ applicationPath: join(realpathSync(dirname(f.sourceRoot)), "ChatGPT Tela.app"), sourceBuild: "1", targetBuild: "2" });
+    expect(signed).toBe(true);
+    expect(() => reviewMissingApplicationSource({ ...review, verifySignature() { throw Error("invalid signature"); } }))
+      .toThrow("invalid signature");
+    const file = join(previous, "Contents/Resources/runtime.js");
+    writeFileSync(file, "different package with the same version");
+    expect(() => reviewMissingApplicationSource(review)).toThrow("exact previous Tela app");
+    symlinkSync(join(root, "absent"), f.sourceRoot, process.platform === "win32" ? "junction" : "dir");
+    expect(() => reviewMissingApplicationSource(review)).toThrow("app path is occupied");
+    expect(readFileSync(journal)).toEqual(prepared);
     expect(f.runner.calls).toEqual([]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

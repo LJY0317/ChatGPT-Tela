@@ -1,6 +1,6 @@
 import { DELEGATION_COMMANDS, runDelegationCommand } from "../../cli/src/delegation-command";
 import { runDesktopAppCommand } from "./desktop-app";
-import { runApplicationUpdate } from "./application-update";
+import { reviewMissingApplicationSource, runApplicationUpdate } from "./application-update";
 import { diagnosePublicIngress, SystemTailscaleCommandRunner } from "@chatgpt-tela/tailscale-ingress";
 import { probePublicMcp, probeUnifiedDevelopmentMcp } from "@chatgpt-tela/gateway";
 import { readProductConfig } from "@chatgpt-tela/product-config";
@@ -61,6 +61,7 @@ Internal runtime commands:
   chatgpt-tela service <gateway|chat|codex>
   chatgpt-tela menu-bar
   chatgpt-tela maintenance-open [--payload <repair-package>]
+  chatgpt-tela application-update review-source --payload <previous-app>
 `;
 
 function serviceFromArguments(arguments_: readonly string[]): "gateway" | "chat" | "codex" {
@@ -78,6 +79,13 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args[0] && DELEGATION_COMMANDS.includes(args[0])) {
     process.stdout.write(JSON.stringify(await runDelegationCommand(args)) + "\n");
+    return;
+  }
+  if (args[0] === "application-update" && args[1] === "review-source") {
+    if (args.length !== 4 || args[2] !== "--payload" || !args[3]) {
+      throw Error("usage: application-update review-source --payload <previous-app>");
+    }
+    process.stdout.write(JSON.stringify(reviewMissingApplicationSource({ payloadRoot: args[3] })) + "\n");
     return;
   }
   if (args[0] === "application-update" || args[0] === "desktop-app") {

@@ -299,8 +299,14 @@ An isolated launchd run then restored the exact original bundle after the instal
 exited. The signed bundle matched the recorded source fingerprint. Once back at its
 installed path, the normal lifecycle cancellation resumed Chat once and preserved
 the stopped Gateway and Codex selection, configuration, and install identity.
-A maintenance entry point still needs to guide the user from a missing app to that
-verified source. The experiment did not exercise automatic recovery.
+The launcher from a trusted package can review a candidate while the installed
+app is missing. Run `chatgpt-tela application-update review-source --payload <previous-app>`.
+It checks the original signature and exact receipt/journal fingerprint and returns
+the installed location and both build numbers without changing anything. Review
+does not determine whether Sparkle's installer is still running. Once the installer
+has stopped, restoring the verified bundle to the reported location allows the
+restored launcher's `application-update cancel` to settle the existing handoff.
+A graphical maintenance entry point remains open.
 
 References: [Sparkle setup](https://sparkle-project.org/documentation/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),

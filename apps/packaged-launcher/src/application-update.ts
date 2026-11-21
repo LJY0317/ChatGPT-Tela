@@ -1,12 +1,12 @@
 import { refreshInstalledLocalPluginOwned } from "./local-plugin";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
   assertNoActivePackagedTransition, createPackagedInstallBlueprint, FilesystemOwnershipObserver, installPackagedMenuBarRegistration,
   macApplicationUpdatePath, mutateOwnershipManifest, packagedInstallSpecFromPayload, packagedPayloadFingerprint,
   PackagedPlatformServiceController, PackagedServiceShutdownNotStartedError, readMacApplicationUpdate,
-  readOwnershipManifest, readPackagedProductManifest, recordInstalledApplicationPayload, resolveProductPaths, ServiceRegistrationInstaller,
+  readOwnershipManifest, readPackagedPayloadReceipt, readPackagedProductManifest, recordInstalledApplicationPayload, resolveProductPaths, ServiceRegistrationInstaller,
   withPackagedTransitionOwner, type MacApplicationUpdate, type TelaServiceId,
 } from "@chatgpt-tela/product-lifecycle";
 import { settleOwnedUpdateWork, ownedServiceShutdown, type UpdateWorkAction } from "./service-shutdown";
@@ -31,6 +31,56 @@ function isNewerBuild(target: string, source: string): boolean {
     if (targetPart !== sourcePart) return targetPart > sourcePart;
   }
   return false;
+}
+
+function verifyApplicationSignature(path: string) {
+  execFileSync("/usr/bin/codesign", ["--verify", "--strict", "--deep", path], { stdio: "pipe" });
+}
+
+function readApplicationBuild(path: string) {
+  return execFileSync("/usr/bin/plutil", ["-extract", "CFBundleVersion", "raw", "-o", "-",
+    join(path, "Contents/Info.plist")], { encoding: "utf8" }).trim();
+}
+
+/** Review only. Sparkle owns its installer and the app path may appear again after review. */
+export function reviewMissingApplicationSource(input: {
+  payloadRoot: string; options?: PackagedLifecycleOptions;
+  verifySignature?: (path: string) => void;
+  readBuild?: (path: string) => string;
+}) {
+  const options = input.options ?? {};
+  const paths = resolveProductPaths(options);
+  const update = readMacApplicationUpdate(paths);
+  if (!update || update.phase !== "ready" || update.pendingStop) {
+    throw Error("no prepared update for the missing Tela application");
+  }
+  const source = realpathSync(input.payloadRoot);
+  const spec = packagedInstallSpecFromPayload(source);
+  const blueprint = createPackagedInstallBlueprint({ spec, ...options });
+  const resource = blueprint.payload.resource;
+  const applicationPath = join(realpathSync(dirname(resource.path)), basename(resource.path));
+  if (update.applicationPath !== applicationPath) throw Error("the pending update does not match the owned Tela installation");
+  if (lstatSync(applicationPath, { throwIfNoEntry: false })) {
+    throw Error("the installed app path is occupied");
+  }
+  const owner = readOwnershipManifest(paths.installManifest);
+  if (blueprint.platform !== "darwin" || !resource.metadataRoot
+    || !owner || owner.installId !== update.installId || owner.productVersion !== update.sourceVersion
+    || JSON.stringify(owner.resources.find(item => item.id === resource.id)) !== JSON.stringify(resource)
+    || new FilesystemOwnershipObserver().observe(resource, owner) !== "owned") {
+    throw Error("the pending update does not match the owned Tela installation");
+  }
+  const receipt = readPackagedPayloadReceipt(resource);
+  if (!receipt || receipt.installId !== owner.installId || receipt.resourceId !== resource.id
+    || receipt.productVersion !== update.sourceVersion || receipt.payloadFingerprint !== update.sourceFingerprint
+    || spec.productVersion !== update.sourceVersion || blueprint.payloadFingerprint !== update.sourceFingerprint) {
+    throw Error("use the exact previous Tela app for recovery");
+  }
+  (input.verifySignature ?? verifyApplicationSignature)(source);
+  if ((input.readBuild ?? readApplicationBuild)(source) !== update.sourceBuild) {
+    throw Error("use the exact previous Tela app for recovery");
+  }
+  return { applicationPath: update.applicationPath, sourceBuild: update.sourceBuild, targetBuild: update.targetBuild };
 }
 
 /** Sparkle replaces the app. This command only settles existing Tela service ownership. */
@@ -84,10 +134,8 @@ export async function runApplicationUpdate(action: "wait" | "prepare" | "finish"
     }
     return { ready: true };
   }
-  const verifySignature = input.verifySignature ?? (path => {
-    execFileSync("/usr/bin/codesign", ["--verify", "--strict", "--deep", path], { stdio: "pipe" });
-  });
-  const readBuild = input.readBuild ?? (path => execFileSync("/usr/bin/plutil", ["-extract", "CFBundleVersion", "raw", "-o", "-", join(path, "Contents/Info.plist")], { encoding: "utf8" }).trim());
+  const verifySignature = input.verifySignature ?? verifyApplicationSignature;
+  const readBuild = input.readBuild ?? readApplicationBuild;
   const path = macApplicationUpdatePath(paths);
   const temporary = path + ".pending";
   const save = (state: MacApplicationUpdate) => {

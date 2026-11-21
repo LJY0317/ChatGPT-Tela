@@ -151,8 +151,9 @@ import Sparkle
     expect(existsSync(join(root, "prepared"))).toBe(false);
 
     for (const startup of ["ordinary", "pending"]) {
-      child = Bun.spawn([join(mac, "probe")], { env: { ...env, TELA_STARTUP_RECOVERY: startup }, stdout: "ignore", stderr: "pipe" });
-      const stderr = new Response(child.stderr).text();
+      const probe = Bun.spawn([join(mac, "probe")], { env: { ...env, TELA_STARTUP_RECOVERY: startup }, stdout: "ignore", stderr: "pipe" });
+      child = probe;
+      const stderr = new Response(probe.stderr).text();
       expect(await Promise.race([child.exited, timeout]), await stderr).toBe(0);
     }
 
