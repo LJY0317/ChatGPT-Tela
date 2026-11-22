@@ -596,23 +596,28 @@ test("an unavailable official thread cannot be treated as permanently deleted", 
 test("manual tracking removal before either retention deadline is exact and never touches official history", async () => {
   const f = fixture();
   let restarted: ReturnType<typeof createDelegatedRetention> | undefined;
+  const trackedTasks = (manager: ReturnType<typeof createDelegatedRetention>) => {
+    const status = manager.status(true);
+    if (!("tracked" in status)) throw Error("Expected tracked status");
+    return status.tracked;
+  };
   try {
     await f.manager.enroll(1, "parent", "child");
     await f.manager.enroll(2, "parent", "child");
     await f.manager.acknowledge(1, answer);
-    const tracked = f.manager.status(true).tracked!;
+    const tracked = trackedTasks(f.manager);
     const target = tracked.find(item => item.slot === 1)!;
     expect({ ...target }).toMatchObject({ slot: 1, threadId: "child", enrolledAt: expect.any(Number),
       trackingId: expect.any(String) });
     expect(f.manager.status().overdue).toEqual([]);
     const before = f.calls.length;
-    for (const args of [
+    for (const [slot, threadId, trackingId, enrolledAt] of [
       [2, target.threadId, target.trackingId, target.enrolledAt],
       [1, "another-thread", target.trackingId, target.enrolledAt],
       [1, target.threadId, "wrong-registration", target.enrolledAt],
       [1, target.threadId, target.trackingId, target.enrolledAt + 1],
     ] as const) {
-      await expect(f.manager.stopTracking(...args)).rejects.toThrow("has changed");
+      await expect(f.manager.stopTracking(slot, threadId, trackingId, enrolledAt)).rejects.toThrow("has changed");
     }
     expect(f.calls).toHaveLength(before);
     expect(await f.manager.stopTracking(target.slot, target.threadId, target.trackingId, target.enrolledAt))
@@ -620,10 +625,10 @@ test("manual tracking removal before either retention deadline is exact and neve
     await expect(f.manager.stopTracking(target.slot, target.threadId, target.trackingId, target.enrolledAt))
       .rejects.toThrow("has changed");
     expect(f.calls).toHaveLength(before);
-    expect(f.manager.status(true).tracked).toMatchObject([{ slot: 2, threadId: "child" }]);
+    expect(trackedTasks(f.manager)).toMatchObject([{ slot: 2, threadId: "child" }]);
     await f.manager.close();
     restarted = createDelegatedRetention(f.options);
-    expect(restarted.status(true).tracked).toMatchObject([{ slot: 2, threadId: "child" }]);
+    expect(trackedTasks(restarted)).toMatchObject([{ slot: 2, threadId: "child" }]);
     expect((await restarted.listForParent(1, "parent")).tracked).toEqual([]);
     expect((await restarted.listForParent(2, "parent")).tracked).toHaveLength(1);
     expect(f.calls).toHaveLength(before);
