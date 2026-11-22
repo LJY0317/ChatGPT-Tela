@@ -101,14 +101,11 @@ async function main(): Promise<void> {
   }
   const activeDispatches = new Set<Promise<unknown>>();
   const activeWebTurns = new Map<Promise<unknown>, { slot: number; interrupt: () => Promise<unknown> | undefined }>();
-  const submitWebDelegation = async (request: {
-    slot: number; title: string; prompt: string; cwd: string;
-    model?: string; coordinatorThreadId?: string; wait?: boolean;
-  }) => {
-    const route = readProductConfigIfPresent()?.appOwnedResponses?.find(row => row.slot === request.slot);
+  const officialWebProfile = (slot: number) => {
+    const route = readProductConfigIfPresent()?.appOwnedResponses?.find(row => row.slot === slot);
     if (!route) throw Error("The destination has no registered Tela Web route");
     const installation = resolveDefaultDesktopInstallation();
-    const configPath = route.desktopConfigPath ?? (request.slot === 1
+    const configPath = route.desktopConfigPath ?? (slot === 1
       ? join(installation.codexHome, "config.toml") : undefined);
     if (!configPath) throw Error("The destination has no configured Desktop history location");
     const config = Bun.TOML.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
@@ -116,8 +113,14 @@ async function main(): Promise<void> {
       || config.openai_base_url !== `http://127.0.0.1:${route.port}/${route.capability}/v1`) {
       throw Error("The destination profile is not using its registered OpenAI Web route");
     }
+    return { executable: installation.codexExecutable, codexHome: dirname(configPath) };
+  };
+  const submitWebDelegation = async (request: {
+    slot: number; title: string; prompt: string; cwd: string;
+    model?: string; coordinatorThreadId?: string; wait?: boolean;
+  }) => {
     const task = submitOfficialWebDelegation({
-      executable: installation.codexExecutable, codexHome: dirname(configPath),
+      ...officialWebProfile(request.slot),
       cwd: request.cwd, ...(request.model ? { model: request.model } : {}),
       title: `[Tela Agent] ${request.title}`, prompt: request.prompt,
       // The first dispatch is already registered before turn/start. The
@@ -149,15 +152,10 @@ async function main(): Promise<void> {
         if (!delegatedRetention) throw Error("Delegation retention is unavailable");
         const registration = await delegatedRetention.resolveFollowUp(
           request.slot, request.coordinatorThreadId, request.threadId);
-        const route = readProductConfigIfPresent()?.appOwnedResponses?.find(row => row.slot === request.slot);
-        const installation = resolveDefaultDesktopInstallation();
-        const configPath = route?.desktopConfigPath ?? (request.slot === 1
-          ? join(installation.codexHome, "config.toml") : undefined);
-        if (!route || !configPath) throw Error("The registered Web profile is unavailable");
         const task = submitOfficialWebFollowUp({
           threadId: request.threadId, resolveRegistration: async () => registration,
           profileScope: registration.profileScope, accountFingerprint: registration.accountFingerprint,
-          executable: installation.codexExecutable, codexHome: dirname(configPath), prompt: request.prompt,
+          ...officialWebProfile(request.slot), prompt: request.prompt,
           onAccepted: async (receipt, started) => {
             await delegatedRetention.acceptTurn(
               request.slot, request.coordinatorThreadId, request.threadId, receipt.turnId, started);

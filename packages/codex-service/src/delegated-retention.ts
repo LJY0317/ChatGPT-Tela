@@ -12,7 +12,7 @@ type State = {
   version: 1; scope: string; slot: number; parentThreadId?: string; threadId: string;
   enrolledAt: number; dueAt: number; pendingFirstTurnId?: string; firstTurnId?: string;
   latestAcceptedTurnId?: string; latestAcceptedAt?: number; acknowledgement?: ResultAcknowledgement;
-  dispatch?: { coordinatorThreadId: string; promptDigest: string; webAccountFingerprint?: string; model?: string };
+  dispatch?: { coordinatorThreadId: string; promptDigest: string; webAccountFingerprint?: string };
   archivedAt?: number; releasedAt?: number; archivePending?: true; reviewAfter?: number; issue?: string; title?: string;
 };
 const coordinator = (record: State) => record.dispatch?.coordinatorThreadId ?? record.parentThreadId;
@@ -109,8 +109,7 @@ export function createDelegatedRetention(input: {
       if (record.latestAcceptedAt !== undefined && !Number.isFinite(record.latestAcceptedAt)) throw Error("Invalid accepted turn time");
       if (record.dispatch !== undefined && (record.parentThreadId !== undefined
         || !id(record.dispatch.coordinatorThreadId) || !/^[a-f0-9]{64}$/.test(record.dispatch.promptDigest)
-        || record.dispatch.webAccountFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(record.dispatch.webAccountFingerprint)
-        || record.dispatch.model !== undefined && !/^chatgpt-tela-web\//.test(record.dispatch.model))) {
+        || record.dispatch.webAccountFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(record.dispatch.webAccountFingerprint))) {
         throw Error("Invalid delegation dispatch record");
       }
       if (settledExpired(record, now())) unlinkSync(path(k));
@@ -260,7 +259,6 @@ export function createDelegatedRetention(input: {
           const enrolledAt = now();
           const record: State = { version: 1, scope, slot, threadId, enrolledAt, dueAt: enrolledAt + 7 * DAY,
             title: thread.name.slice(0, 200), dispatch: { coordinatorThreadId, promptDigest,
-              ...(typeof thread.model === "string" && thread.model.startsWith("chatgpt-tela-web/") ? { model: thread.model } : {}),
               ...(webAccountFingerprint ? { webAccountFingerprint } : {}) } };
           save(k, record);
           event("delegation_retention_enrolled", record);
@@ -277,15 +275,24 @@ export function createDelegatedRetention(input: {
         if (!record || record.slot !== slot || record.pendingFirstTurnId !== undefined
           || settledAt(record) != null || record.archivePending
           || record.dispatch?.coordinatorThreadId !== id(coordinatorThreadId)
-          || !record.dispatch.model || !record.dispatch.webAccountFingerprint) {
+          || !record.dispatch.webAccountFingerprint) {
           throw Error("No active registered Web dispatch belongs to this coordinator and slot");
         }
         const accountFingerprint = profile.webAccountFingerprint?.();
         if (!accountFingerprint || accountFingerprint !== record.dispatch.webAccountFingerprint) {
           throw Error("The registered Web account has changed");
         }
-        return { threadId, profileScope: profile.scope, accountFingerprint,
-          model: record.dispatch.model };
+        const rpc = await profile.connect(threadId, false);
+        try {
+          const data: any = await rpc.request("thread/read", { threadId, includeTurns: false });
+          const thread = data?.thread;
+          assertManagedThread(thread, threadId, record.parentThreadId);
+          if (thread.modelProvider !== "openai" || typeof thread.model !== "string"
+            || !thread.model.startsWith("chatgpt-tela-web/") || !await dispatchedTurn(record, rpc)) {
+            throw Error("The original Web dispatch cannot be verified");
+          }
+          return { threadId, profileScope: profile.scope, accountFingerprint, model: thread.model as string };
+        } finally { await rpc.close(); }
       });
     },
     enroll(slot: number, parentThreadId: string | undefined, threadId: string, firstWebTurnId?: string) {

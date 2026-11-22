@@ -74,11 +74,15 @@ test("registered follow-up resolves persisted coordinator, slot, account and ori
   const f = fixture();
   try {
     const model = "chatgpt-tela-web/family/12345678901234567890";
+    const assignment = "First Web assignment";
     Object.assign(f.thread, { source: "cli", parentThreadId: null, modelProvider: "openai",
-      model, name: "[Tela Agent] Task" });
+      model: null, name: "[Tela Agent] Task" });
     f.setTurnPersisted(false);
-    await f.manager.registerDispatch(2, "parent", "child", "f".repeat(64));
-    expect(f.receipt().dispatch.model).toBe(model);
+    await f.manager.registerDispatch(2, "parent", "child", createHash("sha256").update(assignment).digest("hex"));
+    await expect(f.manager.resolveFollowUp(2, "parent", "child")).rejects.toThrow("original Web dispatch");
+    f.thread.model = model;
+    f.setAssignment(assignment);
+    f.setTurnPersisted(true);
     expect(await f.manager.resolveFollowUp(2, "parent", "child")).toEqual({
       threadId: "child", profileScope: "install/profile-one2", accountFingerprint: "a".repeat(64), model,
     });
