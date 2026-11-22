@@ -1,3 +1,4 @@
+import { diagnosticFingerprint, emitDiagnosticEvent } from "@chatgpt-tela/core";
 import { readIndexedNativeItemsPage } from "./native-history-items";
 import { connectOfficialStdio } from "./stored-history-rpc";
 import { readDynamicWebModelCatalog } from "./web-model-catalog";
@@ -51,11 +52,34 @@ export async function runOfficialWebDelegation(input: {
       }) as { turn?: OfficialTurn };
       turnId = started.turn?.id;
       if (!turnId) throw Error("Official Codex did not return the turn ID");
-      await input.onAccepted?.({ threadId, turnId, model, status: "accepted" },
-        () => rpc.send("turn/interrupt", { threadId, turnId }));
-      const turn = earlyCompletions.get(turnId) ?? await Promise.race([completion.promise, rpc.exited.then(() => undefined)]);
-      if (!turn || turn.id !== turnId) throw Error("The submitted turn's completion could not be confirmed");
-      if (turn.status !== "completed") return { threadId, turnId, model, status: turn.status };
+      const identity = { scope_fingerprint: diagnosticFingerprint(threadId), turn_fingerprint: diagnosticFingerprint(turnId) };
+      let interruptRequested = false;
+      await input.onAccepted?.({ threadId, turnId, model, status: "accepted" }, () => {
+        interruptRequested = true;
+        return rpc.send("turn/interrupt", { threadId, turnId });
+      });
+      const early = earlyCompletions.get(turnId);
+      const terminal = early ? { turn: early } : await Promise.race([
+        completion.promise.then(turn => ({ turn })),
+        rpc.exited.then(exit => ({ exit })),
+      ]);
+      if ("exit" in terminal) {
+        const { code, signal } = terminal.exit;
+        emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_completion_unconfirmed", {
+          ...identity, reason_class: "official_process_closed", interrupt_requested: interruptRequested,
+          ...(code !== null ? { exit_code: code } : {}),
+          ...(signal !== null ? { exit_signal: signal } : {}),
+        });
+        throw Error("The submitted turn's completion could not be confirmed");
+      }
+      const { turn } = terminal;
+      if (turn.status !== "completed") {
+        emitDiagnosticEvent("chatgpt_tela_codex", "web_delegation_turn_incomplete", {
+          ...identity, outcome: turn.status === "failed" || turn.status === "interrupted" ? turn.status : "unknown",
+          interrupt_requested: interruptRequested,
+        });
+        return { threadId, turnId, model, status: turn.status };
+      }
     } finally {
       unsubscribe();
     }

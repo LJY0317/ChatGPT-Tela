@@ -26,7 +26,12 @@ export async function connectOfficialStdio(input: {
   };
   child.on("error", error => fail(error, "process_error"));
   child.stdin.on("error", error => fail(error, "stream_error"));
-  const exited = new Promise<void>(resolve => child.once("close", () => { fail(Error("Stored history reader closed")); resolve(); }));
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
+    child.once("close", (code, signal) => {
+      fail(Error("Stored history reader closed"));
+      resolve({ code, signal });
+    });
+  });
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
     if (broken) return;

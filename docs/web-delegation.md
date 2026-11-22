@@ -145,6 +145,9 @@ turns in the same destination conversation use this tuple as their shared
 connection contract. Submit them through the same running Codex service with
 `follow-up-web-delegation --slot 2 --thread CHAT < assignment.txt`.
 Neither a receipt-read failure nor a disconnected caller submits another turn.
+For accepted new delegations, failure logs distinguish an official terminal status
+from a process exit before completion and record whether Tela requested interruption.
+Chat and turn identifiers are fingerprinted.
 When the Native host provides a chat ID, the result also includes that ID for
 correlation. Tela registers that destination chat with its Native coordinator
 before submission. If stdout closes after acceptance, the service continues

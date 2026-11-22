@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { diagnosticFingerprint, observeDiagnosticEvents } from "@chatgpt-tela/core";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,17 +63,29 @@ test("official ACK releases the caller while the service still owns completion",
 
 test("stdout closing after ACK fails completion without revoking the accepted turn identity", async () => {
   const fake = fixture(true);
+  const events: unknown[] = [];
+  const unobserve = observeDiagnosticEvents(event => {
+    if (event.stage === "web_delegation_completion_unconfirmed") events.push(event);
+  });
   try {
     const task = submitOfficialWebDelegation({ executable: fake.executable, codexHome: tmpdir(), cwd: tmpdir(),
       model: "chatgpt-tela-web/family/123", title: "[Tela Agent] Test", prompt: "Test",
     });
     expect(await task.accepted).toMatchObject({ threadId: "chat", turnId: "turn", status: "accepted" });
     await expect(task.finished).rejects.toThrow("completion could not be confirmed");
-  } finally { fake.dispose(); }
+    expect(events).toEqual([expect.objectContaining({
+      scope_fingerprint: diagnosticFingerprint("chat"), turn_fingerprint: diagnosticFingerprint("turn"),
+      reason_class: "official_process_closed", exit_code: 0, interrupt_requested: false,
+    })]);
+  } finally { unobserve?.(); fake.dispose(); }
 });
 
 test("explicit interruption uses the accepted turn identity on the owning connection", async () => {
   const fake = fixture(false);
+  const events: unknown[] = [];
+  const unobserve = observeDiagnosticEvents(event => {
+    if (event.stage === "web_delegation_turn_incomplete") events.push(event);
+  });
   try {
     const task = submitOfficialWebDelegation({ executable: fake.executable, codexHome: tmpdir(), cwd: tmpdir(),
       model: "chatgpt-tela-web/family/123", title: "[Tela Agent] Test", prompt: "Test",
@@ -80,7 +93,11 @@ test("explicit interruption uses the accepted turn identity on the owning connec
     const receipt = await task.accepted;
     expect(await task.interrupt()).toEqual({});
     expect(await task.finished).toMatchObject({ threadId: receipt.threadId, turnId: receipt.turnId, status: "interrupted" });
-  } finally { fake.dispose(); }
+    expect(events).toEqual([expect.objectContaining({
+      scope_fingerprint: diagnosticFingerprint("chat"), turn_fingerprint: diagnosticFingerprint("turn"),
+      outcome: "interrupted", interrupt_requested: true,
+    })]);
+  } finally { unobserve?.(); fake.dispose(); }
 });
 
 test("ACK receipt waits for its one retention handoff without resubmitting", async () => {
