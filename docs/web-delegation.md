@@ -149,8 +149,10 @@ chatgpt-tela acknowledge-result --slot 2 --thread CHAT --turn TURN --item FINAL_
 ```
 
 Recovery reads the saved first turn only after matching the original assignment.
-It sends no model request. A result must be saved in official Codex history to
-be recovered through this command. Viewing an answer leaves the seven-day
+It sends no model request. If Codex has no final answer after the turn ends,
+Tela can use the completed answer already saved for the same Web account and
+turn. The result identifies that source as `web`. An in-flight request or a
+send record alone cannot supply an answer. Viewing an answer leaves the seven-day
 deadline intact until explicit acknowledgement starts the twelve-hour deadline.
 Dispatches from a plain terminal without a Native chat ID can use explicit
 standalone retention registration.

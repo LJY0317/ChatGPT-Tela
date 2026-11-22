@@ -62,6 +62,7 @@
         "@chatgpt-tela/codex": "workspace:*",
         "@chatgpt-tela/codex-service": "workspace:*",
         "@chatgpt-tela/default-desktop-target": "workspace:*",
+        "@chatgpt-tela/development-runtime": "workspace:*",
         "@chatgpt-tela/product-config": "workspace:*",
         "@chatgpt-tela/product-lifecycle": "workspace:*",
         "@chatgpt-tela/service-protocol": "workspace:*",

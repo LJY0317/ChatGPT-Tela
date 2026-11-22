@@ -105,7 +105,7 @@ export async function findFinalAnswer(rpc: Pick<CodexAppServerRpc, "request">,
   return item;
 }
 
-async function findSavedFinal(rpc: Pick<CodexAppServerRpc, "request">,
+export async function findSavedFinal(rpc: Pick<CodexAppServerRpc, "request">,
   threadId: string, turnId: string, signal?: AbortSignal) {
   let cursor: string | undefined;
   const visited = new Set<string>();
@@ -133,8 +133,6 @@ export async function acknowledgeNativeResult(input: {
   readonly signal?: AbortSignal;
 }): Promise<ResultAcknowledgement> {
   const result = resultReference(input.result);
-  const now = input.now ?? Date.now();
-  if (!input.scope || !Number.isFinite(now) || now < 0) throw Error("Invalid acknowledgement scope or time");
   const thread = object(object(await input.rpc.request("thread/read", {
     threadId: result.threadId, includeTurns: false,
   }, input.signal)).thread);
@@ -150,6 +148,16 @@ export async function acknowledgeNativeResult(input: {
   } else if (latest?.id !== result.turnId || latest.status !== result.outcome) {
     throw Error("The specified terminal failure is not the latest recorded turn");
   }
+  return persistResultAcknowledgement(input);
+}
+
+/** Record an already verified official or saved-Web answer reference. */
+export function persistResultAcknowledgement(input: {
+  directory: string; scope: string; result: ResultReference; now?: number;
+}): ResultAcknowledgement {
+  const result = resultReference(input.result);
+  const now = input.now ?? Date.now();
+  if (!input.scope || !Number.isFinite(now) || now < 0) throw Error("Invalid acknowledgement scope or time");
   const scope = createHash("sha256").update(input.scope).digest("hex");
   const name = createHash("sha256").update(JSON.stringify({ scope, result })).digest("hex") + ".json";
   mkdirSync(input.directory, { recursive: true, mode: 0o700 });

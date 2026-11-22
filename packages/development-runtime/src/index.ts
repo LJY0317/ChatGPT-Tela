@@ -17,3 +17,5 @@ export * from "./product-profile";
 export * from "./runtime";
 
 export * from "./checkpoint-preparation-budget";
+
+export { FileNativeVisiblePrefixStageJournal } from "./native-visible-prefix-journal";

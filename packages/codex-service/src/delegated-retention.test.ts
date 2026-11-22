@@ -11,6 +11,7 @@ function fixture() {
   let now = 1_000_000_000, scope = "install/profile-one", busy = false, descendant: "active" | "archived" | undefined;
   let turnPersisted = true;
   let assignment: string | undefined;
+  let webAccount = "a".repeat(64), savedWebAnswer: string | undefined;
   const calls: { method: string; lifecycle: boolean; slot: number }[] = [];
   const thread: any = { id: "child", parentThreadId: "parent", status: { type: "idle" },
     source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } };
@@ -18,7 +19,13 @@ function fixture() {
   const item: any = { id: "answer", type: "agentMessage", phase: "final_answer", text: "PRIVATE_BODY" };
   const options = { directory: join(directory, "records"), acknowledgementDirectory: join(directory, "ack"),
     now: () => now, automatic: false,
-    profile: (slot: number) => ({ scope: scope + slot, async connect(_: string, lifecycle: boolean, delegatedTitle?: boolean) {
+    profile: (slot: number) => ({
+      scope: scope + slot,
+      webAccountFingerprint: () => webAccount,
+      async readSavedWebAnswer(account: string, threadId: string, turnId: string) {
+        return account === webAccount && slot === 2 && threadId === "child" && turnId === "turn" ? savedWebAnswer : undefined;
+      },
+      async connect(_: string, lifecycle: boolean, delegatedTitle?: boolean) {
       let leased = false;
       return { async close() { leased = false; }, async request(method: string, params?: any): Promise<any> {
         calls.push({ method, lifecycle, slot });
@@ -50,6 +57,8 @@ function fixture() {
   return { directory, options, manager, thread, turn, item, calls,
     setTurnPersisted(value: boolean) { turnPersisted = value; },
     setAssignment(value: string) { assignment = value; },
+    setWebAnswer(value: string) { savedWebAnswer = value; },
+    setWebAccount(value: string) { webAccount = value; },
     advance(hours: number) { now += hours * HOUR; }, setBusy(value: boolean) { busy = value; }, changeScope() { scope = "new-install"; }, setDescendant(value: "active" | "archived" | undefined) { descendant = value; },
     receipt() { return JSON.parse(readFileSync(join(options.directory, readdirSync(options.directory)[0]!), "utf8")); },
     async close() { await manager.close(); rmSync(directory, { recursive: true, force: true }); } };
@@ -85,6 +94,35 @@ test("a coordinator recovers its exact dispatched answer after restart without s
       expect(f.receipt().dueAt).toBe(f.receipt().enrolledAt + 12 * HOUR);
       expect(f.calls.every(({ method }) => method === "thread/read" || method === "thread/turns/list" || method === "thread/items/list")).toBe(true);
     } finally { await restarted.close(); }
+  } finally { await f.close(); }
+});
+
+test("recovers and acknowledges an already saved Web answer after the official turn is interrupted", async () => {
+  const f = fixture();
+  try {
+    Object.assign(f.thread, { source: "cli", parentThreadId: null, modelProvider: "openai", name: "[Tela Agent] Interrupted" });
+    const assignment = "Find the exact answer";
+    f.setTurnPersisted(false);
+    f.setAssignment(assignment);
+    await f.manager.registerDispatch(2, "parent", "child", createHash("sha256").update(assignment).digest("hex"));
+    f.setTurnPersisted(true);
+    f.turn.status = "interrupted";
+    expect(await f.manager.readResult(2, "parent", "child")).toMatchObject({ outcome: "interrupted" });
+    f.setWebAnswer("Already saved in Web");
+    const recovered = await f.manager.readResult(2, "parent", "child");
+    if (recovered.outcome !== "answer") throw Error("Expected saved Web answer");
+    expect(recovered).toMatchObject({ source: "web", text: "Already saved in Web" });
+    f.setWebAccount("b".repeat(64));
+    expect(await f.manager.readResult(2, "parent", "child")).toMatchObject({ outcome: "interrupted" });
+    const webReceipt = { ...answer, itemId: recovered.itemId };
+    await expect(f.manager.acknowledge(2, webReceipt)).rejects.toThrow("saved Web answer changed");
+    f.setWebAccount("a".repeat(64));
+    await f.manager.acknowledge(2, webReceipt);
+    const due = f.receipt().dueAt;
+    expect(due).toBe(f.receipt().enrolledAt + 12 * HOUR);
+    f.advance(12);
+    expect((await f.manager.reconcile()).outcomes).toEqual([{ threadId: "child", status: "archived" }]);
+    expect(f.calls.some(call => call.method === "turn/start")).toBe(false);
   } finally { await f.close(); }
 });
 

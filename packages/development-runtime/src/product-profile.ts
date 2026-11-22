@@ -229,10 +229,7 @@ export async function startAppOwnedProductResponsesRuntime(input: {
         }),
       });
       const binding = assertChatGptTelaAccountBinding(config.browserProfile, webDiscovery.accountFingerprint);
-      const resultStore = new FileNativeVisiblePrefixStageJournal({
-        directory: resolve(config.browserProfile.userDataDir, "native-visible-prefix-executions", binding.accountFingerprint),
-        initializationPath: `${config.browserProfile.accountBindingPath}.native-prefix-${binding.accountFingerprint}`,
-      });
+      const resultStore = FileNativeVisiblePrefixStageJournal.forProfile(config.browserProfile, binding.accountFingerprint);
       completedResults = {
         profileSlot: config.slot, accountFingerprint: binding.accountFingerprint,
         store: resultStore,

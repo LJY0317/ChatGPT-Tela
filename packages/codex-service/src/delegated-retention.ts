@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync
 import { join } from "node:path";
 import { readIndexedNativeItemsPage, type CodexAppServerRpc } from "@chatgpt-tela/codex";
 import { diagnosticFailureFields, emitDiagnosticEvent } from "@chatgpt-tela/core";
-import { acknowledgeNativeResult, assertManagedThread, findFinalAnswer, readFirstResultTurn, readLatestResultTurn, readPreviousResultAnswer, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
+import { acknowledgeNativeResult, assertManagedThread, findFinalAnswer, findSavedFinal, persistResultAcknowledgement, readFirstResultTurn, readLatestResultTurn, readPreviousResultAnswer, type ResultAcknowledgement, type ResultReference } from "./result-acknowledgement";
 
 const DAY = 86_400_000, MAX_BYTES = 4 * 1024 * 1024, MAX_RECORD_BYTES = 8192;
 const HALF_DAY = DAY / 2, METADATA_RETENTION = 60 * DAY;
@@ -11,7 +11,7 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 type State = {
   version: 1; scope: string; slot: number; parentThreadId?: string; threadId: string;
   enrolledAt: number; dueAt: number; pendingFirstTurnId?: string; acknowledgement?: ResultAcknowledgement;
-  dispatch?: { coordinatorThreadId: string; promptDigest: string };
+  dispatch?: { coordinatorThreadId: string; promptDigest: string; webAccountFingerprint?: string };
   archivedAt?: number; releasedAt?: number; archivePending?: true; reviewAfter?: number; issue?: string; title?: string;
 };
 const coordinator = (record: State) => record.dispatch?.coordinatorThreadId ?? record.parentThreadId;
@@ -23,6 +23,8 @@ function settledExpired(record: State, observedAt: number): boolean {
 export interface DelegatedRetentionProfile {
   /** Install identity + exact configured profile/home; never a model-supplied label. */
   scope: string;
+  webAccountFingerprint?(): string | undefined;
+  readSavedWebAnswer?(accountFingerprint: string, threadId: string, turnId: string): Promise<string | undefined>;
   connect(threadId: string, lifecycle: boolean, delegatedTitle?: boolean): Promise<CodexAppServerRpc>;
 }
 function id(value: string): string {
@@ -102,7 +104,8 @@ export function createDelegatedRetention(input: {
       if (record.parentThreadId !== undefined) id(record.parentThreadId);
       if (record.pendingFirstTurnId !== undefined) id(record.pendingFirstTurnId);
       if (record.dispatch !== undefined && (record.parentThreadId !== undefined
-        || !id(record.dispatch.coordinatorThreadId) || !/^[a-f0-9]{64}$/.test(record.dispatch.promptDigest))) {
+        || !id(record.dispatch.coordinatorThreadId) || !/^[a-f0-9]{64}$/.test(record.dispatch.promptDigest)
+        || record.dispatch.webAccountFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(record.dispatch.webAccountFingerprint))) {
         throw Error("Invalid delegation dispatch record");
       }
       if (settledExpired(record, now())) unlinkSync(path(k));
@@ -213,6 +216,21 @@ export function createDelegatedRetention(input: {
       || hash(content.text) !== record.dispatch!.promptDigest) return undefined;
     return turn;
   };
+  const dispatchAnswer = async (record: State, profile: DelegatedRetentionProfile, rpc: CodexAppServerRpc,
+    turn: { id: string; status: string }, signal?: AbortSignal) => {
+    if (turn.status === "completed") {
+      const item = await findSavedFinal(rpc, record.threadId, turn.id, signal);
+      if (typeof item?.text === "string" && item.text.trim()) return { itemId: item.id, text: item.text };
+    } else if (turn.status !== "failed" && turn.status !== "interrupted") {
+      return undefined;
+    }
+    const account = record.dispatch?.webAccountFingerprint;
+    if (!account) return undefined;
+    signal?.throwIfAborted();
+    const text = await profile.readSavedWebAnswer?.(account, record.threadId, turn.id);
+    signal?.throwIfAborted();
+    if (text?.trim()) return { itemId: `web_${hash(text)}`, text, source: "web" as const };
+  };
   const api = {
     registerDispatch(slot: number, coordinatorThreadId: string, threadId: string, promptDigest: string) {
       return serial(async () => {
@@ -228,9 +246,13 @@ export function createDelegatedRetention(input: {
           assertManagedThread(thread, threadId);
           if (thread.modelProvider !== "openai" || !thread.name?.startsWith("[Tela Agent] ")
             || await readFirstResultTurn(rpc, threadId)) throw Error("The Web dispatch is not a new standalone chat");
+          let webAccountFingerprint: string | undefined;
+          try { webAccountFingerprint = profile.webAccountFingerprint?.(); }
+          catch (error) { report(error); } // Official history is still recoverable.
           const enrolledAt = now();
           const record: State = { version: 1, scope, slot, threadId, enrolledAt, dueAt: enrolledAt + 7 * DAY,
-            title: thread.name.slice(0, 200), dispatch: { coordinatorThreadId, promptDigest } };
+            title: thread.name.slice(0, 200), dispatch: { coordinatorThreadId, promptDigest,
+              ...(webAccountFingerprint ? { webAccountFingerprint } : {}) } };
           save(k, record);
           event("delegation_retention_enrolled", record);
           return { registered: true };
@@ -306,10 +328,15 @@ export function createDelegatedRetention(input: {
           const turnId = id(turn.id);
           const reference = { threadId, turnId };
           if (turn.status === "inProgress") return { ...reference, outcome: "pending" as const };
+          if (record.dispatch) {
+            const answer = await dispatchAnswer(record, profile, rpc, turn, signal);
+            if (answer) return { ...reference, outcome: "answer" as const, ...answer };
+          }
           if (turn.status === "failed" || turn.status === "interrupted") {
             return { ...reference, outcome: turn.status as "failed" | "interrupted" };
           }
           if (turn.status !== "completed") throw Error("The latest delegation turn has an unknown status");
+          if (record.dispatch) throw Error("Final answer text is unavailable");
           const item = await findFinalAnswer(rpc, threadId, turnId, signal);
           if (typeof item.text !== "string" || !item.text.trim()) throw Error("Final answer text is unavailable");
           return { ...reference, outcome: "answer" as const, itemId: item.id, text: item.text };
@@ -337,11 +364,24 @@ export function createDelegatedRetention(input: {
         }
         const rpc = await profile.connect(result.threadId, false);
         try {
-          if (record?.dispatch && (await dispatchedTurn(record, rpc))?.id !== result.turnId) {
-            throw Error("The result does not belong to the submitted Web assignment");
+          const receipt = { result, directory: input.acknowledgementDirectory, scope: profile.scope, now: now() };
+          let verified: ResultAcknowledgement;
+          if (record?.dispatch && result.outcome === "answer" && result.itemId.startsWith("web_")) {
+            const data: any = await rpc.request("thread/read", { threadId: record.threadId, includeTurns: false });
+            assertManagedThread(data?.thread, record.threadId);
+            const turn = await dispatchedTurn(record, rpc);
+            const latest = await readLatestResultTurn(rpc, record.threadId);
+            if (!turn || turn.id !== result.turnId || latest?.id !== turn.id
+              || (await dispatchAnswer(record, profile, rpc, turn))?.itemId !== result.itemId) {
+              throw Error("The selected saved Web answer changed");
+            }
+            verified = persistResultAcknowledgement(receipt);
+          } else {
+            if (record?.dispatch && (await dispatchedTurn(record, rpc))?.id !== result.turnId) {
+              throw Error("The result does not belong to the submitted Web assignment");
+            }
+            verified = await acknowledgeNativeResult({ rpc, ...receipt });
           }
-          const verified = await acknowledgeNativeResult({ rpc, result,
-            directory: input.acknowledgementDirectory, scope: profile.scope, now: now() });
           const acknowledgement = record?.acknowledgement?.scope === scope
             && JSON.stringify(record.acknowledgement.result) === JSON.stringify(verified.result)
             ? record.acknowledgement : verified;
@@ -453,7 +493,8 @@ export function createDelegatedRetention(input: {
             assertManagedThread(resumed?.thread, record.threadId, record.parentThreadId);
             reason = "running";
             if (resumed.thread.status?.type !== "idle") throw Error("Delegation is not idle");
-            if (record.dispatch && !await dispatchedTurn(record, rpc)) {
+            const firstDispatchTurn = record.dispatch ? await dispatchedTurn(record, rpc) : undefined;
+            if (record.dispatch && !firstDispatchTurn) {
               discardObservation(k, record, "submitted_turn_unavailable");
               continue;
             }
@@ -465,8 +506,11 @@ export function createDelegatedRetention(input: {
               && ack.result.threadId === record.threadId && ack.result.parentThreadId === record.parentThreadId) {
               try {
                 const turn = await readLatestResultTurn(rpc, record.threadId);
-                latestAnswerVerified = turn?.id === ack.result.turnId && turn.status === "completed"
-                  && (await findFinalAnswer(rpc, record.threadId, turn.id)).id === ack.result.itemId;
+                if (turn?.id === ack.result.turnId) {
+                  latestAnswerVerified = firstDispatchTurn?.id === turn.id
+                    ? (await dispatchAnswer(record, profile, rpc, turn))?.itemId === ack.result.itemId
+                    : turn.status === "completed" && (await findFinalAnswer(rpc, record.threadId, turn.id)).id === ack.result.itemId;
+                }
               } catch (error) { report(error); } // Unknown receipt validity uses the same fallback.
             }
             const next = { ...record, dueAt: archiveDeadline(record, latestAnswerVerified) };

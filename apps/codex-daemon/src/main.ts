@@ -16,6 +16,7 @@ import {
 } from "@chatgpt-tela/service-protocol";
 
 import { connectDelegatedTitleRpc, connectDormantThreadRpc, connectStoredHistoryRpc } from "@chatgpt-tela/codex";
+import { FileNativeVisiblePrefixStageJournal, readChatGptTelaAccountBinding, resolveChatGptTelaBrowserProfile } from "@chatgpt-tela/development-runtime";
 import { resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
 
 function required(key: string): string {
@@ -75,7 +76,17 @@ async function main(): Promise<void> {
         const home = route.desktopConfigPath ? dirname(route.desktopConfigPath)
           : slot === 1 ? installation.codexHome : undefined;
         if (!home) throw Error("The selected profile has no configured Desktop history location");
+        const profileRoot = process.env.CHATGPT_TELA_PROFILE_ROOT?.trim();
+        const browserProfile = resolveChatGptTelaBrowserProfile({ slot, ...(profileRoot ? { profileRoot } : {}) });
+        const account = () => readChatGptTelaAccountBinding(browserProfile)?.accountFingerprint;
         return {
+          webAccountFingerprint: account,
+          async readSavedWebAnswer(accountFingerprint, threadId, turnId) {
+            if (account() !== accountFingerprint) return undefined;
+            const text = await FileNativeVisiblePrefixStageJournal.forProfile(browserProfile, accountFingerprint)
+              .readSavedDispatchAnswer({ profileSlot: slot, accountFingerprint, threadId, turnId });
+            return account() === accountFingerprint ? text : undefined;
+          },
           scope: JSON.stringify([installId, slot, realpathSync(home)]),
           connect: (threadId, lifecycleAccess, delegatedTitle) => (lifecycleAccess
             ? connectDormantThreadRpc : delegatedTitle ? connectDelegatedTitleRpc : connectStoredHistoryRpc)({

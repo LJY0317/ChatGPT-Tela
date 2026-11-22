@@ -149,6 +149,13 @@ function validate(value: unknown): State {
 export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixStageJournal {
   readonly directory: string;
   readonly initializationPath: string;
+  static forProfile(profile: { userDataDir: string; accountBindingPath: string }, accountFingerprint: string) {
+    if (!/^[a-f0-9]{64}$/.test(accountFingerprint)) throw Error("Invalid Web account fingerprint");
+    return new FileNativeVisiblePrefixStageJournal({
+      directory: resolve(profile.userDataDir, "native-visible-prefix-executions", accountFingerprint),
+      initializationPath: `${profile.accountBindingPath}.native-prefix-${accountFingerprint}`,
+    });
+  }
   /** Reuse each existing account-owned ledger at profile readiness, including
    * accounts replaced since the last launch. Never create historical ledgers. */
   static async pruneProfileResults(input: { readonly userDataDir: string; readonly accountBindingPath: string }): Promise<void> {
@@ -163,10 +170,7 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
       const accountFingerprint = receipt.name.slice(prefix.length);
       if (!/^[a-f0-9]{64}$/.test(accountFingerprint)) continue;
       try {
-        await new FileNativeVisiblePrefixStageJournal({
-          directory: resolve(input.userDataDir, "native-visible-prefix-executions", accountFingerprint),
-          initializationPath: resolve(dirname(input.accountBindingPath), receipt.name),
-        }).pruneExpiredResults();
+        await FileNativeVisiblePrefixStageJournal.forProfile(input, accountFingerprint).pruneExpiredResults();
       } catch (error) { failed ??= error; }
     }
     if (failed) throw failed;
@@ -312,6 +316,19 @@ export class FileNativeVisiblePrefixStageJournal implements NativeVisiblePrefixS
     queues.set(this.directory, run);
     void run.finally(() => { if (queues.get(this.directory) === run) queues.delete(this.directory); }).catch(() => {});
     return run;
+  }
+  /** Read the saved answer for a verified dispatch. This cannot authorize a replay. */
+  async readSavedDispatchAnswer(identity: Omit<SuppliedResultIdentity, "requestFingerprint">): Promise<string | undefined> {
+    if (!validSuppliedIdentity({ ...identity, requestFingerprint: SUPPLIED_SEND_WITHOUT_FINAL })) throw Error("Invalid saved Web result identity");
+    const receipt = await lstat(this.initializationPath).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!receipt) return undefined;
+    return this.#transaction(async state => {
+      const stored = state.suppliedResults?.find(item => suppliedKey(item) === suppliedKey(identity));
+      return stored && !suppliedResultExpired(stored, Date.now()) ? stored.answer : undefined;
+    });
   }
   async readSuppliedResult(identity: SuppliedResultIdentity): Promise<SuppliedCompletedResult | undefined> {
     if (!validSuppliedIdentity(identity)) throw Error("Invalid supplied result identity");
