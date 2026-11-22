@@ -245,6 +245,7 @@
 "Stop and Update" = "작업 중단 및 업데이트";
 "Stop work and update?" = "작업을 중단하고 업데이트할까요?";
 "Stop tracking a chat" = "대화 추적 중단";
+"Only Tela tracking is removed. This does not change the chat in ChatGPT." = "Tela의 추적 기록만 해제합니다. ChatGPT 대화에는 영향을 주지 않습니다.";
 "Stop tracking" = "추적 중단";
 "Stop tracking…" = "추적 중단…";
 "Stop" = "중지";

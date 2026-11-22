@@ -689,9 +689,10 @@ test("tracked Web child supports result collection and due archive without a Nat
     trackedUrl.searchParams.set("include", "tracked");
     const beforeListing = methods.length;
     const tracked = await fetch(trackedUrl, { headers });
-    expect(await tracked.json()).toEqual({
-      overdue: [], automaticDeleteEnabled: false,
-      tracked: [{ slot: 2, threadId: "child", title: "[Tela Agent] Web task", enrolledAt: now }],
+    const trackedStatus = await tracked.json();
+    expect(trackedStatus).toMatchObject({ overdue: [], automaticDeleteEnabled: false,
+      tracked: [{ slot: 2, threadId: "child", title: "[Tela Agent] Web task", enrolledAt: now,
+        trackingId: expect.any(String) }],
     });
     expect(await client.manageDelegation(list)).toMatchObject({ slot: 2, tracked: [{ threadId: "child", enrolledAt: now }] });
     expect(await client.manageDelegation({ ...list, slot: 1 })).toEqual({ slot: 1, tracked: [] });
@@ -754,9 +755,17 @@ test("tracked Web child supports result collection and due archive without a Nat
     await client.manageDelegation({ action: "enroll", slot: 2, parentThreadId: "parent", threadId: "child" });
     now += 7 * 24 * 3_600_000;
     const pending = (await (await fetch(url, { headers })).json()).overdue[0]!;
-    const body = JSON.stringify({ action: "stop-tracking", trackingId: pending.trackingId, enrolledAt: pending.enrolledAt });
+    const body = JSON.stringify({ action: "stop-tracking", slot: pending.slot, threadId: pending.threadId,
+      trackingId: pending.trackingId, enrolledAt: pending.enrolledAt });
     const beforeRelease = methods.length;
     expect((await fetch(url, { method: "POST", body })).status).toBe(401);
+    for (const invalid of [
+      { ...pending, slot: 1 }, { ...pending, threadId: "another" },
+      { ...pending, trackingId: "another" }, { ...pending, enrolledAt: pending.enrolledAt + 1 },
+    ]) {
+      expect((await post({ action: "stop-tracking", ...invalid })).ok).toBe(false);
+    }
+    expect(methods).toHaveLength(beforeRelease);
     expect(await (await fetch(url, { method: "POST", headers, body })).json()).toEqual({ stopped: true });
     expect((await (await fetch(url, { headers })).json()).overdue).toEqual([]);
     expect(methods).toHaveLength(beforeRelease);

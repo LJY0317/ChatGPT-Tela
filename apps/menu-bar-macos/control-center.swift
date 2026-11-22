@@ -2029,7 +2029,9 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
         alert.addButton(withTitle: telaText("View answer"))
         alert.addButton(withTitle: telaText("Copy task link"))
         alert.addButton(withTitle: telaText("Use a task link…"))
+        alert.addButton(withTitle: telaText("Stop tracking…"))
         alert.addButton(withTitle: telaText("Cancel")).keyEquivalent = "\u{1b}"
+        let stopTrackingResponse = NSApplication.ModalResponse(rawValue: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue + 1)
         let selection = alert.runModal()
         selectedWebTaskDetails = nil
         selectableWebTasks = []
@@ -2047,6 +2049,12 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
           webTaskMessage = "Task link copied."
           return
         case .alertThirdButtonReturn: break
+        case stopTrackingResponse:
+          guard tasks.indices.contains(picker.indexOfSelectedItem) else { return }
+          let task = tasks[picker.indexOfSelectedItem]
+          await stopTrackingChat(slot: task.slot, threadId: task.threadId,
+            trackingId: task.trackingId, enrolledAt: task.enrolledAt)
+          return
         default: return
         }
       }
@@ -2217,7 +2225,7 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private func stopTrackingOverdueChat(_ pending: [TelaRetentionStatus.Item]) {
     let alert = NSAlert()
     alert.messageText = telaText("Stop tracking a chat")
-    alert.informativeText = telaText("The chat stays in ChatGPT.")
+    alert.informativeText = telaText("Only Tela tracking is removed. This does not change the chat in ChatGPT.")
     let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 460, height: 26))
     for (index, item) in pending.enumerated() {
       picker.addItem(withTitle: "\(index + 1). \(retentionItemLabel(item))")
@@ -2228,19 +2236,34 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
     guard alert.runModal() == .alertSecondButtonReturn, pending.indices.contains(picker.indexOfSelectedItem) else { return }
     let item = pending[picker.indexOfSelectedItem]
     Task {
-      do {
-        guard let descriptor = try readDescriptor("codex") else {
-          throw NSError(domain: "ChatGPTTelaControlCenter", code: 2)
-        }
-        _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
-          body: ["action": "stop-tracking", "trackingId": item.trackingId, "enrolledAt": item.enrolledAt])
-        webTaskMessage = "Chat tracking stopped."
-      } catch {
-        webTaskMessage = "Couldn’t stop tracking this chat."
-      }
-      await loadRetentionStatus()
-      renderCurrentPage()
+      await stopTrackingChat(slot: item.slot, threadId: item.threadId,
+        trackingId: item.trackingId, enrolledAt: item.enrolledAt, confirmed: true)
     }
+  }
+
+  private func stopTrackingChat(slot: Int, threadId: String, trackingId: String,
+                                enrolledAt: Double, confirmed: Bool = false) async {
+    if !confirmed {
+      let alert = NSAlert()
+      alert.messageText = telaText("Stop tracking a chat")
+      alert.informativeText = telaText("Only Tela tracking is removed. This does not change the chat in ChatGPT.")
+      alert.addButton(withTitle: telaText("Cancel")).keyEquivalent = "\u{1b}"
+      alert.addButton(withTitle: telaText("Stop tracking"))
+      guard alert.runModal() == .alertSecondButtonReturn else { return }
+    }
+    do {
+      guard let descriptor = try readDescriptor("codex") else {
+        throw NSError(domain: "ChatGPTTelaControlCenter", code: 2)
+      }
+      _ = try await request(descriptor, path: "v1/codex/delegations", method: "POST",
+        body: ["action": "stop-tracking", "slot": slot, "threadId": threadId,
+          "trackingId": trackingId, "enrolledAt": enrolledAt])
+      webTaskMessage = "Chat tracking stopped."
+    } catch {
+      webTaskMessage = "Couldn’t stop tracking this chat."
+    }
+    await loadRetentionStatus()
+    renderCurrentPage()
   }
 
   private var retentionWakeup: Task<Void, Never>?

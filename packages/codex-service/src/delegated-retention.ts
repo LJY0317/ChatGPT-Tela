@@ -552,15 +552,18 @@ export function createDelegatedRetention(input: {
           catch { scopes.set(record.slot, undefined); }
         }
         if (scopes.get(record.slot) !== record.scope) return [];
-        return [{ slot: record.slot, threadId: record.threadId, title: record.title, enrolledAt: record.enrolledAt }];
+        return [{ trackingId: key(record.scope, record.threadId), slot: record.slot, threadId: record.threadId,
+          title: record.title, enrolledAt: record.enrolledAt }];
       }).sort((a, b) => b.enrolledAt - a.enrolledAt);
       return { ...status, tracked };
     },
-    stopTracking(trackingId: string, enrolledAt: number) {
+    stopTracking(slot: number, threadId: string, trackingId: string, enrolledAt: number) {
       return serial(async () => {
         const record = records.get(trackingId), observedAt = now();
-        if (!record || record.pendingFirstTurnId !== undefined || record.enrolledAt !== enrolledAt || settledAt(record) != null || record.dueAt > observedAt) {
-          throw Error("The selected cleanup entry is no longer pending");
+        if (!record || !Number.isInteger(slot) || record.slot !== slot || record.threadId !== threadId
+          || key(record.scope, record.threadId) !== trackingId || record.pendingFirstTurnId !== undefined
+          || record.enrolledAt !== enrolledAt || settledAt(record) != null) {
+          throw Error("The selected tracking entry has changed");
         }
         // This releases the local entry even if its original profile is unavailable.
         const next = { ...record, releasedAt: observedAt };

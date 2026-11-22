@@ -68,6 +68,8 @@ precondition(TelaLocalPluginPresentation(state: "unknown").label != TelaLocalPlu
 let retention = try! JSONDecoder().decode(TelaRetentionStatus.self, from: Data("{\"overdue\":[{\"trackingId\":\"fixture-entry\",\"enrolledAt\":0,\"slot\":2,\"threadId\":\"owned\",\"dueAt\":1,\"reason\":\"descendants_present\"}]}".utf8))
 precondition(retention.overdue.count == 1)
 precondition(retention.overdue[0].explanation.contains("other chats"))
+let trackedRetention = try! JSONDecoder().decode(TelaRetentionStatus.self, from: Data("{\"overdue\":[],\"tracked\":[{\"trackingId\":\"selected-record\",\"enrolledAt\":1000,\"slot\":2,\"threadId\":\"child\"}]}".utf8))
+precondition(trackedRetention.tracked?.first?.trackingId == "selected-record" && trackedRetention.tracked?.first?.enrolledAt == 1000)
 print("passed")
 var notice = TelaLaunchNoticePolicy()
 var unconnected = profile

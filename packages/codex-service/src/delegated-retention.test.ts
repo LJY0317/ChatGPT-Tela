@@ -561,6 +561,75 @@ test("a malformed tracking record preserves its file and leaves other profiles u
   } finally { await reopened?.close(); await f.close(); }
 });
 
+test("an unavailable official thread cannot be treated as permanently deleted", async () => {
+  const f = fixture();
+  let reopened: ReturnType<typeof createDelegatedRetention> | undefined;
+  try {
+    await f.manager.enroll(1, "parent", "child");
+    await f.manager.close();
+    f.advance(7 * 24);
+    for (const failure of ["Thread not found", "Connection closed"]) {
+      const unavailable = createDelegatedRetention({ ...f.options, profile(slot) {
+        const profile = f.options.profile(slot);
+        return { ...profile, async connect(threadId, lifecycle) {
+          const rpc = await profile.connect(threadId, lifecycle);
+          return { close: () => rpc.close(), async request(method: string, params?: any) {
+            if (method === "thread/resume") throw Error(failure);
+            return rpc.request(method, params);
+          } };
+        } };
+      } });
+      try {
+        expect((await unavailable.reconcile(1)).outcomes).toEqual([{ threadId: "child", status: "deferred" }]);
+        expect((await unavailable.listForParent(1, "parent")).tracked).toHaveLength(1);
+        expect(readdirSync(f.options.directory)).toHaveLength(1);
+        expect(f.calls.some(call => call.method === "thread/archive" || call.method === "thread/delete")).toBe(false);
+      } finally { await unavailable.close(); }
+    }
+    reopened = createDelegatedRetention(f.options);
+    expect((await reopened.listForParent(1, "parent")).tracked).toHaveLength(1);
+    expect((await reopened.reconcile(1)).outcomes).toEqual([{ threadId: "child", status: "archived" }]);
+    expect((await reopened.listForParent(1, "parent")).tracked).toHaveLength(1);
+  } finally { await reopened?.close(); await f.close(); }
+});
+
+test("manual tracking removal before either retention deadline is exact and never touches official history", async () => {
+  const f = fixture();
+  let restarted: ReturnType<typeof createDelegatedRetention> | undefined;
+  try {
+    await f.manager.enroll(1, "parent", "child");
+    await f.manager.enroll(2, "parent", "child");
+    await f.manager.acknowledge(1, answer);
+    const tracked = f.manager.status(true).tracked!;
+    const target = tracked.find(item => item.slot === 1)!;
+    expect({ ...target }).toMatchObject({ slot: 1, threadId: "child", enrolledAt: expect.any(Number),
+      trackingId: expect.any(String) });
+    expect(f.manager.status().overdue).toEqual([]);
+    const before = f.calls.length;
+    for (const args of [
+      [2, target.threadId, target.trackingId, target.enrolledAt],
+      [1, "another-thread", target.trackingId, target.enrolledAt],
+      [1, target.threadId, "wrong-registration", target.enrolledAt],
+      [1, target.threadId, target.trackingId, target.enrolledAt + 1],
+    ] as const) {
+      await expect(f.manager.stopTracking(...args)).rejects.toThrow("has changed");
+    }
+    expect(f.calls).toHaveLength(before);
+    expect(await f.manager.stopTracking(target.slot, target.threadId, target.trackingId, target.enrolledAt))
+      .toEqual({ stopped: true });
+    await expect(f.manager.stopTracking(target.slot, target.threadId, target.trackingId, target.enrolledAt))
+      .rejects.toThrow("has changed");
+    expect(f.calls).toHaveLength(before);
+    expect(f.manager.status(true).tracked).toMatchObject([{ slot: 2, threadId: "child" }]);
+    await f.manager.close();
+    restarted = createDelegatedRetention(f.options);
+    expect(restarted.status(true).tracked).toMatchObject([{ slot: 2, threadId: "child" }]);
+    expect((await restarted.listForParent(1, "parent")).tracked).toEqual([]);
+    expect((await restarted.listForParent(2, "parent")).tracked).toHaveLength(1);
+    expect(f.calls).toHaveLength(before);
+  } finally { await restarted?.close(); await f.close(); }
+});
+
 test("one automatic next-due wakeup executes a persisted eligible archive", async () => {
   const f = fixture();
   let automatic: ReturnType<typeof createDelegatedRetention> | undefined;
@@ -642,9 +711,11 @@ test("ambiguous archive preserves durable intent and never repeats after restart
 
     const pending = manager.status().overdue[0]!;
     const priorCalls = f.calls.length;
-    await expect(manager.stopTracking(pending.trackingId, pending.enrolledAt - 1)).rejects.toThrow("no longer pending");
+    await expect(manager.stopTracking(pending.slot, pending.threadId, pending.trackingId, pending.enrolledAt - 1))
+      .rejects.toThrow("has changed");
     f.changeScope();
-    expect(await manager.stopTracking(pending.trackingId, pending.enrolledAt)).toEqual({ stopped: true });
+    expect(await manager.stopTracking(pending.slot, pending.threadId, pending.trackingId, pending.enrolledAt))
+      .toEqual({ stopped: true });
     expect(manager.status().overdue).toEqual([]);
     expect(f.calls).toHaveLength(priorCalls);
     await manager.close();

@@ -34,6 +34,8 @@ struct TelaWebTaskResult: Decodable {
 
 struct TelaRetentionStatus: Decodable {
   struct TrackedTask: Decodable {
+    let trackingId: String
+    let enrolledAt: Double
     let slot: Int
     let threadId: String
     let title: String?
