@@ -7,10 +7,18 @@ interface OfficialTurn {
   status: string;
 }
 
+export interface OfficialWebDelegationReceipt {
+  threadId: string;
+  turnId: string;
+  model: string;
+  status: "accepted";
+}
+
 /** Own a new conversation and one turn through the official process. */
 export async function runOfficialWebDelegation(input: {
   executable: string; codexHome: string; cwd: string; model?: string; title: string; prompt: string;
   beforeSubmit?: (threadId: string) => Promise<unknown>;
+  onAccepted?: (receipt: OfficialWebDelegationReceipt, interrupt: () => Promise<unknown>) => void | Promise<void>;
 }) {
   if (input.model && !input.model.startsWith("chatgpt-tela-web/")) throw Error("Choose a Tela Web model");
   const rpc = await connectOfficialStdio({ ...input, clientName: "tela-web-delegation" });
@@ -43,6 +51,8 @@ export async function runOfficialWebDelegation(input: {
       }) as { turn?: OfficialTurn };
       turnId = started.turn?.id;
       if (!turnId) throw Error("Official Codex did not return the turn ID");
+      await input.onAccepted?.({ threadId, turnId, model, status: "accepted" },
+        () => rpc.send("turn/interrupt", { threadId, turnId }));
       const turn = earlyCompletions.get(turnId) ?? await Promise.race([completion.promise, rpc.exited.then(() => undefined)]);
       if (!turn || turn.id !== turnId) throw Error("The submitted turn's completion could not be confirmed");
       if (turn.status !== "completed") return { threadId, turnId, model, status: turn.status };
@@ -68,4 +78,27 @@ export async function runOfficialWebDelegation(input: {
   } finally {
     await rpc.close();
   }
+}
+
+/** The caller can release its HTTP request after the official turn ACK.
+ * The service retains the completion promise and the owning stdio process. */
+export function submitOfficialWebDelegation(input: Parameters<typeof runOfficialWebDelegation>[0]) {
+  const accepted = Promise.withResolvers<OfficialWebDelegationReceipt>();
+  let interrupt: (() => Promise<unknown>) | undefined;
+  const finished = runOfficialWebDelegation({
+    ...input,
+    onAccepted: async (receipt, cancel) => {
+      interrupt = cancel;
+      try {
+        await input.onAccepted?.(receipt, cancel);
+        accepted.resolve(receipt);
+      } catch (error) {
+        // An already-started turn must retain its owning connection even if
+        // receipt registration fails. Recovery uses its existing dispatch.
+        accepted.reject(error);
+      }
+    },
+  });
+  void finished.catch(error => accepted.reject(error));
+  return { accepted: accepted.promise, finished, interrupt: () => interrupt?.() };
 }

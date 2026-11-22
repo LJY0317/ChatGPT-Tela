@@ -69,6 +69,22 @@ export async function readLatestResultTurn(rpc: Pick<CodexAppServerRpc, "request
   return (await readResultTurnsPage(rpc, threadId, 1, undefined, signal)).turns[0];
 }
 
+/** An exact accepted turn is resolved from official history, never replaced by a newer one. */
+export async function readExactResultTurn(rpc: Pick<CodexAppServerRpc, "request">,
+  threadId: string, turnId: string, signal?: AbortSignal) {
+  const visited = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const page = await readResultTurnsPage(rpc, threadId, 32, cursor, signal);
+    const matching = page.turns.find(turn => turn.id === turnId);
+    if (matching) return matching;
+    if (!page.nextCursor) return undefined;
+    if (visited.has(page.nextCursor)) throw Error("Official turn paging did not advance");
+    cursor = page.nextCursor;
+    visited.add(cursor);
+  } while (cursor);
+}
+
 export async function readPreviousResultAnswer(rpc: Pick<CodexAppServerRpc, "request">,
   threadId: string, failedTurnId: string, signal?: AbortSignal) {
   const visited = new Set<string>();

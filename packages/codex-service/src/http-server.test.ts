@@ -66,6 +66,98 @@ function fixtureService(): CodexService {
 }
 
 describe("Tela Codex private HTTP server", () => {
+  test("Web submission returns the official receipt while service activity blocks shutdown", async () => {
+    const service = fixtureService();
+    let active = true;
+    let interruptions = 0;
+    let release!: () => void;
+    const finished = new Promise<void>(resolve => { release = resolve; });
+    const submitted: unknown[] = [];
+    const server = await startCodexServiceHttpServer({ service,
+      activeWebDelegations: () => active,
+      interruptWebDelegations: async slot => { expect(slot).toBe(2); interruptions++; return 1; },
+      waitForWebDelegations: () => finished,
+      async submitWebDelegation(input) {
+        submitted.push(input);
+        return { slot: input.slot, threadId: "chat", turnId: "turn", model: "chatgpt-tela-web/family/123", status: "accepted" };
+      },
+    });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
+    try {
+      const request = { slot: 2, title: "Review", prompt: "Assignment", cwd: "/tmp", coordinatorThreadId: "parent" };
+      expect(await client.startWebDelegation(request)).toEqual({
+        slot: 2, threadId: "chat", turnId: "turn", model: "chatgpt-tela-web/family/123", status: "accepted",
+      });
+      expect(submitted).toEqual([request]);
+      expect((await client.status(undefined, { shutdownReadiness: true })).shutdownReadiness).toBe("blocked");
+      await expect(client.shutdown()).rejects.toBeInstanceOf(ServiceShutdownNotStartedError);
+      expect(await client.interruptWebWork(2)).toBe(1);
+      expect(interruptions).toBe(1);
+      active = false;
+      release();
+      await client.waitForShutdownReadiness();
+    } finally { release(); await server.close(); }
+  });
+
+  test("shutdown admission rejects a concurrent new Web submission", async () => {
+    const service = fixtureService();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let dispatches = 0;
+    service.close = async () => { entered.resolve(); await release.promise; };
+    const server = await startCodexServiceHttpServer({ service,
+      async submitWebDelegation() { dispatches++; return { slot: 2, threadId: "chat", turnId: "turn", status: "accepted" }; },
+    });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
+    try {
+      const shutdown = client.shutdown();
+      await entered.promise;
+      await expect(client.startWebDelegation({ slot: 2, title: "Review", prompt: "Assignment", cwd: "/tmp" }))
+        .rejects.toMatchObject({ httpStatus: 409 });
+      expect(dispatches).toBe(0);
+      release.resolve();
+      await shutdown;
+    } finally { release.resolve(); await server.close(); }
+  });
+
+  test("readiness refuses a Web turn admitted while the idle observation was in progress", async () => {
+    const service = fixtureService();
+    let active = false;
+    service.waitForShutdownReadiness = async () => { active = true; };
+    const server = await startCodexServiceHttpServer({ service,
+      activeWebDelegations: () => active,
+      waitForWebDelegations: async () => {},
+    });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: service.instanceId,
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
+    try {
+      await expect(client.waitForShutdownReadiness()).rejects.toMatchObject({ reason: "work_not_ready" });
+    } finally { await server.close(); }
+  });
+
+  test("same-chat follow-up HTTP command reaches the service submission owner once", async () => {
+    const calls: unknown[] = [];
+    const server = await startCodexServiceHttpServer({ service: fixtureService(),
+      submitWebFollowUp: async request => { calls.push(request); return { threadId: request.threadId,
+        turnId: "new-turn", status: "accepted" }; },
+    });
+    const client = new CodexServiceClient({ version: 1, service: "codex", instanceId: "codex-fixture",
+      installId: "fixture", pid: process.pid, endpoint: server.endpoint.href,
+      bearerToken: server.bearerToken, startedAt: new Date().toISOString() });
+    try {
+      const request = { slot: 2, coordinatorThreadId: "parent", threadId: "child", prompt: "Continue" };
+      expect(await client.submitWebFollowUp(request)).toEqual({ threadId: "child", turnId: "new-turn", status: "accepted" });
+      expect(calls).toEqual([request]);
+      expect(await client.submitWebFollowUp({ ...request, wait: true })).toMatchObject({ status: "accepted" });
+      expect(calls).toHaveLength(2);
+    } finally { await client.close(); await server.close(); }
+  });
+
   test("authenticated idle observation waits once and preserves the running service", async () => {
     const service = fixtureService();
     let release!: () => void, entered!: () => void;
@@ -626,6 +718,13 @@ test("tracked Web child supports result collection and due archive without a Nat
     expect(readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8")).toBe(enrolled);
     const previous = { ...target, action: "read-result", previousBefore: "follow-up" };
     failedFollowUp = true;
+    // A changed latest turn is visible to this collector only after the
+    // owning writer explicitly accepts that turn into the registration.
+    expect(await (await post({ ...target, action: "read-result" })).json())
+      .toMatchObject({ turnId: "turn", outcome: "answer" });
+    expect(await (await post({ ...target, action: "accept-turn", turnId: "follow-up" })).json())
+      .toEqual({ accepted: true, turnId: "follow-up" });
+    const acceptedFollowUp = readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8");
     expect(await (await post({ ...target, action: "read-result" })).json())
       .toEqual({ threadId: "child", turnId: "follow-up", outcome: "interrupted" });
     expect(await (await post(previous)).json())
@@ -634,9 +733,14 @@ test("tracked Web child supports result collection and due archive without a Nat
       .toEqual({ threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer", text: "fixture response" });
     expect((await post({ ...previous, slot: 1 })).ok).toBe(false);
     expect((await post({ ...target, action: "acknowledge", turnId: "turn", outcome: "answer", itemId: "answer" })).ok).toBe(false);
-    expect(readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8")).toBe(enrolled);
+    expect(readFileSync(join(directory, "records", readdirSync(join(directory, "records"))[0]!), "utf8")).toBe(acceptedFollowUp);
     failedFollowUp = false;
     expect((await post(previous)).ok).toBe(false);
+    expect((await post({ ...target, action: "read-result", expectedTurnId: "other-turn" })).ok).toBe(false);
+    expect(await (await post({ ...target, action: "accept-turn", turnId: "turn" })).json())
+      .toEqual({ accepted: true, turnId: "turn" });
+    expect(await (await post({ ...target, action: "read-result", expectedTurnId: "turn" })).json())
+      .toMatchObject({ turnId: "turn", outcome: "answer" });
     const receipt = await post({ ...target, action: "acknowledge", turnId: "turn", outcome: "answer", itemId: "answer" });
     expect(await receipt.json()).toMatchObject({ enrolled: true, automaticArchiveEnabled: true, automaticDeleteEnabled: false,
       acknowledgement: { result: { parentThreadId: "parent" } } });

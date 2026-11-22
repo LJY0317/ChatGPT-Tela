@@ -9,7 +9,8 @@ const HOUR = 3_600_000;
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "tela-managed-retention-"));
   let now = 1_000_000_000, scope = "install/profile-one", busy = false, descendant: "active" | "archived" | undefined;
-  let turnPersisted = true;
+  let turnPersisted = true, finalPersisted = true;
+  let firstTurnId: string | undefined;
   let assignment: string | undefined;
   let webAccount = "a".repeat(64), savedWebAnswer: string | undefined;
   const calls: { method: string; lifecycle: boolean; slot: number }[] = [];
@@ -30,7 +31,8 @@ function fixture() {
       return { async close() { leased = false; }, async request(method: string, params?: any): Promise<any> {
         calls.push({ method, lifecycle, slot });
         if (method === "thread/read") return { thread };
-        if (method === "thread/turns/list") return { data: turnPersisted ? [turn] : [] };
+        if (method === "thread/turns/list") return { data: turnPersisted
+          ? [params.sortDirection === "asc" && firstTurnId ? { ...turn, id: firstTurnId } : turn] : [] };
         if (method === "thread/name/set") {
           expect(delegatedTitle).toBe(true);
           expect(params.threadId).toBe(thread.id);
@@ -40,7 +42,8 @@ function fixture() {
         if (method === "thread/items/list") {
           const selected = params.sortDirection === "asc" && assignment !== undefined
             ? { id: "prompt", type: "userMessage", content: [{ type: "text", text: assignment }] } : item;
-          return { data: [{ turnId: params.turnId ?? "turn", item: selected }], nextCursor: null };
+          return { data: !finalPersisted && selected === item ? []
+            : [{ turnId: params.turnId ?? "turn", item: selected }], nextCursor: null };
         }
         if (method === "thread/resume") {
           if (!lifecycle || busy) throw Error("WRITER_BUSY");
@@ -56,6 +59,8 @@ function fixture() {
   const manager = createDelegatedRetention(options);
   return { directory, options, manager, thread, turn, item, calls,
     setTurnPersisted(value: boolean) { turnPersisted = value; },
+    setFinalPersisted(value: boolean) { finalPersisted = value; },
+    setFirstTurnId(value: string) { firstTurnId = value; },
     setAssignment(value: string) { assignment = value; },
     setWebAnswer(value: string) { savedWebAnswer = value; },
     setWebAccount(value: string) { webAccount = value; },
@@ -65,10 +70,56 @@ function fixture() {
 }
 const answer = { parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer" } as const;
 
+test("registered follow-up resolves persisted coordinator, slot, account and original model", async () => {
+  const f = fixture();
+  try {
+    const model = "chatgpt-tela-web/family/12345678901234567890";
+    Object.assign(f.thread, { source: "cli", parentThreadId: null, modelProvider: "openai",
+      model, name: "[Tela Agent] Task" });
+    f.setTurnPersisted(false);
+    await f.manager.registerDispatch(2, "parent", "child", "f".repeat(64));
+    expect(f.receipt().dispatch.model).toBe(model);
+    expect(await f.manager.resolveFollowUp(2, "parent", "child")).toEqual({
+      threadId: "child", profileScope: "install/profile-one2", accountFingerprint: "a".repeat(64), model,
+    });
+    await expect(f.manager.resolveFollowUp(2, "other", "child")).rejects.toThrow("coordinator and slot");
+    await expect(f.manager.resolveFollowUp(1, "parent", "child")).rejects.toThrow("coordinator and slot");
+    f.setWebAccount("b".repeat(64));
+    await expect(f.manager.resolveFollowUp(2, "parent", "child")).rejects.toThrow("account has changed");
+  } finally { await f.close(); }
+});
+
+test("service-owned dispatch accepts an exact same-chat follow-up and recovers its result", async () => {
+  const f = fixture();
+  try {
+    const assignment = "Initial assignment";
+    Object.assign(f.thread, { source: "cli", parentThreadId: null, modelProvider: "openai",
+      model: "chatgpt-tela-web/family/12345678901234567890", name: "[Tela Agent] Task" });
+    f.setAssignment(assignment);
+    f.setTurnPersisted(false);
+    await f.manager.registerDispatch(2, "parent", "child", createHash("sha256").update(assignment).digest("hex"));
+    f.setTurnPersisted(true);
+    f.setFirstTurnId("turn");
+    f.turn.id = "follow-up";
+    f.advance(1);
+    expect(await f.manager.acceptTurn(2, "parent", "child", "follow-up", { turn: { id: "follow-up" } }))
+      .toEqual({ accepted: true, turnId: "follow-up" });
+    expect(f.receipt()).toMatchObject({ firstTurnId: "turn", latestAcceptedTurnId: "follow-up" });
+    expect(await f.manager.readResult(2, "parent", "child", undefined, undefined, "follow-up"))
+      .toMatchObject({ turnId: "follow-up", outcome: "answer", itemId: "answer" });
+    await expect(f.manager.acknowledge(2, answer)).rejects.toThrow("earlier accepted turn");
+    await f.manager.acknowledge(2, { ...answer, turnId: "follow-up" });
+    expect(f.receipt().acknowledgement.result.turnId).toBe("follow-up");
+    const current = f.receipt();
+    await f.manager.acceptTurn(2, "parent", "child", "follow-up", { turn: { id: "follow-up" } });
+    expect(f.receipt()).toEqual(current);
+  } finally { await f.close(); }
+});
+
 test("a coordinator recovers its exact dispatched answer after restart without submitting again", async () => {
   const f = fixture();
   try {
-    Object.assign(f.thread, { source: "cli", parentThreadId: null, modelProvider: "openai", name: "[Tela Agent] Dispatch" });
+    Object.assign(f.thread, { source: "cli", parentThreadId: null, modelProvider: "openai", model: "chatgpt-tela-web/family/12345678901234567890", name: "[Tela Agent] Dispatch" });
     f.setTurnPersisted(false);
     const assignment = "PRIVATE_ASSIGNMENT";
     const fingerprint = createHash("sha256").update(assignment).digest("hex");
@@ -100,7 +151,7 @@ test("a coordinator recovers its exact dispatched answer after restart without s
 test("recovers and acknowledges an already saved Web answer after the official turn is interrupted", async () => {
   const f = fixture();
   try {
-    Object.assign(f.thread, { source: "cli", parentThreadId: null, modelProvider: "openai", name: "[Tela Agent] Interrupted" });
+    Object.assign(f.thread, { source: "cli", parentThreadId: null, modelProvider: "openai", model: "chatgpt-tela-web/family/12345678901234567890", name: "[Tela Agent] Interrupted" });
     const assignment = "Find the exact answer";
     f.setTurnPersisted(false);
     f.setAssignment(assignment);
@@ -207,6 +258,100 @@ test("a newer turn invalidates an older acknowledgement without moving time for 
     const due = f.receipt().dueAt; f.advance(1); await f.manager.reconcile(); expect(f.receipt().dueAt).toBe(due);
     expect(f.calls.some(c => c.method === "thread/archive")).toBe(false);
     f.advance(7 * 24); expect((await f.manager.reconcile()).outcomes[0]?.status).toBe("archived");
+  } finally { await f.close(); }
+});
+
+test("exact recovery only accepts registered turns and a follow-up replaces the previous receipt", async () => {
+  const f = fixture();
+  try {
+    await f.manager.enroll(1, "parent", "child");
+    await f.manager.acknowledge(1, answer);
+    expect(f.receipt().acknowledgement.result.turnId).toBe("turn");
+    f.setFirstTurnId("turn");
+    f.turn.id = "new-delegation";
+    await expect(f.manager.readResult(1, "parent", "child", undefined, undefined, "new-delegation"))
+      .rejects.toThrow("not accepted");
+    await expect(f.manager.readResult(1, "parent", "child", undefined, undefined, "turn"))
+      .rejects.toThrow("not accepted");
+    await expect(f.manager.acceptTurn(1, "other-parent", "child", "new-delegation"))
+      .rejects.toThrow("Register");
+    await expect(f.manager.acceptTurn(1, "parent", "child", "nonexistent"))
+      .rejects.toThrow("not the current official turn");
+    f.advance(3);
+    expect(await f.manager.acceptTurn(1, "parent", "child", "new-delegation"))
+      .toEqual({ accepted: true, turnId: "new-delegation" });
+    expect(await f.manager.readResult(1, "parent", "child", undefined, undefined, "new-delegation"))
+      .toMatchObject({ turnId: "new-delegation", outcome: "answer" });
+    await expect(f.manager.acknowledge(1, answer)).rejects.toThrow("earlier accepted turn");
+    const current = f.receipt();
+    expect(current.firstTurnId).toBe("turn");
+    expect(current.latestAcceptedTurnId).toBe("new-delegation");
+    expect(current.acknowledgement).toBeUndefined();
+    expect(current.dueAt).toBe(current.latestAcceptedAt + 7 * 24 * HOUR);
+    expect(await f.manager.acceptTurn(1, "parent", "child", "new-delegation"))
+      .toEqual({ accepted: true, turnId: "new-delegation" });
+    expect(f.receipt()).toEqual(current);
+    await f.manager.acknowledge(1, { ...answer, turnId: "new-delegation" });
+    expect(f.receipt().acknowledgement.result.turnId).toBe("new-delegation");
+    expect(readdirSync(f.options.acknowledgementDirectory).filter(name => name.endsWith(".json"))).toHaveLength(2);
+  } finally { await f.close(); }
+});
+
+test("an explicitly observed first Web turn can accept and recover its registered follow-up after restart", async () => {
+  const f = fixture();
+  try {
+    await f.manager.enroll(1, "parent", "child", "turn");
+    f.setFirstTurnId("turn");
+    f.turn.id = "follow-up";
+    await f.manager.acceptTurn(1, "parent", "child", "follow-up");
+    await f.manager.close();
+    const restarted = createDelegatedRetention(f.options);
+    try {
+      expect(await restarted.readResult(1, "parent", "child", undefined, undefined, "follow-up"))
+        .toMatchObject({ turnId: "follow-up", outcome: "answer" });
+      expect(f.receipt().firstTurnId).toBe("turn");
+      expect(f.receipt().latestAcceptedTurnId).toBe("follow-up");
+    } finally { await restarted.close(); }
+  } finally { await f.close(); }
+});
+
+test("official turn/start acknowledgement accepts an unindexed follow-up and a fast final settles after restart", async () => {
+  const f = fixture();
+  try {
+    await f.manager.enroll(1, "parent", "child", "turn");
+    await f.manager.acknowledge(1, answer);
+    f.advance(2);
+    f.turn.id = "follow-up";
+    f.setTurnPersisted(false);
+    await expect(f.manager.acceptTurn(1, "parent", "child", "follow-up", { turn: { id: "other" } }))
+      .rejects.toThrow("does not match");
+    await expect(f.manager.acceptTurn(1, "parent", "child", "follow-up"))
+      .rejects.toThrow("not the current official turn");
+    const before = f.calls.filter(call => call.method === "thread/turns/list").length;
+    expect(await f.manager.acceptTurn(1, "parent", "child", "follow-up", { turn: { id: "follow-up" } }))
+      .toEqual({ accepted: true, turnId: "follow-up" });
+    expect(f.calls.filter(call => call.method === "thread/turns/list")).toHaveLength(before);
+    expect(await f.manager.readResult(1, "parent", "child", undefined, undefined, "follow-up"))
+      .toEqual({ threadId: "child", turnId: "follow-up", outcome: "pending" });
+    const accepted = f.receipt();
+    expect(accepted.firstTurnId).toBe("turn");
+    expect(accepted.latestAcceptedTurnId).toBe("follow-up");
+    expect(accepted.acknowledgement).toBeUndefined();
+    expect(accepted.dueAt).toBe(accepted.latestAcceptedAt + 7 * 24 * HOUR);
+    await f.manager.close();
+    const restarted = createDelegatedRetention(f.options);
+    try {
+      f.setTurnPersisted(true);
+      f.setFinalPersisted(false);
+      expect(await restarted.readResult(1, "parent", "child", undefined, undefined, "follow-up"))
+        .toEqual({ threadId: "child", turnId: "follow-up", outcome: "pending" });
+      f.setFinalPersisted(true);
+      expect(await restarted.readResult(1, "parent", "child", undefined, undefined, "follow-up"))
+        .toMatchObject({ threadId: "child", turnId: "follow-up", outcome: "answer", itemId: "answer" });
+      await expect(restarted.acknowledge(1, answer)).rejects.toThrow("earlier accepted turn");
+      await restarted.acknowledge(1, { ...answer, turnId: "follow-up" });
+      expect(f.receipt().dueAt).toBe(f.receipt().latestAcceptedAt + 12 * HOUR);
+    } finally { await restarted.close(); }
   } finally { await f.close(); }
 });
 

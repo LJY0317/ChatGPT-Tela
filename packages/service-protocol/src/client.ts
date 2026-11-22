@@ -82,7 +82,8 @@ export class LocalServiceClient {
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         // Bun's ordinary fetch idle timer must not expire an event-driven wait.
-        ...(path === "v1/wait-shutdown-readiness" ? { timeout: false as const } : {}),
+        ...(path === "v1/wait-shutdown-readiness" || path === "v1/codex/web-delegations"
+          || path === "v1/codex/web-follow-ups" ? { timeout: false as const } : {}),
         ...(signal ? { signal } : {}),
       });
       phase = "decode";
@@ -167,13 +168,27 @@ export class CodexServiceClient extends LocalServiceClient {
       { action: "register-dispatch"; coordinatorThreadId: string; threadId: string; promptDigest: string }
       | { action: "observe-web-child"; parentThreadId: string; threadId: string; turnId: string }
       | { action: "list-tracked"; parentThreadId: string }
-      | ({ threadId: string } & ({ action: "enroll" } | { action: "read-result"; previousBefore?: string })
+      | ({ threadId: string } & ({ action: "enroll" } | { action: "accept-turn"; turnId: string }
+        | { action: "read-result"; previousBefore?: string; expectedTurnId?: string })
         & ({ parentThreadId: string } | { standalone: true }))
       | ({ action: "acknowledge"; threadId: string; turnId: string }
         & ({ parentThreadId: string } | { standalone: true })
         & ({ outcome: "answer"; itemId: string } | { outcome: "failed" | "interrupted" }))
     )), signal?: AbortSignal): Promise<unknown> {
     return this.request("v1/codex/delegations", "POST", input, signal);
+  }
+
+  async startWebDelegation(input: {
+    slot: number; title: string; prompt: string; cwd: string;
+    model?: string; coordinatorThreadId?: string; wait?: boolean;
+  }): Promise<unknown> {
+    return this.request("v1/codex/web-delegations", "POST", input);
+  }
+
+  async submitWebFollowUp(input: {
+    slot: number; coordinatorThreadId: string; threadId: string; prompt: string; wait?: boolean;
+  }, signal?: AbortSignal): Promise<unknown> {
+    return this.request("v1/codex/web-follow-ups", "POST", input, signal);
   }
 
   async interruptWebWork(slot: number, signal?: AbortSignal): Promise<number> {

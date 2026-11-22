@@ -74,12 +74,23 @@ export async function startCodexServiceHttpServer(input: {
   readonly bearerToken?: string;
   readonly startupComplete?: () => boolean;
   readonly delegatedRetention?: ReturnType<typeof createDelegatedRetention>;
+  readonly submitWebDelegation?: (request: {
+    slot: number; title: string; prompt: string; cwd: string;
+    model?: string; coordinatorThreadId?: string; wait?: boolean;
+  }) => Promise<unknown>;
+  readonly interruptWebDelegations?: (slot: number) => Promise<number>;
+  readonly activeWebDelegations?: () => boolean;
+  readonly waitForWebDelegations?: (signal?: AbortSignal) => Promise<void>;
+  readonly submitWebFollowUp?: (request: {
+    slot: number; coordinatorThreadId: string; threadId: string; prompt: string; wait?: boolean;
+  }) => Promise<unknown>;
   /** Optional, owner-verified structural inspection; not a Native turn mutation. */
 }): Promise<CodexServiceHttpServer> {
   const bearerToken = input.bearerToken ?? randomBytes(36).toString("base64url");
   if (bearerToken.length < 32) throw new Error("Tela Codex service bearer token is too short");
   let resolveShutdown!: () => void;
   const shutdownRequested = new Promise<void>(resolvePromise => { resolveShutdown = resolvePromise; });
+  let shutdownAdmitted = false;
   const server = await startWebHttpServer({
     hostname: "127.0.0.1",
     port: 0,
@@ -98,13 +109,15 @@ export async function startCodexServiceHttpServer(input: {
           if (!degraded && status.state === "ready") {
             try { readiness = await input.service.shutdownReadiness(); } catch { /* Unknown activity blocks shutdown. */ }
           }
-          return Response.json({ ...base, shutdownReadiness: readiness === "ready" ? "ready" : "blocked",
+          return Response.json({ ...base, shutdownReadiness: readiness === "ready" && !input.activeWebDelegations?.() ? "ready" : "blocked",
             ...(readiness === "native_activity_unobservable" ? { shutdownBlockedReason: readiness } : {}) });
         }
         if (request.method === "POST" && url.pathname === "/v1/wait-shutdown-readiness") {
           if (input.startupComplete?.() === false) return error(409, "Profile restoration is still in progress");
           try {
+            await input.waitForWebDelegations?.(request.signal);
             await input.service.waitForShutdownReadiness(request.signal);
+            if (input.activeWebDelegations?.()) throw new CodexShutdownNotStartedError("work_not_ready");
             const status = input.service.serviceStatus();
             if (status.state !== "ready") return error(409, "Codex shutdown has already started");
             return Response.json({ ...status, shutdownReadiness: "ready" }, { headers: { "cache-control": "no-store" } });
@@ -143,7 +156,7 @@ export async function startCodexServiceHttpServer(input: {
             return Response.json(await manager.listForParent(body.slot, body.parentThreadId), { headers: { "cache-control": "no-store" } });
           }
           const useRegistration = body.registered === true && body.standalone === undefined && body.parentThreadId === undefined
-            && (body.action === "read-result" || body.action === "acknowledge");
+            && (body.action === "read-result" || body.action === "accept-turn" || body.action === "acknowledge");
           const validOwner = useRegistration || (body.registered === undefined && (body.standalone === true
             ? body.parentThreadId === undefined : body.standalone === undefined && typeof body.parentThreadId === "string"));
           if (!validOwner || typeof body.threadId !== "string") return error(400, "Invalid delegation identity");
@@ -151,12 +164,19 @@ export async function startCodexServiceHttpServer(input: {
             return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId, body.turnId));
           }
           if (body.action === "enroll") return Response.json(await manager.enroll(body.slot, body.parentThreadId, body.threadId));
+          if (body.action === "accept-turn" && typeof body.turnId === "string") {
+            return Response.json(await manager.acceptTurn(body.slot, useRegistration ? null : body.parentThreadId,
+              body.threadId, body.turnId));
+          }
           if (body.action === "read-result") {
             if (body.previousBefore !== undefined && typeof body.previousBefore !== "string") {
               return error(400, "Invalid previous answer request");
             }
+            if (body.expectedTurnId !== undefined && typeof body.expectedTurnId !== "string") {
+              return error(400, "Invalid exact turn request");
+            }
             return Response.json(await manager.readResult(body.slot, useRegistration ? null : body.parentThreadId,
-              body.threadId, request.signal, body.previousBefore),
+              body.threadId, request.signal, body.previousBefore, body.expectedTurnId),
               { headers: { "cache-control": "no-store" } });
           }
           if (body.action === "acknowledge" && typeof body.turnId === "string"
@@ -169,9 +189,43 @@ export async function startCodexServiceHttpServer(input: {
           }
           return error(400, "Invalid delegation action");
         }
+        if (request.method === "POST" && url.pathname === "/v1/codex/web-delegations") {
+          if (!input.submitWebDelegation) return error(503, "Web delegation submission is unavailable");
+          const body: any = await request.json();
+          if (!body || !Number.isInteger(body.slot) || body.slot < 1 || body.slot > 99
+            || typeof body.title !== "string" || !body.title.trim() || body.title.length > 187
+            || typeof body.prompt !== "string" || !body.prompt.trim()
+            || typeof body.cwd !== "string" || !body.cwd
+            || body.model !== undefined && typeof body.model !== "string"
+            || body.coordinatorThreadId !== undefined && typeof body.coordinatorThreadId !== "string"
+            || body.wait !== undefined && typeof body.wait !== "boolean") return error(400, "Invalid Web delegation submission");
+          // The final admission gate runs after parsing, immediately before
+          // starting the task. Shutdown cannot slip between these two steps.
+          if (shutdownAdmitted || input.service.serviceStatus().state !== "ready") {
+            return error(409, "Codex shutdown has already started");
+          }
+          return Response.json(await input.submitWebDelegation(body), { headers: { "cache-control": "no-store" } });
+        }
+        if (request.method === "POST" && url.pathname === "/v1/codex/web-follow-ups") {
+          if (!input.submitWebFollowUp) return error(503, "Web follow-up submission is unavailable");
+          const body: any = await request.json();
+          if (!body || !Number.isInteger(body.slot) || body.slot < 1 || body.slot > 99
+            || typeof body.coordinatorThreadId !== "string" || !body.coordinatorThreadId
+            || typeof body.threadId !== "string" || !body.threadId
+            || typeof body.prompt !== "string" || !body.prompt.trim()
+            || body.wait !== undefined && typeof body.wait !== "boolean") {
+            return error(400, "Invalid Web follow-up submission");
+          }
+          if (shutdownAdmitted || input.service.serviceStatus().state !== "ready") {
+            return error(409, "Codex shutdown has already started");
+          }
+          return Response.json(await input.submitWebFollowUp(body), { headers: { "cache-control": "no-store" } });
+        }
         const interruptSlot = request.method === "POST" ? slot(url.pathname, "interrupt-work") : undefined;
         if (interruptSlot !== undefined) {
-          return Response.json({ count: await input.service.interruptWebWork(interruptSlot) }, { headers: { "cache-control": "no-store" } });
+          const count = await input.service.interruptWebWork(interruptSlot);
+          return Response.json({ count: count + (await input.interruptWebDelegations?.(interruptSlot) ?? 0) },
+            { headers: { "cache-control": "no-store" } });
         }
         if (request.method === "GET" && url.pathname === "/v1/codex/profiles") {
           const profiles = await input.service.profiles();
@@ -405,7 +459,10 @@ export async function startCodexServiceHttpServer(input: {
         if (request.method === "POST" && url.pathname === "/v1/shutdown") {
           // Acknowledgement authorizes payload replacement. A refused child
           // cleanup must return failure while service/control ownership survives.
-          await input.service.close();
+          if (shutdownAdmitted || input.activeWebDelegations?.()) throw new CodexShutdownNotStartedError();
+          shutdownAdmitted = true;
+          try { await input.service.close(); }
+          catch (error) { shutdownAdmitted = false; throw error; }
           void lifecycle.responseFinished.then(resolveShutdown);
           return Response.json({ status: "shutting-down" });
         }

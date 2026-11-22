@@ -1,20 +1,16 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { runOfficialWebDelegation } from "@chatgpt-tela/codex";
-import { resolveDefaultDesktopInstallation } from "@chatgpt-tela/default-desktop-target";
-import { readProductConfig } from "@chatgpt-tela/product-config";
+import { join } from "node:path";
 import { readOwnershipManifest, resolveProductPaths, type ProductPaths } from "@chatgpt-tela/product-lifecycle";
 import { CodexServiceClient, descriptorForService } from "@chatgpt-tela/service-protocol/client";
 import { LocalServiceSupervisor } from "@chatgpt-tela/service-supervisor";
 import { profileSlotFromArguments } from "./profile-selection";
 
-export const DELEGATION_COMMANDS = ["start-web-delegation", "retain-delegation", "list-delegations", "read-delegation-result", "acknowledge-result", "reconcile-delegations"];
+export const DELEGATION_COMMANDS = ["start-web-delegation", "follow-up-web-delegation", "retain-delegation", "list-delegations", "read-delegation-result", "acknowledge-result", "reconcile-delegations"];
 
 /** Source and installed launchers use the same command and existing owned service. */
 export async function runDelegationCommand(args: readonly string[], input: {
   paths?: ProductPaths; environment?: NodeJS.ProcessEnv;
-  client?: Pick<CodexServiceClient, "manageDelegation">;
+  client?: Pick<CodexServiceClient, "manageDelegation"> & Partial<Pick<CodexServiceClient, "startWebDelegation" | "submitWebFollowUp">>;
+  readPrompt?: () => Promise<string>;
 } = {}): Promise<unknown> {
   const environment = input.environment ?? process.env;
   const command = args[0];
@@ -40,34 +36,38 @@ export async function runDelegationCommand(args: readonly string[], input: {
     if (!running) throw Error("Start Tela before managing delegated chats");
     return new CodexServiceClient(descriptorForService(running.descriptor, "codex"));
   };
+  if (command === "follow-up-web-delegation") {
+    if (!args.includes("--slot")) throw Error("Choose the destination with --slot");
+    const coordinatorThreadId = environment.CODEX_THREAD_ID;
+    if (!coordinatorThreadId) throw Error("Run the follow-up from the coordinating Native chat");
+    const threadId = required("--thread");
+    const prompt = (await (input.readPrompt?.() ?? Bun.stdin.text())).trim();
+    if (!prompt) throw Error("Pass the follow-up assignment on standard input");
+    const client = await serviceClient();
+    if (!client.submitWebFollowUp) throw Error("Web follow-up submission is unavailable");
+    const result = await client.submitWebFollowUp({
+      slot: slot!, coordinatorThreadId, threadId, prompt,
+      ...(args.includes("--wait") ? { wait: true } : {}),
+    });
+    if (!result || typeof result !== "object" || Array.isArray(result)) throw Error("Invalid Web follow-up service receipt");
+    return { sourceThreadId: coordinatorThreadId, slot, ...result };
+  }
   if (command === "start-web-delegation") {
     if (!args.includes("--slot")) throw Error("Choose the destination with --slot");
     const model = option("--model");
     const title = required("--title").trim();
     if (!title || title.length > 187) throw Error("Choose a title from 1 to 187 characters");
-    const paths = input.paths ?? resolveProductPaths();
-    if (!readOwnershipManifest(paths.installManifest)) throw Error("Install Tela before starting a Web delegation");
-    const route = readProductConfig(join(paths.configRoot, "product-v1.json")).appOwnedResponses?.find(route => route.slot === slot);
-    const installation = resolveDefaultDesktopInstallation({ environment });
-    const configPath = route?.desktopConfigPath ?? (slot === 1 ? join(installation.codexHome, "config.toml") : undefined);
-    if (!route || !configPath) throw Error("The destination has no registered Tela Web route");
-    const config = Bun.TOML.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
-    if ((config.model_provider ?? "openai") !== "openai"
-      || config.openai_base_url !== `http://127.0.0.1:${route.port}/${route.capability}/v1`) {
-      throw Error("The destination profile is not using its registered OpenAI Web route");
-    }
     const prompt = (await Bun.stdin.text()).trim();
     if (!prompt) throw Error("Pass the assignment on standard input");
     const sourceThreadId = environment.CODEX_THREAD_ID;
-    const client = sourceThreadId ? await serviceClient() : undefined;
-    const result = await runOfficialWebDelegation({
-      executable: installation.codexExecutable, codexHome: dirname(configPath),
-      cwd: process.cwd(), ...(model ? { model } : {}), title: `[Tela Agent] ${title}`, prompt,
-      ...(client && sourceThreadId ? { beforeSubmit: (threadId: string) => client.manageDelegation({
-        action: "register-dispatch", slot: slot!, coordinatorThreadId: sourceThreadId, threadId,
-        promptDigest: createHash("sha256").update(prompt).digest("hex"),
-      }) } : {}),
+    const client = await serviceClient();
+    if (!client.startWebDelegation) throw Error("The connected Codex service does not support Web submission");
+    const result = await client.startWebDelegation({
+      slot: slot!, title, prompt, cwd: process.cwd(), ...(model ? { model } : {}),
+      ...(sourceThreadId ? { coordinatorThreadId: sourceThreadId } : {}),
+      ...(args.includes("--wait") ? { wait: true } : {}),
     });
+    if (!result || typeof result !== "object" || Array.isArray(result)) throw Error("Invalid Web delegation service receipt");
     return { ...(sourceThreadId ? { sourceThreadId } : {}), slot, ...result };
   }
   const standalone = args.includes("--standalone");
@@ -81,8 +81,10 @@ export async function runDelegationCommand(args: readonly string[], input: {
   else if (command === "list-delegations") request = { action: "list-tracked", slot: slot!, parentThreadId: parentThreadId! };
   else if (command === "read-delegation-result") {
     const previousBefore = option("--previous-before");
+    const expectedTurnId = option("--turn");
+    if (previousBefore && expectedTurnId) throw Error("Choose --turn or --previous-before");
     request = { action: "read-result", slot: slot!, ...owner, threadId: required("--thread"),
-      ...(previousBefore ? { previousBefore } : {}) };
+      ...(previousBefore ? { previousBefore } : {}), ...(expectedTurnId ? { expectedTurnId } : {}) };
   }
   else {
     const outcome = option("--outcome") ?? "answer";

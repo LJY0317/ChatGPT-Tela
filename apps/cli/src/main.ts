@@ -1081,6 +1081,7 @@ async function main(): Promise<void> {
     + "  diagnostics trace [--minutes <1-120>]\n"
     + "  diagnostics desktop [--seconds <5-60>] (macOS)\n"
     + "  start-web-delegation --slot <n> --title <title> [--model <id>] < assignment.txt\n"
+    + "  follow-up-web-delegation --thread <web-chat-id> --slot <n> [--wait] < assignment.txt\n"
     + "  retain-delegation --thread <child-id> [--slot <n>]\n"
     + "  retain-delegation --standalone --thread <web-chat-id> --slot <n>\n"
     + "  list-delegations [--slot <n>]\n"

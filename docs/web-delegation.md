@@ -114,16 +114,16 @@ registration.
 
 ### Cross-profile dispatch
 
-For a **new** Web assignment, a short-lived official [Codex App Server](https://learn.chatgpt.com/docs/app-server)
-can own the chat from creation through the saved answer. Tela uses the bundled
-Codex executable and the destination profile's existing Tela Web route under
-the OpenAI provider. It waits for the submitted turn to finish and reads the
-final item from that same turn. In a live test from profile 1, profile 2
-received one Web request and returned the saved answer through the official API.
+For a **new** Web assignment, the running Codex service owns an official
+[Codex App Server](https://learn.chatgpt.com/docs/app-server) process through
+turn completion. The Native command returns the accepted chat and turn IDs
+after the official `turn/start` acknowledgement. The service continues after
+the command's stdout closes, using the installed executable and the selected
+profile's existing Tela Web route under the OpenAI provider.
 
 From a Native chat, ask the agent to use its Native execution tool to send a
-new Web assignment to the other profile and return the answer. It runs the
-local Tela command and reads the result in the same Native turn. For example,
+new Web assignment to the other profile. The local Tela command returns a
+submission receipt in the same Native turn. For example,
 from profile 1 choose slot 2, and from profile 2 choose slot 1.
 
 ```sh
@@ -135,18 +135,35 @@ Use the launcher inside the installed Tela application if it is not on
 `ChatGPT Tela.app`. Pass `--model` to pick a specific Web model. Otherwise Tela
 uses the first visible Web model from the destination's official catalog.
 
-The command is a foreground, read-only assignment runner. Its result includes
-the destination slot, chat and turn IDs, selected model and saved final item.
+The command returns an acceptance receipt with the destination slot, chat and
+turn IDs, and selected model. Add `--wait` to receive the saved final item after
+completion. Both modes use the same service-owned App Server process.
+The handoff tuple is `slot`, `threadId`, `turnId` from that exact receipt.
+Pass all three to the result collector. For a coordinating Native chat the
+service also registers `coordinatorThreadId` before `turn/start`. Following
+turns in the same destination conversation use this tuple as their shared
+connection contract. Submit them through the same running Codex service with
+`follow-up-web-delegation --slot 2 --thread CHAT < assignment.txt`.
+Neither a receipt-read failure nor a disconnected caller submits another turn.
 When the Native host provides a chat ID, the result also includes that ID for
 correlation. Tela registers that destination chat with its Native coordinator
-before submission. If the caller closes or loses the response, use the same
+before submission. If stdout closes after acceptance, the service continues
+the turn. A lost HTTP response makes acceptance ambiguous, so inspect the
+registered conversations before considering another submission. Use the same
 destination slot from the coordinating Native chat:
 
 ```sh
 chatgpt-tela list-delegations --slot 2
-chatgpt-tela read-delegation-result --slot 2 --thread CHAT
+chatgpt-tela read-delegation-result --slot 2 --thread CHAT --turn TURN
 chatgpt-tela acknowledge-result --slot 2 --thread CHAT --turn TURN --item FINAL_ITEM
 ```
+
+Explicit update `interrupt-work` also interrupts service-owned Web turns using
+the held official connection and their acknowledged IDs. An update `wait`
+observes their completion and can abort its own observation without cancelling
+the turn. While these turns remain active, shutdown admission returns blocked.
+An operating-system termination signal leaves their owning service running until
+an explicit update action or ordinary completion settles the activity.
 
 Recovery reads the saved first turn only after matching the original assignment.
 It sends no model request. If Codex has no final answer after the turn ends,
@@ -156,6 +173,31 @@ send record alone cannot supply an answer. Viewing an answer leaves the seven-da
 deadline intact until explicit acknowledgement starts the twelve-hour deadline.
 Dispatches from a plain terminal without a Native chat ID can use explicit
 standalone retention registration.
+
+The retention integration contract is `registerDispatch` before `turn/start`,
+bound to the coordinator ID and SHA-256 assignment digest. Subsequent acknowledged
+turns update the existing registration's latest accepted turn and retention deadline.
+Existing first-turn content verification and exact saved-result reading supply the
+recovery boundary. Ambiguous submissions are never automatically replayed.
+
+The independent core `submitOfficialWebFollowUp` supports an additional request
+to an already registered Web conversation. Its caller must resolve the exact
+unsettled enrollment from the owning delegation service, including the stored
+profile scope, account fingerprint, original Web model and parent lineage.
+The current configured profile and account must match that receipt. It acquires
+the official writer with `thread/resume` and `excludeTurns:true`, checks the
+resumed conversation, official catalog and completed latest turn, then issues
+one `turn/start` on that writer. Writer conflicts and identity changes fail
+before submission. The call returns the acknowledged thread and turn IDs.
+
+The follow-up CLI uses `--thread`, `--slot` and assignment text
+from stdin, plus the coordinating chat identity supplied by the host. The
+service resolves the registered owner and binds the selected
+profile's executable, history home, current account fingerprint and scope to
+the core call. Result retrieval and retention use the registered turn identity.
+By default, both submission commands return after the official ACK. `--wait`
+keeps the caller connected through the final result, with the same slot, chat
+and turn identity. The service owns completion in either mode.
 
 **Already running Desktop chats** remain owned by their Desktop server. The
 tested Desktop instances did not expose a supported profile-bound control

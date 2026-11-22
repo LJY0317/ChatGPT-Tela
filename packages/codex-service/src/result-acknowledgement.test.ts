@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { acknowledgeNativeResult, type ResultReference } from "./result-acknowledgement";
+import { acknowledgeNativeResult, readExactResultTurn, type ResultReference } from "./result-acknowledgement";
 
 const result: ResultReference = { parentThreadId: "parent", threadId: "child", turnId: "turn", outcome: "answer", itemId: "answer" };
 function fixture() {
@@ -98,4 +98,19 @@ test("receipt retention uses age and total bytes while preserving unrelated file
     expect(names).toContain("unrelated.txt");
     expect(names.filter(name => name.endsWith(".json")).reduce((sum, name) => sum + readFileSync(join(f.directory, name)).length, 0)).toBeLessThanOrEqual(4 * 1024 * 1024);
   } finally { f.close(); }
+});
+
+test("exact-turn recovery pages official history without substituting a newer turn", async () => {
+  const calls: string[] = [];
+  const rpc = { async request(method: string, params: any) {
+    expect(method).toBe("thread/turns/list");
+    calls.push(params.cursor ?? "first");
+    return params.cursor === "older"
+      ? { data: [{ id: "accepted", status: "completed" }], nextCursor: null }
+      : { data: [{ id: "later", status: "inProgress" }], nextCursor: "older" };
+  } };
+  expect(await readExactResultTurn(rpc, "child", "accepted"))
+    .toEqual({ id: "accepted", status: "completed" });
+  expect(calls).toEqual(["first", "older"]);
+  expect(await readExactResultTurn(rpc, "child", "unregistered")).toBeUndefined();
 });

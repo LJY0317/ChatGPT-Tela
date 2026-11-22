@@ -301,6 +301,8 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
   private var retentionStatus: TelaRetentionStatus?
   private var managingWebTask = false
   private var webTaskMessage: String?
+  private var selectedWebTaskDetails: NSTextView?
+  private var selectableWebTasks: [TelaRetentionStatus.TrackedTask] = []
   private var endpointField: NSTextField?
   private var portField: NSTextField?
   private var exposurePicker: NSPopUpButton?
@@ -1997,29 +1999,67 @@ final class TelaControlCenterController: NSObject, NSWindowDelegate {
       if !tasks.isEmpty {
         let alert = NSAlert()
         alert.messageText = telaText("Tracked Web tasks")
-        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 440, height: 26))
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 166))
+        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 136, width: 480, height: 26))
         picker.setAccessibilityLabel(telaText("Tracked Web tasks"))
-        for (index, task) in tasks.enumerated() {
+        for task in tasks {
           let title = webTaskLabel(slot: task.slot, title: task.title, threadId: task.threadId)
-          picker.addItem(withTitle: "\(index + 1). \(title.prefix(90))")
+          picker.addItem(withTitle: String(title.prefix(90)))
           picker.lastItem?.toolTip = title
         }
-        alert.accessoryView = picker
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 480, height: 126))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let details = NSTextView(frame: scroll.bounds)
+        details.isEditable = false
+        details.isSelectable = true
+        details.isVerticallyResizable = true
+        details.autoresizingMask = [.width]
+        details.textContainer?.widthTracksTextView = true
+        details.textContainerInset = NSSize(width: 8, height: 8)
+        scroll.documentView = details
+        accessory.addSubview(picker)
+        accessory.addSubview(scroll)
+        selectableWebTasks = tasks
+        selectedWebTaskDetails = details
+        picker.target = self
+        picker.action = #selector(updateSelectedWebTaskDetails(_:))
+        updateSelectedWebTaskDetails(picker)
+        alert.accessoryView = accessory
         alert.addButton(withTitle: telaText("View answer"))
+        alert.addButton(withTitle: telaText("Copy task link"))
         alert.addButton(withTitle: telaText("Use a task link…"))
         alert.addButton(withTitle: telaText("Cancel")).keyEquivalent = "\u{1b}"
-        switch alert.runModal() {
+        let selection = alert.runModal()
+        selectedWebTaskDetails = nil
+        selectableWebTasks = []
+        switch selection {
         case .alertFirstButtonReturn:
           guard tasks.indices.contains(picker.indexOfSelectedItem) else { return }
           let task = tasks[picker.indexOfSelectedItem]
           await performWebTaskAction(slot: task.slot, threadId: task.threadId, readAnswer: true)
           return
-        case .alertSecondButtonReturn: break
+        case .alertSecondButtonReturn:
+          guard tasks.indices.contains(picker.indexOfSelectedItem),
+                let threadId = telaDelegationThreadId(tasks[picker.indexOfSelectedItem].threadId) else { return }
+          NSPasteboard.general.clearContents()
+          NSPasteboard.general.setString("codex://threads/\(threadId)", forType: .string)
+          webTaskMessage = "Task link copied."
+          return
+        case .alertThirdButtonReturn: break
         default: return
         }
       }
       await manageWebTaskByLink()
     }
+  }
+
+  @objc private func updateSelectedWebTaskDetails(_ picker: NSPopUpButton) {
+    guard selectableWebTasks.indices.contains(picker.indexOfSelectedItem) else { return }
+    let task = selectableWebTasks[picker.indexOfSelectedItem]
+    let profile = profiles.first(where: { $0.slot == task.slot })?.targetDisplayName
+      ?? String(format: telaText("Profile %d"), task.slot)
+    selectedWebTaskDetails?.string = "\(profile)\n\n\(task.title ?? task.threadId)"
   }
 
   private func manageWebTaskByLink() async {

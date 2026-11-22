@@ -350,6 +350,9 @@
 
 "Manage Web tasks…" = "Web 작업 관리…";
 "Tracked Web tasks" = "관리 중인 Web 작업";
+"Copy task link" = "작업 링크 복사";
+"Task link copied." = "작업 링크를 복사했습니다.";
+"Profile" = "프로필";
 "Updates are unavailable." = "업데이트를 사용할 수 없습니다.";
 "Use a task link…" = "작업 링크 사용…";
 "Manage a Web task" = "Web 작업 관리";

@@ -15,6 +15,7 @@ export * from "./web-model-catalog";
 export * from "./native-history-items";
 
 export { connectStoredHistoryRpc, connectDormantThreadRpc, connectDelegatedTitleRpc, readStoredThreadTitles } from "./stored-history-rpc";
-export { runOfficialWebDelegation } from "./official-web-delegation";
+export { runOfficialWebDelegation, submitOfficialWebDelegation, type OfficialWebDelegationReceipt } from "./official-web-delegation";
+export { runOfficialWebFollowUp, submitOfficialWebFollowUp, type RegisteredWebFollowUp, type OfficialWebFollowUpReceipt } from "./official-web-follow-up";
 
 export * from "./thread-title";
